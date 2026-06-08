@@ -21,8 +21,8 @@ import type {
   TerminalOutputResponse,
   WaitForTerminalExitRequest,
   WaitForTerminalExitResponse,
-  KillTerminalCommandRequest,
-  KillTerminalCommandResponse,
+  KillTerminalRequest,
+  KillTerminalResponse,
   ReleaseTerminalRequest,
   ReleaseTerminalResponse,
   RequestPermissionRequest,
@@ -218,7 +218,7 @@ export class ChatViewProvider
     );
 
     this.acpClient.setOnKillTerminalCommand(
-      async (params: KillTerminalCommandRequest) => {
+      async (params: KillTerminalRequest) => {
         return this.handleKillTerminalCommand(params);
       }
     );
@@ -830,8 +830,8 @@ export class ChatViewProvider
   }
 
   private async handleKillTerminalCommand(
-    params: KillTerminalCommandRequest
-  ): Promise<KillTerminalCommandResponse> {
+    params: KillTerminalRequest
+  ): Promise<KillTerminalResponse> {
     const terminal = this.terminals.get(params.terminalId);
     if (!terminal) {
       throw new Error(`Terminal not found: ${params.terminalId}`);
@@ -1234,6 +1234,12 @@ export class ChatViewProvider
           text: update.content.text,
         });
       }
+    } else if (update.sessionUpdate === "config_option_update") {
+      // Update session metadata from configOptions (new ACP protocol format)
+      this.acpClient.updateSessionMetadataFromConfigOptions(
+        update.configOptions
+      );
+      this.sendSessionMetadata();
     }
   }
 

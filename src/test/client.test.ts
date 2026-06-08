@@ -1,6 +1,10 @@
 import * as assert from "assert";
 import { ChildProcess } from "child_process";
-import { ACPClient, type SpawnFunction } from "../acp/client";
+import {
+  ACPClient,
+  extractModelsAndModesFromConfigOptions,
+  type SpawnFunction,
+} from "../acp/client";
 import { getAgent } from "../acp/agents";
 import { createMockProcess } from "./mocks/acp-server";
 import type {
@@ -9,8 +13,9 @@ import type {
   CreateTerminalRequest,
   TerminalOutputRequest,
   WaitForTerminalExitRequest,
-  KillTerminalCommandRequest,
+  KillTerminalRequest,
   ReleaseTerminalRequest,
+  SessionConfigOption,
 } from "@agentclientprotocol/sdk";
 
 suite("ACPClient", () => {
@@ -387,12 +392,10 @@ suite("ACPClient with Mock Server", () => {
 
     test("should register killTerminalCommand handler", () => {
       let handlerCalled = false;
-      client.setOnKillTerminalCommand(
-        async (_params: KillTerminalCommandRequest) => {
-          handlerCalled = true;
-          return {};
-        }
-      );
+      client.setOnKillTerminalCommand(async (_params: KillTerminalRequest) => {
+        handlerCalled = true;
+        return {};
+      });
       assert.strictEqual(handlerCalled, false);
     });
 
@@ -404,5 +407,208 @@ suite("ACPClient with Mock Server", () => {
       });
       assert.strictEqual(handlerCalled, false);
     });
+  });
+});
+
+suite("extractModelsAndModesFromConfigOptions", () => {
+  test("should return null for empty input", () => {
+    const result = extractModelsAndModesFromConfigOptions(null);
+    assert.strictEqual(result.models, null);
+    assert.strictEqual(result.modes, null);
+  });
+
+  test("should return null for empty array", () => {
+    const result = extractModelsAndModesFromConfigOptions([]);
+    assert.strictEqual(result.models, null);
+    assert.strictEqual(result.modes, null);
+  });
+
+  test("should extract model from select configOption", () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "anthropic/claude-3-sonnet",
+        options: [
+          { value: "anthropic/claude-3-sonnet", name: "Claude 3 Sonnet" },
+          { value: "anthropic/claude-3-opus", name: "Claude 3 Opus" },
+        ],
+      },
+    ];
+    const result = extractModelsAndModesFromConfigOptions(configOptions);
+    assert.ok(result.models);
+    assert.strictEqual(result.models.availableModels.length, 2);
+    assert.strictEqual(
+      result.models.availableModels[0].modelId,
+      "anthropic/claude-3-sonnet"
+    );
+    assert.strictEqual(
+      result.models.availableModels[0].name,
+      "Claude 3 Sonnet"
+    );
+    assert.strictEqual(
+      result.models.currentModelId,
+      "anthropic/claude-3-sonnet"
+    );
+    assert.strictEqual(result.modes, null);
+  });
+
+  test("should extract mode from select configOption", () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: "mode",
+        name: "Session Mode",
+        category: "mode",
+        type: "select",
+        currentValue: "code",
+        options: [
+          { value: "code", name: "Code" },
+          { value: "architect", name: "Architect" },
+        ],
+      },
+    ];
+    const result = extractModelsAndModesFromConfigOptions(configOptions);
+    assert.strictEqual(result.models, null);
+    assert.ok(result.modes);
+    assert.strictEqual(result.modes.availableModes.length, 2);
+    assert.strictEqual(result.modes.availableModes[0].id, "code");
+    assert.strictEqual(result.modes.availableModes[0].name, "Code");
+    assert.strictEqual(result.modes.currentModeId, "code");
+  });
+
+  test("should extract both model and mode", () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: "model",
+        name: "Model",
+        type: "select",
+        currentValue: "gpt-4",
+        options: [{ value: "gpt-4", name: "GPT-4" }],
+      },
+      {
+        id: "mode",
+        name: "Mode",
+        type: "select",
+        currentValue: "build",
+        options: [{ value: "build", name: "Build" }],
+      },
+    ];
+    const result = extractModelsAndModesFromConfigOptions(configOptions);
+    assert.ok(result.models);
+    assert.ok(result.modes);
+    assert.strictEqual(result.models.currentModelId, "gpt-4");
+    assert.strictEqual(result.modes.currentModeId, "build");
+  });
+
+  test("should skip non-select configOptions", () => {
+    const configOptions = [
+      {
+        id: "theme",
+        name: "Theme",
+        type: "boolean",
+        currentValue: true,
+      },
+    ] as unknown as SessionConfigOption[];
+    const result = extractModelsAndModesFromConfigOptions(configOptions);
+    assert.strictEqual(result.models, null);
+    assert.strictEqual(result.modes, null);
+  });
+
+  test("should skip unknown configOption ids", () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: "unknown",
+        name: "Unknown",
+        type: "select",
+        currentValue: "a",
+        options: [{ value: "a", name: "A" }],
+      },
+    ];
+    const result = extractModelsAndModesFromConfigOptions(configOptions);
+    assert.strictEqual(result.models, null);
+    assert.strictEqual(result.modes, null);
+  });
+});
+
+suite("ACPClient with configOptions format", () => {
+  let client: ACPClient;
+
+  setup(() => {
+    const mockSpawn = (
+      _command: string,
+      _args: string[],
+      _options: unknown
+    ): ChildProcess => {
+      return createMockProcess(
+        "default",
+        true,
+        true
+      ) as unknown as ChildProcess;
+    };
+
+    client = new ACPClient({
+      agentConfig: {
+        id: "mock-agent",
+        name: "Mock Agent",
+        command: "mock",
+        args: [],
+      },
+      spawn: mockSpawn,
+      skipAvailabilityCheck: true,
+    });
+  });
+
+  teardown(() => {
+    client.dispose();
+  });
+
+  test("newSession should extract models/modes from configOptions", async () => {
+    await client.connect();
+    const response = await client.newSession("/test/dir");
+
+    assert.ok(response.configOptions);
+    assert.strictEqual(response.models, undefined);
+    assert.strictEqual(response.modes, undefined);
+
+    const metadata = client.getSessionMetadata();
+    assert.ok(metadata);
+    assert.ok(metadata.models);
+    assert.ok(metadata.modes);
+    assert.strictEqual(
+      metadata.models.currentModelId,
+      "anthropic/claude-3-sonnet"
+    );
+    assert.strictEqual(metadata.modes.currentModeId, "code");
+    assert.strictEqual(metadata.models.availableModels.length, 2);
+    assert.strictEqual(metadata.modes.availableModes.length, 2);
+  });
+
+  test("setModel should use setSessionConfigOption and update metadata", async () => {
+    await client.connect();
+    await client.newSession("/test/dir");
+
+    await client.setModel("anthropic/claude-3-opus");
+
+    const metadata = client.getSessionMetadata();
+    assert.ok(metadata);
+    assert.ok(metadata.models);
+    assert.strictEqual(
+      metadata.models.currentModelId,
+      "anthropic/claude-3-opus"
+    );
+  });
+
+  test("setMode should use setSessionConfigOption and update metadata", async () => {
+    await client.connect();
+    await client.newSession("/test/dir");
+
+    await client.setMode("architect");
+
+    const metadata = client.getSessionMetadata();
+    assert.ok(metadata);
+    assert.ok(metadata.modes);
+    assert.strictEqual(metadata.modes.currentModeId, "architect");
   });
 });

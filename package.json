@@ -273,7 +273,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.12.0",
+    "@agentclientprotocol/sdk": "^0.21.0",
     "@vscode/codicons": "^0.0.45",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.1.1",

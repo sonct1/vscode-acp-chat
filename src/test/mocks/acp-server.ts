@@ -15,6 +15,7 @@ export class MockACPServer {
   private sessionCounter = 0;
   private demoMode: DemoMode;
   private enableLoadSession: boolean;
+  private useConfigOptions: boolean;
 
   readonly stdin: Writable;
   readonly stdout: Readable;
@@ -22,9 +23,14 @@ export class MockACPServer {
 
   private stdinBuffer = "";
 
-  constructor(demoMode: DemoMode = "default", enableLoadSession = true) {
+  constructor(
+    demoMode: DemoMode = "default",
+    enableLoadSession = true,
+    useConfigOptions = false
+  ) {
     this.demoMode = demoMode;
     this.enableLoadSession = enableLoadSession;
+    this.useConfigOptions = useConfigOptions;
 
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -90,6 +96,9 @@ export class MockACPServer {
       case "session/set_model":
         this.sendResponse(request.id, {});
         break;
+      case "session/set_config_option":
+        this.handleSetConfigOption(request.id, request.params);
+        break;
       case "session/cancel":
         this.handleCancel(request.id, request.params);
         break;
@@ -149,6 +158,44 @@ export class MockACPServer {
         currentModelId: "claude-3-sonnet",
       },
     };
+
+    // If useConfigOptions is true, also include configOptions (new ACP format)
+    // and remove models/modes to simulate newer agents like OpenCode
+    if (this.useConfigOptions) {
+      response.configOptions = [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "anthropic/claude-3-sonnet",
+          options: [
+            {
+              value: "anthropic/claude-3-sonnet",
+              name: "Anthropic/Claude 3 Sonnet",
+            },
+            {
+              value: "anthropic/claude-3-opus",
+              name: "Anthropic/Claude 3 Opus",
+            },
+          ],
+        },
+        {
+          id: "mode",
+          name: "Session Mode",
+          category: "mode",
+          type: "select",
+          currentValue: "code",
+          options: [
+            { value: "code", name: "Code" },
+            { value: "architect", name: "Architect" },
+          ],
+        },
+      ];
+      // Remove old format fields to simulate new agents
+      delete response.models;
+      delete response.modes;
+    }
 
     this.sendResponse(id, response);
   }
@@ -414,6 +461,56 @@ export class MockACPServer {
     });
   }
 
+  private handleSetConfigOption(
+    id: number,
+    params?: Record<string, unknown>
+  ): void {
+    const configId = params?.configId as string | undefined;
+    const value = params?.value as string | undefined;
+
+    if (!configId || value === undefined) {
+      this.sendError(id, -32602, "Missing configId or value");
+      return;
+    }
+
+    // Return configOptions with the updated value
+    const response: acp.SetSessionConfigOptionResponse = {
+      configOptions: [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue:
+            configId === "model" ? value : "anthropic/claude-3-sonnet",
+          options: [
+            {
+              value: "anthropic/claude-3-sonnet",
+              name: "Anthropic/Claude 3 Sonnet",
+            },
+            {
+              value: "anthropic/claude-3-opus",
+              name: "Anthropic/Claude 3 Opus",
+            },
+          ],
+        },
+        {
+          id: "mode",
+          name: "Session Mode",
+          category: "mode",
+          type: "select",
+          currentValue: configId === "mode" ? value : "code",
+          options: [
+            { value: "code", name: "Code" },
+            { value: "architect", name: "Architect" },
+          ],
+        },
+      ],
+    };
+
+    this.sendResponse(id, response);
+  }
+
   private handleCancel(id: number, params?: Record<string, unknown>): void {
     const sessionId = params?.sessionId as string | undefined;
     if (sessionId) {
@@ -465,9 +562,14 @@ export interface MockChildProcess extends EventEmitter {
 
 export function createMockProcess(
   demoMode: DemoMode = "default",
-  enableLoadSession = true
+  enableLoadSession = true,
+  useConfigOptions = false
 ): MockChildProcess {
-  const server = new MockACPServer(demoMode, enableLoadSession);
+  const server = new MockACPServer(
+    demoMode,
+    enableLoadSession,
+    useConfigOptions
+  );
   const mockProcess = new EventEmitter() as MockChildProcess;
 
   Object.defineProperty(mockProcess, "stdin", {
