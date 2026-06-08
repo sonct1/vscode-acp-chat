@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
 import { Mention } from "../views/webview/main";
 

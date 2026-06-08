@@ -635,7 +635,7 @@ export class WebviewController {
   private isGenerating = false;
   private hoveredImageChip: HTMLElement | null = null;
   private starredModels = new Set<string>();
-  private lastModelsMsg: any = null;
+  private lastModelsMsg: ExtensionMessage["models"] = null;
   private diffChanges: Array<{
     path: string;
     relativePath: string;
@@ -749,7 +749,7 @@ export class WebviewController {
     tooltipElement.className = "acp-tooltip";
     this.doc.body.appendChild(tooltipElement);
 
-    let tooltipTimeout: any;
+    let tooltipTimeout: ReturnType<typeof setTimeout>;
     let currentTarget: HTMLElement | null = null;
 
     const hide = () => {
@@ -1941,6 +1941,7 @@ export class WebviewController {
     const range = selection.getRangeAt(0);
 
     // Support for test mocks where startContainer might not be a real Node
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (!(range.startContainer instanceof (this.win as any).Node)) {
       return range.startOffset;
     }
@@ -1978,7 +1979,9 @@ export class WebviewController {
     if (!selection || selection.rangeCount === 0) return;
 
     const range = selection.getRangeAt(0);
+
     const useMockFallback =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       !(range.startContainer instanceof (this.win as any).Node) &&
       typeof range.startContainer.textContent === "string";
 
@@ -2203,8 +2206,10 @@ export class WebviewController {
     if (!selection || selection.rangeCount === 0) return;
 
     const range = selection.getRangeAt(0);
+
     const useMockFallback = !(
-      range.startContainer instanceof (this.win as any).Node
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (range.startContainer instanceof (this.win as any).Node)
     );
 
     if (!useMockFallback) {
@@ -2213,6 +2218,7 @@ export class WebviewController {
         this.autocompleteTriggerPos
       );
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (node.nodeType === (this.win as any).Node.TEXT_NODE) {
         range.setStart(node, offset);
         range.deleteContents();
@@ -2414,8 +2420,10 @@ export class WebviewController {
     let range: Range;
     if (this.autocompleteMode !== "none" && selection.rangeCount > 0) {
       range = selection.getRangeAt(0);
+
       const useMockFallback = !(
-        range.startContainer instanceof (this.win as any).Node
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (range.startContainer instanceof (this.win as any).Node)
       );
 
       if (!useMockFallback) {
@@ -2468,8 +2476,10 @@ export class WebviewController {
     let range: Range;
     if (this.autocompleteMode !== "none" && selection.rangeCount > 0) {
       range = selection.getRangeAt(0);
+
       const useMockFallback = !(
-        range.startContainer instanceof (this.win as any).Node
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (range.startContainer instanceof (this.win as any).Node)
       );
 
       if (!useMockFallback) {
@@ -3050,17 +3060,19 @@ export class WebviewController {
     }
   }
 
-  private updateModelDropdown(modelsMsg: any): void {
+  private updateModelDropdown(
+    modelsMsg: NonNullable<ExtensionMessage["models"]>
+  ): void {
     const options: DropdownOption[] = [];
     const availableModels = modelsMsg.availableModels || [];
 
-    const starred = availableModels.filter((m: any) =>
+    const starred = availableModels.filter((m) =>
       this.starredModels.has(m.modelId)
     );
 
     if (starred.length > 0) {
       options.push({ id: "header-starred", name: "Starred", type: "header" });
-      starred.forEach((m: any) => {
+      starred.forEach((m) => {
         options.push({
           id: m.modelId,
           name: m.name || m.modelId,
@@ -3072,7 +3084,7 @@ export class WebviewController {
       options.push({ id: "header-all", name: "All Models", type: "header" });
     }
 
-    availableModels.forEach((m: any) => {
+    availableModels.forEach((m) => {
       options.push({
         id: m.modelId,
         name: m.name || m.modelId,

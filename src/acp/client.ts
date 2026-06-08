@@ -11,6 +11,7 @@ import {
   type ReadTextFileRequest,
   type ReadTextFileResponse,
   type WriteTextFileRequest,
+  type InitializeRequest,
   type WriteTextFileResponse,
   type CreateTerminalRequest,
   type CreateTerminalResponse,
@@ -509,7 +510,7 @@ export class ACPClient {
           },
           terminal: true,
           permissions: true,
-        } as any,
+        } as InitializeRequest["clientCapabilities"] & { permissions: boolean },
         clientInfo: {
           name: "vscode-acp-chat",
           version: "0.0.1",

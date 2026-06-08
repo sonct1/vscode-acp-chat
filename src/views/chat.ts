@@ -115,7 +115,7 @@ export class ChatViewProvider
   private userMessageImages: string[] = [];
   private terminals: Map<string, ManagedTerminal> = new Map();
   private toolCallStartTimes: Map<string, number> = new Map();
-  private toolCallRawInputs: Map<string, any> = new Map();
+  private toolCallRawInputs: Map<string, Record<string, unknown>> = new Map();
   private toolCallKinds: Map<string, string> = new Map();
   private toolCallTitles: Map<string, string> = new Map();
   private toolCallBaseContents: Map<string, Promise<string | undefined>> =
@@ -1019,7 +1019,10 @@ export class ChatViewProvider
       this.pendingToolCalls.add(update.toolCallId);
       this.toolCallStartTimes.set(update.toolCallId, Date.now());
       if (update.rawInput) {
-        this.toolCallRawInputs.set(update.toolCallId, update.rawInput);
+        this.toolCallRawInputs.set(
+          update.toolCallId,
+          update.rawInput as Record<string, unknown>
+        );
       }
       if (update.kind) {
         this.toolCallKinds.set(update.toolCallId, update.kind);
@@ -1029,12 +1032,12 @@ export class ChatViewProvider
       }
 
       // Early capture base content for diffing if we have a path
-      const path = this.extractPath(update.rawInput);
+      const path = this.extractPath(update.rawInput as Record<string, unknown>);
       if (path) {
         const capturePromise = this.captureBaseContent(
           update.kind,
           update.title,
-          update.rawInput
+          update.rawInput as Record<string, unknown>
         );
         this.toolCallBaseContents.set(update.toolCallId, capturePromise);
       }
@@ -1078,7 +1081,7 @@ export class ChatViewProvider
 
         // Enrich with diff if it's a file modification and missing
         const rawInput =
-          (update.rawInput as any) ||
+          (update.rawInput as Record<string, unknown>) ||
           this.toolCallRawInputs.get(update.toolCallId);
         const path = this.extractPath(rawInput);
 
@@ -1135,7 +1138,7 @@ export class ChatViewProvider
 
           if (
             newText !== undefined &&
-            !update.content?.some((c: any) => c.type === "diff")
+            !update.content?.some((c) => c.type === "diff")
           ) {
             update.content = update.content || [];
             update.content.push({
@@ -1171,7 +1174,10 @@ export class ChatViewProvider
       } else {
         // Ensure metadata is always updated from newest notification
         if (update.rawInput) {
-          this.toolCallRawInputs.set(update.toolCallId, update.rawInput);
+          this.toolCallRawInputs.set(
+            update.toolCallId,
+            update.rawInput as Record<string, unknown>
+          );
         }
         if (update.kind) {
           this.toolCallKinds.set(update.toolCallId, update.kind);
@@ -1191,7 +1197,8 @@ export class ChatViewProvider
           const title =
             update.title || this.toolCallTitles.get(update.toolCallId);
           const rawInput =
-            update.rawInput || this.toolCallRawInputs.get(update.toolCallId);
+            (update.rawInput as Record<string, unknown>) ||
+            this.toolCallRawInputs.get(update.toolCallId);
 
           if (this.extractPath(rawInput)) {
             const capturePromise = this.captureBaseContent(
@@ -1280,7 +1287,7 @@ export class ChatViewProvider
    * Extract mentions from user message content during history session restoration.
    * Parses the structured XML-like mention format to restore mention objects.
    */
-  private extractMentionsFromContent(content: any): Array<{
+  private extractMentionsFromContent(content: Record<string, unknown>): Array<{
     name: string;
     path?: string;
     type?: "file" | "folder" | "selection" | "terminal" | "image";
@@ -1292,33 +1299,35 @@ export class ChatViewProvider
       return [];
     }
 
-    const text = content.text || "";
+    const text = (content.text as string) || "";
     return parseMentionsFromText(text);
   }
 
-  private extractPath(rawInput: any): string | undefined {
+  private extractPath(
+    rawInput: Record<string, unknown> | undefined
+  ): string | undefined {
     return (
-      rawInput?.path ||
-      rawInput?.file ||
-      rawInput?.filePath ||
-      rawInput?.file_path ||
-      rawInput?.filename ||
-      rawInput?.uri ||
-      rawInput?.filepath ||
-      rawInput?.file_name ||
-      rawInput?.target ||
-      rawInput?.target_file ||
-      rawInput?.destination ||
-      rawInput?.destination_path ||
-      rawInput?.source ||
-      rawInput?.source_path
+      (rawInput?.path as string) ||
+      (rawInput?.file as string) ||
+      (rawInput?.filePath as string) ||
+      (rawInput?.file_path as string) ||
+      (rawInput?.filename as string) ||
+      (rawInput?.uri as string) ||
+      (rawInput?.filepath as string) ||
+      (rawInput?.file_name as string) ||
+      (rawInput?.target as string) ||
+      (rawInput?.target_file as string) ||
+      (rawInput?.destination as string) ||
+      (rawInput?.destination_path as string) ||
+      (rawInput?.source as string) ||
+      (rawInput?.source_path as string)
     );
   }
 
   private async captureBaseContent(
     kind: string | undefined,
     title: string | undefined,
-    rawInput: any
+    rawInput: Record<string, unknown> | undefined
   ): Promise<string | undefined> {
     const path = this.extractPath(rawInput);
 

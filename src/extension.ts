@@ -257,19 +257,28 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "vscode-acp-chat.sendTerminalSelectionToChat",
-      async (args?: any) => {
+      async (args?: unknown) => {
         let selection = "";
         let terminalName = "Terminal";
 
         // If invoked from terminal/context, args might contain the selection and/or terminal
         if (args && typeof args === "object") {
-          if (typeof args.selection === "string" && args.selection.length > 0) {
-            selection = args.selection;
+          const argsObj = args as Record<string, unknown>;
+          if (
+            typeof argsObj.selection === "string" &&
+            argsObj.selection.length > 0
+          ) {
+            selection = argsObj.selection;
           }
-          if (args.terminal && args.terminal.name) {
-            terminalName = args.terminal.name;
-          } else if (args.name) {
-            terminalName = args.name;
+          if (
+            argsObj.terminal &&
+            typeof argsObj.terminal === "object" &&
+            "name" in argsObj.terminal
+          ) {
+            terminalName = (argsObj.terminal as Record<string, unknown>)
+              .name as string;
+          } else if (typeof argsObj.name === "string") {
+            terminalName = argsObj.name;
           }
         }
 
