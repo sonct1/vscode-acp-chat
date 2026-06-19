@@ -1,0 +1,17 @@
+{
+  "types": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance Improvements" },
+    { "type": "refactor", "section": "Code Refactoring" },
+    { "type": "docs", "hidden": true },
+    { "type": "style", "hidden": true },
+    { "type": "test", "hidden": true },
+    { "type": "build", "hidden": true },
+    { "type": "ci", "hidden": true },
+    { "type": "chore", "hidden": true }
+  ],
+  "commitUrlFormat": "https://github.com/pengjiantao/vscode-acp-chat/commit/{{hash}}",
+  "compareUrlFormat": "https://github.com/pengjiantao/vscode-acp-chat/compare/{{previousTag}}...{{currentTag}}",
+  "issueUrlFormat": "https://github.com/pengjiantao/vscode-acp-chat/issues/{{id}}"
+}
