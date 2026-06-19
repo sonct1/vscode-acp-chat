@@ -1,5 +1,17 @@
 # Changelog
 
+All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
+
+### [1.5.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.5.0...v1.5.1) (2026-06-19)
+
+### Bug Fixes
+
+- pretty-print object values in tool input display to avoid [object Object] ([3d8d3f1](https://github.com/pengjiantao/vscode-acp-chat/commit/3d8d3f161fa81e2971f50a5b7f96cecb8c471089))
+
+### Code Refactoring
+
+- replace any with proper types for improved type safety ([68632db](https://github.com/pengjiantao/vscode-acp-chat/commit/68632db039f0276ed8fe64254e73b81aac347af7))
+
 ## [1.5.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.4.0...v1.5.0) (2026-06-08)
 
 ### Features
