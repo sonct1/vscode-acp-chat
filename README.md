@@ -11,7 +11,7 @@
 
 ## 🚀 Features
 
-- **Multi-Agent Support** — Connect to OpenCode, Claude Code, Codex CLI, Gemini CLI, Goose, and other ACP-compatible agents.
+- **Multi-Agent Support** — Connect to OpenCode, Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
 - **Native Chat Interface** — Integrated sidebar chat that feels like a native part of VS Code.
 - **Context-Aware** — Send code selections or terminal output directly to the chat via context menus.
 - **Tool Visibility** — See what commands the AI runs with expandable input/output and file diffs.
@@ -57,22 +57,23 @@ You need at least one ACP-compatible agent installed and available in your `$PAT
 
 The extension automatically detects installed agents by checking your system's `$PATH` for the following commands:
 
-| Agent        | Command                               | Detection      |
-| ------------ | ------------------------------------- | -------------- |
-| OpenCode     | `opencode acp`                        | Checks `$PATH` |
-| Claude Code  | `npx @zed-industries/claude-code-acp` | Checks `$PATH` |
-| Codex CLI    | `npx @zed-industries/codex-acp`       | Checks `$PATH` |
-| Gemini CLI   | `gemini --acp`                        | Checks `$PATH` |
-| Goose        | `goose acp`                           | Checks `$PATH` |
-| Amp          | `amp acp`                             | Checks `$PATH` |
-| Aider        | `aider --acp`                         | Checks `$PATH` |
-| Augment Code | `augment acp`                         | Checks `$PATH` |
-| Kimi CLI     | `kimi --acp`                          | Checks `$PATH` |
-| Mistral Vibe | `vibe acp`                            | Checks `$PATH` |
-| OpenHands    | `openhands acp`                       | Checks `$PATH` |
-| Qwen Code    | `qwen --acp`                          | Checks `$PATH` |
-| Kiro CLI     | `kiro-cli acp`                        | Checks `$PATH` |
-| Cursor Cli   | `agent acp`                           | Checks `$PATH` |
+| Agent          | Command                               | Detection      |
+| -------------- | ------------------------------------- | -------------- |
+| OpenCode       | `opencode acp`                        | Checks `$PATH` |
+| Claude Code    | `npx @zed-industries/claude-code-acp` | Checks `$PATH` |
+| Codex CLI      | `npx @zed-industries/codex-acp`       | Checks `$PATH` |
+| CodeBuddy Code | `codebuddy --acp`                     | Checks `$PATH` |
+| Gemini CLI     | `gemini --acp`                        | Checks `$PATH` |
+| Goose          | `goose acp`                           | Checks `$PATH` |
+| Amp            | `amp acp`                             | Checks `$PATH` |
+| Aider          | `aider --acp`                         | Checks `$PATH` |
+| Augment Code   | `augment acp`                         | Checks `$PATH` |
+| Kimi CLI       | `kimi --acp`                          | Checks `$PATH` |
+| Mistral Vibe   | `vibe acp`                            | Checks `$PATH` |
+| OpenHands      | `openhands acp`                       | Checks `$PATH` |
+| Qwen Code      | `qwen --acp`                          | Checks `$PATH` |
+| Kiro CLI       | `kiro-cli acp`                        | Checks `$PATH` |
+| Cursor Cli     | `agent acp`                           | Checks `$PATH` |
 
 ### Custom Agents
 

@@ -106,6 +106,12 @@ export const AGENTS: AgentConfig[] = [
     command: "cursor-agent",
     args: ["acp"],
   },
+  {
+    id: "codebuddy",
+    name: "CodeBuddy Code",
+    command: "codebuddy",
+    args: ["--acp"],
+  },
 ];
 
 /**
