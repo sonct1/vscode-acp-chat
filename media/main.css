@@ -1520,6 +1520,65 @@ body {
   animation: popoverFadeIn 0.1s ease-out;
 }
 
+/* Context Usage Ring */
+.context-usage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.context-usage[hidden] {
+  display: none;
+}
+
+.context-usage svg {
+  display: block;
+}
+
+.context-usage__bg,
+.context-usage__fg {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.context-usage__bg {
+  stroke: var(--vscode-input-border);
+  opacity: 0.6;
+}
+
+.context-usage__fg {
+  transition:
+    stroke-dasharray 200ms ease,
+    stroke 200ms ease;
+}
+
+.context-usage.usage-low .context-usage__fg {
+  stroke: var(--vscode-charts-green);
+}
+
+.context-usage.usage-medium .context-usage__fg {
+  stroke: var(--vscode-charts-yellow, #e5b567);
+}
+
+.context-usage.usage-high .context-usage__fg {
+  stroke: var(--vscode-charts-red, #f85149);
+}
+
+.context-usage.usage-full .context-usage__fg {
+  stroke: var(--vscode-charts-red, #f85149);
+  opacity: 0.85;
+}
+
+.context-usage.usage-full {
+  box-shadow: 0 0 0 1px var(--vscode-charts-red, #f85149);
+}
+
 @keyframes popoverFadeIn {
   from {
     opacity: 0;

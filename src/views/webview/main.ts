@@ -166,6 +166,9 @@ export interface ExtensionMessage {
     newText: string;
     status: string;
   }>;
+  used?: number | null;
+  size?: number | null;
+  cost?: { amount: number; currency: string } | null;
 }
 
 export interface Mention {
@@ -246,6 +249,18 @@ function isForegroundClass(cls: string): boolean {
 
 function isBackgroundClass(cls: string): boolean {
   return cls.startsWith("ansi-bg-");
+}
+
+function formatContextCost(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 4,
+    }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(4)}`;
+  }
 }
 
 export function ansiToHtml(text: string): string {
@@ -579,6 +594,7 @@ export interface WebviewElements {
   stopBtn: HTMLButtonElement;
   modeDropdown: HTMLElement;
   modelDropdown: HTMLElement;
+  contextUsageRing: HTMLDivElement;
   welcomeView: HTMLElement;
   commandAutocomplete: HTMLElement;
   planContainer: HTMLElement;
@@ -597,6 +613,9 @@ export function getElements(doc: Document): WebviewElements {
     stopBtn: doc.getElementById("stop") as HTMLButtonElement,
     modeDropdown: doc.getElementById("mode-dropdown")!,
     modelDropdown: doc.getElementById("model-dropdown")!,
+    contextUsageRing: doc.getElementById(
+      "context-usage-ring"
+    ) as HTMLDivElement,
     welcomeView: doc.getElementById("welcome-view")!,
     commandAutocomplete: doc.getElementById("command-autocomplete")!,
     planContainer: doc.getElementById("agent-plan-container")!,
@@ -2663,6 +2682,77 @@ export class WebviewController {
     }
   }
 
+  private updateContextUsageRing(msg: ExtensionMessage): void {
+    const wrapper = this.elements.contextUsageRing;
+    if (!wrapper) {
+      return;
+    }
+    const fg = wrapper.querySelector(
+      ".context-usage__fg"
+    ) as SVGCircleElement | null;
+    if (!fg) {
+      return;
+    }
+
+    const used = msg.used;
+    const size = msg.size;
+    if (
+      used === null ||
+      used === undefined ||
+      size === null ||
+      size === undefined ||
+      typeof used !== "number" ||
+      typeof size !== "number" ||
+      size <= 0
+    ) {
+      wrapper.hidden = true;
+      wrapper.classList.remove(
+        "usage-low",
+        "usage-medium",
+        "usage-high",
+        "usage-full"
+      );
+      wrapper.removeAttribute("acp-title");
+      return;
+    }
+
+    const ratio = used / size;
+    let tier: "usage-low" | "usage-medium" | "usage-high" | "usage-full";
+    if (ratio < 0.6) {
+      tier = "usage-low";
+    } else if (ratio < 0.85) {
+      tier = "usage-medium";
+    } else if (ratio < 1) {
+      tier = "usage-high";
+    } else {
+      tier = "usage-full";
+    }
+    wrapper.classList.remove(
+      "usage-low",
+      "usage-medium",
+      "usage-high",
+      "usage-full"
+    );
+    wrapper.classList.add(tier);
+    wrapper.hidden = false;
+
+    const radius = 7;
+    const circumference = 2 * Math.PI * radius;
+    const clamped = Math.min(ratio, 1);
+    fg.style.strokeDasharray = `${clamped * circumference} ${circumference}`;
+
+    const pct = (ratio * 100).toFixed(1);
+    const lines: string[] = [`Total: ${size}`, `Used: ${used} (${pct}%)`];
+    if (msg.cost && typeof msg.cost.amount === "number" && msg.cost.currency) {
+      lines.push(
+        `Cost: ${formatContextCost(msg.cost.amount, msg.cost.currency)}`
+      );
+    }
+    const text = lines.join("\n");
+    wrapper.setAttribute("acp-title", text);
+    wrapper.setAttribute("aria-label", text);
+  }
+
   private renderDiffSummary(): void {
     const { diffSummaryContainer } = this.elements;
     if (this.diffChanges.length === 0) {
@@ -3046,6 +3136,9 @@ export class WebviewController {
           this.renderDiffSummary();
           this.saveState();
         }
+        break;
+      case "contextUsage":
+        this.updateContextUsageRing(msg);
         break;
       case "permissionRequest":
         if (msg.requestId && msg.toolCall && msg.options) {

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import { searchWorkspaceFiles } from "../utils/file-search";
-import { ACPClient } from "../acp/client";
+import { ACPClient, type ContextUsageUpdate } from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
 import { AgentSessionManager, type SessionInfo } from "../acp/session-manager";
@@ -434,6 +434,7 @@ export class ChatViewProvider
             agentName: this.acpClient.getAgentName(),
           });
           this.sendSessionMetadata();
+          this.sendContextUsage();
           break;
       }
     });
@@ -512,6 +513,8 @@ export class ChatViewProvider
     this.diffManager.clear();
     this.postMessage({ type: "chatCleared" });
     this.postMessage({ type: "sessionMetadata", modes: null, models: null });
+    this.acpClient.clearLastUsageUpdate();
+    this.sendContextUsage();
 
     try {
       if (!this.acpClient.isConnected()) {
@@ -1254,6 +1257,27 @@ export class ChatViewProvider
         update.configOptions
       );
       this.sendSessionMetadata();
+    } else if (update.sessionUpdate === "usage_update") {
+      const u = update as Partial<ContextUsageUpdate>;
+      if (
+        typeof u.size !== "number" ||
+        u.size <= 0 ||
+        typeof u.used !== "number"
+      ) {
+        return;
+      }
+      const cost =
+        u.cost &&
+        typeof u.cost.amount === "number" &&
+        typeof u.cost.currency === "string"
+          ? { amount: u.cost.amount, currency: u.cost.currency }
+          : null;
+      this.acpClient.setLastUsageUpdate({
+        used: u.used,
+        size: u.size,
+        cost,
+      });
+      this.sendContextUsage();
     }
   }
 
@@ -1443,6 +1467,8 @@ export class ChatViewProvider
         agentName: agent.name,
       });
       this.postMessage({ type: "sessionMetadata", modes: null, models: null });
+      this.acpClient.clearLastUsageUpdate();
+      this.sendContextUsage();
 
       try {
         await this.handleConnect();
@@ -1505,6 +1531,8 @@ export class ChatViewProvider
     this.diffManager.clear();
     this.postMessage({ type: "chatCleared" });
     this.postMessage({ type: "sessionMetadata", modes: null, models: null });
+    this.acpClient.clearLastUsageUpdate();
+    this.sendContextUsage();
 
     try {
       if (this.acpClient.isConnected()) {
@@ -1539,6 +1567,25 @@ export class ChatViewProvider
       this.restoreSavedModeAndModel().catch((error) =>
         console.warn("[Chat] Failed to restore saved mode/model:", error)
       );
+    }
+  }
+
+  private sendContextUsage(): void {
+    const last = this.acpClient.getSessionMetadata()?.lastUsageUpdate;
+    if (last && typeof last.size === "number" && last.size > 0) {
+      this.postMessage({
+        type: "contextUsage",
+        used: last.used,
+        size: last.size,
+        cost: last.cost ?? null,
+      });
+    } else {
+      this.postMessage({
+        type: "contextUsage",
+        used: null,
+        size: null,
+        cost: null,
+      });
     }
   }
 
@@ -1727,6 +1774,12 @@ export class ChatViewProvider
             </span>
           </div>
           <div class="dropdown-popover"></div>
+        </div>
+        <div id="context-usage-ring" class="context-usage" hidden aria-label="Context usage">
+          <svg viewBox="0 0 18 18" width="18" height="18" role="img">
+            <circle class="context-usage__bg" cx="9" cy="9" r="7"></circle>
+            <circle class="context-usage__fg" cx="9" cy="9" r="7" transform="rotate(-90 9 9)"></circle>
+          </svg>
         </div>
       </div>
       <div id="right-options">

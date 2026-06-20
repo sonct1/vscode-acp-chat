@@ -90,6 +90,12 @@ function createWebviewHTML(): string {
           </div>
           <div class="dropdown-popover"></div>
         </div>
+        <div id="context-usage-ring" class="context-usage" hidden>
+          <svg viewBox="0 0 18 18" width="18" height="18" role="img">
+            <circle class="context-usage__bg" cx="9" cy="9" r="7"></circle>
+            <circle class="context-usage__fg" cx="9" cy="9" r="7" transform="rotate(-90 9 9)"></circle>
+          </svg>
+        </div>
       </div>
       <div id="right-options">
         <button id="send">Send</button>
@@ -703,6 +709,119 @@ suite("Webview", () => {
         assert.strictEqual(elements.modeDropdown.style.display, "flex");
         const label = elements.modeDropdown.querySelector(".selected-label");
         assert.strictEqual(label?.textContent, "Code");
+      });
+
+      suite("contextUsage", () => {
+        const RADIUS = 7;
+        const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+        function getFg() {
+          return elements.contextUsageRing.querySelector(
+            ".context-usage__fg"
+          ) as SVGCircleElement | null;
+        }
+        function getTooltip() {
+          return elements.contextUsageRing.getAttribute("acp-title") ?? "";
+        }
+
+        test("first valid payload reveals ring and applies usage-low tier", () => {
+          controller.handleMessage({
+            type: "contextUsage",
+            used: 100,
+            size: 1000,
+            cost: null,
+          });
+          assert.strictEqual(
+            elements.contextUsageRing.hasAttribute("hidden"),
+            false
+          );
+          assert.ok(elements.contextUsageRing.classList.contains("usage-low"));
+          const fg = getFg();
+          assert.ok(fg);
+          const expected = `${0.1 * CIRCUMFERENCE} ${CIRCUMFERENCE}`;
+          assert.strictEqual(fg.style.strokeDasharray, expected);
+          const tooltip = getTooltip();
+          assert.ok(tooltip.includes("100"));
+          assert.ok(tooltip.includes("1000"));
+          assert.ok(tooltip.includes("10.0%"));
+        });
+
+        test("applies correct tier at each threshold", () => {
+          const cases: Array<{ ratio: number; tier: string }> = [
+            { ratio: 0.59, tier: "usage-low" },
+            { ratio: 0.6, tier: "usage-medium" },
+            { ratio: 0.84, tier: "usage-medium" },
+            { ratio: 0.85, tier: "usage-high" },
+            { ratio: 0.99, tier: "usage-high" },
+            { ratio: 1.0, tier: "usage-full" },
+            { ratio: 1.5, tier: "usage-full" },
+          ];
+          for (const c of cases) {
+            const used = Math.round(c.ratio * 1000);
+            controller.handleMessage({
+              type: "contextUsage",
+              used,
+              size: 1000,
+              cost: null,
+            });
+            assert.strictEqual(
+              elements.contextUsageRing.classList.contains(c.tier),
+              true,
+              `ratio ${c.ratio} should map to ${c.tier}`
+            );
+          }
+        });
+
+        test("null payload hides the ring", () => {
+          controller.handleMessage({
+            type: "contextUsage",
+            used: 500,
+            size: 1000,
+            cost: null,
+          });
+          assert.strictEqual(
+            elements.contextUsageRing.hasAttribute("hidden"),
+            false
+          );
+          controller.handleMessage({
+            type: "contextUsage",
+            used: null,
+            size: null,
+            cost: null,
+          });
+          assert.strictEqual(
+            elements.contextUsageRing.hasAttribute("hidden"),
+            true
+          );
+          assert.strictEqual(
+            elements.contextUsageRing.hasAttribute("acp-title"),
+            false
+          );
+        });
+
+        test("includes cost in tooltip when present", () => {
+          controller.handleMessage({
+            type: "contextUsage",
+            used: 1000,
+            size: 10000,
+            cost: { amount: 0.0012, currency: "USD" },
+          });
+          const tooltip = getTooltip();
+          assert.ok(tooltip.includes("Cost:"));
+        });
+
+        test("strokeDasharray is clamped to 100% for overage", () => {
+          controller.handleMessage({
+            type: "contextUsage",
+            used: 2000,
+            size: 1000,
+            cost: null,
+          });
+          const fg = getFg();
+          assert.ok(fg);
+          const expected = `${CIRCUMFERENCE} ${CIRCUMFERENCE}`;
+          assert.strictEqual(fg.style.strokeDasharray, expected);
+        });
       });
 
       test("handles chatCleared", () => {

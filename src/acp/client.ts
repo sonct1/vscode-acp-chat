@@ -67,6 +67,13 @@ export interface SessionMetadata {
   modes: SessionModeState | null;
   models: SessionModelState | null;
   commands: AvailableCommand[] | null;
+  lastUsageUpdate?: ContextUsageUpdate | null;
+}
+
+export interface ContextUsageUpdate {
+  used: number;
+  size: number;
+  cost?: { amount: number; currency: string } | null;
 }
 
 /**
@@ -711,6 +718,21 @@ export class ACPClient {
 
   getSessionMetadata(): SessionMetadata | null {
     return this.sessionMetadata;
+  }
+
+  setLastUsageUpdate(payload: ContextUsageUpdate): void {
+    if (!this.sessionMetadata) return;
+    this.sessionMetadata.lastUsageUpdate = {
+      used: payload.used,
+      size: payload.size,
+      cost: payload.cost ?? null,
+    };
+  }
+
+  clearLastUsageUpdate(): void {
+    if (this.sessionMetadata) {
+      this.sessionMetadata.lastUsageUpdate = null;
+    }
   }
 
   /**

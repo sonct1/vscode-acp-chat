@@ -14,7 +14,7 @@ suite("DocumentSyncManager", () => {
       _args: string[],
       _options: unknown
     ): ChildProcess => {
-      return createMockProcess() as unknown as ChildProcess;
+      return createMockProcess({}) as unknown as ChildProcess;
     };
 
     client = new ACPClient({

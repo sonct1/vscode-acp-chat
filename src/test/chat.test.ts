@@ -687,4 +687,138 @@ suite("ChatViewProvider", () => {
       );
     });
   });
+
+  suite("Context Usage Indicator", () => {
+    test("forwards usage_update to webview as contextUsage", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      const lastUpdate: any = {
+        used: 5000,
+        size: 10000,
+        cost: { amount: 0.0012, currency: "USD" },
+      };
+      const sessionMeta: any = {
+        modes: null,
+        models: null,
+        commands: null,
+        lastUsageUpdate: null,
+      };
+      (acpClient as any).setLastUsageUpdate = (payload: any) => {
+        sessionMeta.lastUsageUpdate = payload;
+      };
+      (acpClient as any).getSessionMetadata = () => sessionMeta;
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "usage_update",
+          used: 5000,
+          size: 10000,
+          cost: { amount: 0.0012, currency: "USD" },
+        },
+      });
+
+      const usageMsg = messages.find((m) => m.type === "contextUsage");
+      assert.ok(usageMsg, "contextUsage message should be sent");
+      assert.strictEqual(usageMsg.used, 5000);
+      assert.strictEqual(usageMsg.size, 10000);
+      assert.deepStrictEqual(usageMsg.cost, {
+        amount: 0.0012,
+        currency: "USD",
+      });
+      assert.deepStrictEqual(sessionMeta.lastUsageUpdate, lastUpdate);
+    });
+
+    test("ignores malformed usage_update with size <= 0", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+      let setCalled = false;
+      (acpClient as any).setLastUsageUpdate = () => {
+        setCalled = true;
+      };
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: { sessionUpdate: "usage_update", used: 0, size: 0 },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: { sessionUpdate: "usage_update", used: 100 },
+      });
+
+      assert.strictEqual(
+        setCalled,
+        false,
+        "setLastUsageUpdate should not be called"
+      );
+      const usageMsgs = messages.filter((m) => m.type === "contextUsage");
+      assert.strictEqual(usageMsgs.length, 0);
+    });
+
+    test("sendContextUsage emits clear message when no usage data", () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+      (acpClient as any).getSessionMetadata = () => ({
+        modes: null,
+        models: null,
+        commands: null,
+        lastUsageUpdate: null,
+      });
+
+      (provider as any).sendContextUsage();
+
+      const usageMsg = messages.find((m) => m.type === "contextUsage");
+      assert.ok(usageMsg);
+      assert.strictEqual(usageMsg.used, null);
+      assert.strictEqual(usageMsg.size, null);
+      assert.strictEqual(usageMsg.cost, null);
+    });
+
+    test("sendContextUsage replays last-known usage", () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+      (acpClient as any).getSessionMetadata = () => ({
+        modes: null,
+        models: null,
+        commands: null,
+        lastUsageUpdate: {
+          used: 7000,
+          size: 14000,
+          cost: { amount: 0.005, currency: "EUR" },
+        },
+      });
+
+      (provider as any).sendContextUsage();
+
+      const usageMsg = messages.find((m) => m.type === "contextUsage");
+      assert.ok(usageMsg);
+      assert.strictEqual(usageMsg.used, 7000);
+      assert.strictEqual(usageMsg.size, 14000);
+      assert.deepStrictEqual(usageMsg.cost, {
+        amount: 0.005,
+        currency: "EUR",
+      });
+    });
+  });
 });

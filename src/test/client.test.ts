@@ -78,7 +78,7 @@ suite("ACPClient with Mock Server", () => {
       _args: string[],
       _options: unknown
     ): ChildProcess => {
-      return createMockProcess() as unknown as ChildProcess;
+      return createMockProcess({}) as unknown as ChildProcess;
     };
 
     client = new ACPClient({
@@ -542,11 +542,10 @@ suite("ACPClient with configOptions format", () => {
       _args: string[],
       _options: unknown
     ): ChildProcess => {
-      return createMockProcess(
-        "default",
-        true,
-        true
-      ) as unknown as ChildProcess;
+      return createMockProcess({
+        enableLoadSession: true,
+        useConfigOptions: true,
+      }) as unknown as ChildProcess;
     };
 
     client = new ACPClient({

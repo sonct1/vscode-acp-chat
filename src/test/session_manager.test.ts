@@ -17,7 +17,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", true) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: true,
+        }) as unknown as ChildProcess;
       };
 
       client = new ACPClient({
@@ -60,7 +62,9 @@ suite("SessionManager", () => {
           _args: string[],
           _options: unknown
         ): ChildProcess => {
-          return createMockProcess("default", false) as unknown as ChildProcess;
+          return createMockProcess({
+            enableLoadSession: false,
+          }) as unknown as ChildProcess;
         };
 
         const disabledClient = new ACPClient({
@@ -145,7 +149,9 @@ suite("SessionManager", () => {
           _args: string[],
           _options: unknown
         ): ChildProcess => {
-          return createMockProcess("default", false) as unknown as ChildProcess;
+          return createMockProcess({
+            enableLoadSession: false,
+          }) as unknown as ChildProcess;
         };
 
         const disabledClient = new ACPClient({
@@ -209,7 +215,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", true) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: true,
+        }) as unknown as ChildProcess;
       };
 
       client = new ACPClient({
@@ -240,7 +248,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", false) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: false,
+        }) as unknown as ChildProcess;
       };
 
       const disabledClient = new ACPClient({
@@ -380,7 +390,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", true) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: true,
+        }) as unknown as ChildProcess;
       };
 
       client = new ACPClient({
@@ -427,7 +439,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", true) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: true,
+        }) as unknown as ChildProcess;
       };
 
       client = new ACPClient({
@@ -515,7 +529,9 @@ suite("SessionManager", () => {
         _args: string[],
         _options: unknown
       ): ChildProcess => {
-        return createMockProcess("default", true) as unknown as ChildProcess;
+        return createMockProcess({
+          enableLoadSession: true,
+        }) as unknown as ChildProcess;
       };
 
       client = new ACPClient({

@@ -1,7 +1,20 @@
 import { EventEmitter, Readable, Writable } from "stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-export type DemoMode = "ansi" | "plan" | "default";
+export type DemoMode = "ansi" | "plan" | "default" | "usage";
+
+export interface UsageUpdatePayload {
+  used: number;
+  size: number;
+  cost?: { amount: number; currency: string };
+}
+
+export interface MockACPServerOptions {
+  demoMode?: DemoMode;
+  enableLoadSession?: boolean;
+  useConfigOptions?: boolean;
+  emitUsageUpdate?: UsageUpdatePayload | null;
+}
 
 interface MockSession {
   id: string;
@@ -16,6 +29,7 @@ export class MockACPServer {
   private demoMode: DemoMode;
   private enableLoadSession: boolean;
   private useConfigOptions: boolean;
+  private emitUsageUpdate: UsageUpdatePayload | null;
 
   readonly stdin: Writable;
   readonly stdout: Readable;
@@ -23,14 +37,11 @@ export class MockACPServer {
 
   private stdinBuffer = "";
 
-  constructor(
-    demoMode: DemoMode = "default",
-    enableLoadSession = true,
-    useConfigOptions = false
-  ) {
-    this.demoMode = demoMode;
-    this.enableLoadSession = enableLoadSession;
-    this.useConfigOptions = useConfigOptions;
+  constructor(options: MockACPServerOptions = {}) {
+    this.demoMode = options.demoMode ?? "default";
+    this.enableLoadSession = options.enableLoadSession ?? true;
+    this.useConfigOptions = options.useConfigOptions ?? false;
+    this.emitUsageUpdate = options.emitUsageUpdate ?? null;
 
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -235,6 +246,9 @@ export class MockACPServer {
         case "plan":
           await this.demoPlanDisplay(session.id);
           break;
+        case "usage":
+          await this.demoUsageOutput(session.id);
+          break;
         default:
           await this.demoDefault(session.id);
       }
@@ -249,6 +263,33 @@ export class MockACPServer {
 
     session.pendingPrompt = null;
     this.sendResponse(id, { stopReason: "end_turn" });
+  }
+
+  private async demoUsageOutput(sessionId: string): Promise<void> {
+    this.sendSessionUpdate(sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: "Generating answer with usage tracking...",
+      },
+    });
+
+    if (this.emitUsageUpdate) {
+      this.sendSessionUpdate(sessionId, {
+        sessionUpdate: "usage_update",
+        used: this.emitUsageUpdate.used,
+        size: this.emitUsageUpdate.size,
+        cost: this.emitUsageUpdate.cost ?? null,
+      });
+    }
+
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.messageHistory.push({
+        role: "assistant",
+        content: "Generating answer with usage tracking...",
+      });
+    }
   }
 
   private async demoDefault(sessionId: string): Promise<void> {
@@ -561,15 +602,9 @@ export interface MockChildProcess extends EventEmitter {
 }
 
 export function createMockProcess(
-  demoMode: DemoMode = "default",
-  enableLoadSession = true,
-  useConfigOptions = false
+  options: MockACPServerOptions = {}
 ): MockChildProcess {
-  const server = new MockACPServer(
-    demoMode,
-    enableLoadSession,
-    useConfigOptions
-  );
+  const server = new MockACPServer(options);
   const mockProcess = new EventEmitter() as MockChildProcess;
 
   Object.defineProperty(mockProcess, "stdin", {

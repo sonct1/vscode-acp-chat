@@ -13,7 +13,7 @@ suite("Client Capabilities - File System", () => {
       _args: string[],
       _options: unknown
     ): ChildProcess => {
-      return createMockProcess() as unknown as ChildProcess;
+      return createMockProcess({}) as unknown as ChildProcess;
     };
 
     client = new ACPClient({
