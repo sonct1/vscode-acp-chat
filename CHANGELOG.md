@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.6.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.5.1...v1.6.0) (2026-06-20)
+
+### Features
+
+- 添加 CodeBuddy Code ACP agent 支持 ([8be17bc](https://github.com/pengjiantao/vscode-acp-chat/commit/8be17bcdc35d1f15ab7b2ea906b49ac22fc34f65))
+- 添加上下文使用量指示器 ([1323d44](https://github.com/pengjiantao/vscode-acp-chat/commit/1323d44d3b1b31a574093786e3ca8f1e4361c1ed))
+- 支持通用 config options 下拉（含 thought_level） ([f2b69b4](https://github.com/pengjiantao/vscode-acp-chat/commit/f2b69b442bd416e8a259260a2cf2d7dad57a6d67))
+- add ACP document sync notifications ([7a0a397](https://github.com/pengjiantao/vscode-acp-chat/commit/7a0a3976256cd608523f23d12e79350ff2f367b0))
+
+### Bug Fixes
+
+- update Claude Code ACP package name to @agentclientprotocol/claude-agent-acp ([c49e1e0](https://github.com/pengjiantao/vscode-acp-chat/commit/c49e1e058d07c6251aaed3a11471e57ca86a4c4f))
+
 ### [1.5.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.5.0...v1.5.1) (2026-06-19)
 
 ### Bug Fixes
