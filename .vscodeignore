@@ -18,3 +18,8 @@ esbuild.js
 !dist/**
 opencode.jsonc
 package-lock.json
+.mimocode/
+.versionrc
+.agents/
+.claude/
+.husky/
