@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.8.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.7.0...v1.8.0) (2026-06-21)
+
+### Features
+
+- **webview:** simplify edit/write tool details to show only diff ([637fc5a](https://github.com/pengjiantao/vscode-acp-chat/commit/637fc5aa3e160675a74f5a2b3d64ebcbda469280))
+
+### Bug Fixes
+
+- prioritize intent field over directory path in execute tool summary ([c5323bd](https://github.com/pengjiantao/vscode-acp-chat/commit/c5323bd083913a3c52f4b3feb2256d57e0cc504c))
+
+### Code Refactoring
+
+- unified IO block for tool call details ([9f3bf36](https://github.com/pengjiantao/vscode-acp-chat/commit/9f3bf3678a17311aad0984c91b97a6ac99e017f1))
+- use border-left color instead of icons for tool status ([50a2c52](https://github.com/pengjiantao/vscode-acp-chat/commit/50a2c521d87c24e963fd67afb496dfc974208f47))
+
 ## [1.7.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.6.1...v1.7.0) (2026-06-21)
 
 ### Features
