@@ -269,13 +269,7 @@ function renderIOBlock(info: ToolCallSummary): string {
 
   const otherInputEntries = rawInput
     ? Object.entries(rawInput).filter(([k, v]) => {
-        const skipCmdKeys = [
-          "description",
-          "command",
-          "cmd",
-          "script",
-          "pattern",
-        ];
+        const skipCmdKeys = ["command", "cmd", "script", "pattern"];
         if (skipCmdKeys.includes(k)) return false;
         if (hasDiff && skipInputKeys.includes(k)) return false;
         return v !== undefined;
@@ -369,7 +363,134 @@ const BaseRenderer: ToolRenderer = {
   },
 
   renderDetails(info: ToolCallSummary): string {
-    return renderIOBlock(info);
+    const { kind, locations, rawInput, rawOutput, content, terminalOutput } =
+      info;
+    let html = '<div class="tool-details-panel">';
+
+    // Type
+    html += `<div class="detail-section"><span class="detail-label">Type:</span> ${kind || "unknown"}</div>`;
+
+    // Locations
+    if (locations && locations.length > 0) {
+      html +=
+        '<div class="detail-section"><span class="detail-label">Path:</span>';
+      for (const loc of locations) {
+        html += `<div class="detail-path">${escapeHtml(loc.path)}${loc.line ? `:${loc.line}` : ""}</div>`;
+      }
+      html += "</div>";
+    } else {
+      const p =
+        rawInput?.path ||
+        rawInput?.file ||
+        rawInput?.filePath ||
+        rawInput?.file_path ||
+        rawInput?.uri ||
+        rawInput?.filename ||
+        rawInput?.target ||
+        rawInput?.target_file ||
+        rawInput?.destination ||
+        rawInput?.source;
+      if (typeof p === "string") {
+        html += `<div class="detail-section"><span class="detail-label">Path:</span> ${escapeHtml(p)}</div>`;
+      }
+    }
+
+    // Intent
+    if (rawInput?.description) {
+      html += `<div class="detail-section"><span class="detail-label">Intent:</span> ${escapeHtml(String(rawInput.description))}</div>`;
+    }
+
+    // Input Parameters
+    if (rawInput) {
+      const skipInputKeys = [
+        "description",
+        "content",
+        "text",
+        "newContent",
+        "newText",
+        "new_string",
+        "old_string",
+        "replacement",
+        "path",
+        "file",
+        "filePath",
+        "file_path",
+        "filename",
+        "uri",
+      ];
+
+      const hasDiff = content?.some((c) => c.type === "diff");
+
+      const hasMeaningfulInput = Object.keys(rawInput).some((k) => {
+        if (k === "description") return false;
+        if (hasDiff && skipInputKeys.includes(k)) return false;
+        return rawInput[k] !== undefined;
+      });
+
+      if (hasMeaningfulInput) {
+        html +=
+          '<div class="detail-section"><span class="detail-label">Input:</span>';
+        html += '<div class="code-block-wrapper"><pre class="detail-input">';
+        for (const [key, value] of Object.entries(rawInput)) {
+          if (key === "description") continue;
+          if (hasDiff && skipInputKeys.includes(key)) continue;
+
+          if (value !== undefined) {
+            const displayValue = formatValueForDisplay(value);
+            if (key === "command" || key === "pattern") {
+              html += `<div><strong>$ ${escapeHtml(displayValue)}</strong></div>`;
+            } else {
+              html += `<div><span class="param-key">${key}:</span> ${escapeHtml(displayValue)}</div>`;
+            }
+          }
+        }
+        html +=
+          '</pre><button class="code-copy-btn" acp-title="Copy input"><span class="codicon codicon-copy"></span></button></div></div>';
+      }
+    }
+
+    // Output / Content
+    let hasOutput = false;
+    if (content && content.length > 0) {
+      for (const item of content) {
+        if (item.type === "content" && item.content?.text) {
+          html += `<div class="detail-section"><span class="detail-label">Output:</span>`;
+          html += `<div class="code-block-wrapper"><pre class="tool-output">${escapeHtml(item.content.text)}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div>`;
+          hasOutput = true;
+        } else if (item.type === "terminal") {
+          const output = terminalOutput || "";
+          const hasAnsi = hasAnsiCodes(output);
+          const outputHtml = hasAnsi ? ansiToHtml(output) : escapeHtml(output);
+          const terminalClass = hasAnsi ? " terminal" : "";
+          html += `<div class="detail-section"><span class="detail-label">Terminal:</span>`;
+          html += `<div class="code-block-wrapper"><pre class="tool-output${terminalClass}">${outputHtml}</pre><button class="code-copy-btn" acp-title="Copy terminal output"><span class="codicon codicon-copy"></span></button></div></div>`;
+          hasOutput = true;
+        } else if (item.type === "diff") {
+          html += renderDiff(item.path, item.oldText, item.newText);
+          hasOutput = true;
+        }
+      }
+    }
+
+    if (!hasOutput) {
+      let output = "";
+      if (terminalOutput) {
+        output = terminalOutput;
+      } else if (rawOutput?.output) {
+        output = String(rawOutput.output);
+      }
+
+      if (output) {
+        const hasAnsi = hasAnsiCodes(output);
+        const outputHtml = hasAnsi ? ansiToHtml(output) : escapeHtml(output);
+        const terminalClass = hasAnsi ? " terminal" : "";
+        html += `<div class="detail-section"><span class="detail-label">Output:</span>`;
+        html += `<div class="code-block-wrapper"><pre class="tool-output${terminalClass}">${outputHtml}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div>`;
+      }
+    }
+
+    html += "</div>";
+    return html;
   },
 };
 
@@ -408,6 +529,10 @@ const Renderers: Partial<Record<ToolKind, ToolRenderer>> = {
   write: {
     ...BaseRenderer,
     renderDetails: renderFileEditDetails,
+  },
+  execute: {
+    ...BaseRenderer,
+    renderDetails: renderIOBlock,
   },
   read: {
     ...BaseRenderer,

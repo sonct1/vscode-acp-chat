@@ -345,11 +345,11 @@ suite("Webview", () => {
         status: "completed",
         locations: [{ path: "/src/test.ts", line: 42 }],
       });
-      // Type/Path/Intent removed by design — only IO block remains
-      assert.ok(
-        html.includes('<div class="io-block">') ||
-          !html.includes("tool-details-panel")
-      );
+      // Read tools should use tool-details-panel with Type/Path/Intent
+      assert.ok(html.includes("tool-details-panel"));
+      assert.ok(html.includes("/src/test.ts"));
+      assert.ok(html.includes("Type:"));
+      assert.ok(html.includes("Path:"));
     });
 
     test("renders intent/description in details", () => {
@@ -360,11 +360,9 @@ suite("Webview", () => {
         status: "completed",
         rawInput: { description: "Running unit tests" },
       });
-      // Type/Path/Intent removed by design — only IO block remains
-      assert.ok(
-        html.includes('<div class="io-block">') ||
-          !html.includes("tool-details-panel")
-      );
+      // Execute tools should use IO block
+      assert.ok(html.includes('<div class="io-block">'));
+      assert.ok(html.includes("Running unit tests"));
     });
   });
 
