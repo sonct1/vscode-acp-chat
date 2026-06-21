@@ -2112,6 +2112,40 @@ kbd {
   padding: 8px 12px;
 }
 
+/* Adjacent block spacing — reduce margin stacking in assistant flex column.
+   Flexbox doesn't collapse margins, so adjacent blocks double their gaps.
+   These rules reduce margins on the second block of each adjacent pair. */
+
+/* Consecutive tool calls: tight grouping */
+.block-tool + .block-tool > .tool-item {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+/* Consecutive thought blocks: tight grouping */
+.block-thought + .block-thought > .agent-thought {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+/* Thought immediately followed by tool: slight extra beat */
+.block-thought + .block-tool > .tool-item {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+/* Tool or thought followed by text: keep a visible separator */
+.block-tool + .block-text,
+.block-thought + .block-text {
+  margin-top: 4px;
+}
+
+/* Text followed by tool or thought: tighten transition back to non-text blocks */
+.block-text + .block-tool > .tool-item,
+.block-text + .block-thought > .agent-thought {
+  margin-top: 4px;
+}
+
 /* Diff Display Styles */
 .diff-container {
   margin: 12px 0;
