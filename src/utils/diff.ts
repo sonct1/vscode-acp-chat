@@ -5,21 +5,57 @@ export interface DiffLine {
   newLineNumber?: number;
 }
 
+function findLCS(oldLines: string[], newLines: string[]): string[] {
+  const n = oldLines.length;
+  const m = newLines.length;
+
+  const dp: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array(m + 1).fill(0)
+  );
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  const lcs: string[] = [];
+  let i = n,
+    j = m;
+  while (i > 0 && j > 0) {
+    if (oldLines[i - 1] === newLines[j - 1]) {
+      lcs.push(oldLines[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  lcs.reverse();
+  return lcs;
+}
+
 /**
- * Compute a simple line-by-line diff between old and new text.
+ * Compute a line-by-line diff between old and new text.
  * Returns an array of diff lines marked as add/remove/context.
- * Uses a square-search lookahead to group block replacements and avoid interleaving.
+ * Uses LCS (Longest Common Subsequence) for optimal diff computation.
+ * Groups consecutive removals before additions for block replacement style.
  */
 export function computeLineDiff(
   oldText: string | null | undefined,
   newText: string | null | undefined
 ): DiffLine[] {
-  // Handle edge cases
   if (!oldText && !newText) {
     return [];
   }
   if (!oldText) {
-    // New file - all lines are additions
     return newText!.split("\n").map((line, idx) => ({
       type: "add" as const,
       line,
@@ -27,7 +63,6 @@ export function computeLineDiff(
     }));
   }
   if (!newText) {
-    // Deleted file - all lines are deletions
     return oldText!.split("\n").map((line, idx) => ({
       type: "remove" as const,
       line,
@@ -37,15 +72,36 @@ export function computeLineDiff(
 
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
-  const result: DiffLine[] = [];
 
+  const lcs = findLCS(oldLines, newLines);
+
+  const result: DiffLine[] = [];
   let i = 0,
-    j = 0;
+    j = 0,
+    k = 0;
   let oldLineNum = 1;
   let newLineNum = 1;
 
-  while (i < oldLines.length && j < newLines.length) {
-    if (oldLines[i] === newLines[j]) {
+  while (i < oldLines.length || j < newLines.length) {
+    while (i < oldLines.length && (k >= lcs.length || oldLines[i] !== lcs[k])) {
+      result.push({
+        type: "remove",
+        line: oldLines[i],
+        oldLineNumber: oldLineNum++,
+      });
+      i++;
+    }
+
+    while (j < newLines.length && (k >= lcs.length || newLines[j] !== lcs[k])) {
+      result.push({
+        type: "add",
+        line: newLines[j],
+        newLineNumber: newLineNum++,
+      });
+      j++;
+    }
+
+    if (k < lcs.length && i < oldLines.length && j < newLines.length) {
       result.push({
         type: "context",
         line: oldLines[i],
@@ -54,91 +110,8 @@ export function computeLineDiff(
       });
       i++;
       j++;
-    } else {
-      // Look ahead for a match
-      let nextI = -1;
-      let nextJ = -1;
-      const lookahead = 50;
-      let found = false;
-
-      for (let k = 1; k < lookahead; k++) {
-        for (let l = 0; l <= k; l++) {
-          if (
-            i + k < oldLines.length &&
-            j + l < newLines.length &&
-            oldLines[i + k] === newLines[j + l]
-          ) {
-            nextI = i + k;
-            nextJ = j + l;
-            found = true;
-            break;
-          }
-          if (
-            i + l < oldLines.length &&
-            j + k < newLines.length &&
-            oldLines[i + l] === newLines[j + k]
-          ) {
-            nextI = i + l;
-            nextJ = j + k;
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-      }
-
-      if (found) {
-        // Add all removals then all additions
-        for (let k = i; k < nextI; k++) {
-          result.push({
-            type: "remove",
-            line: oldLines[k],
-            oldLineNumber: oldLineNum++,
-          });
-        }
-        for (let k = j; k < nextJ; k++) {
-          result.push({
-            type: "add",
-            line: newLines[k],
-            newLineNumber: newLineNum++,
-          });
-        }
-        i = nextI;
-        j = nextJ;
-      } else {
-        // No match found in lookahead, treat everything until end as a block to avoid interleaving
-        while (i < oldLines.length) {
-          result.push({
-            type: "remove",
-            line: oldLines[i++],
-            oldLineNumber: oldLineNum++,
-          });
-        }
-        while (j < newLines.length) {
-          result.push({
-            type: "add",
-            line: newLines[j++],
-            newLineNumber: newLineNum++,
-          });
-        }
-      }
+      k++;
     }
-  }
-
-  // Add remaining lines
-  while (i < oldLines.length) {
-    result.push({
-      type: "remove",
-      line: oldLines[i++],
-      oldLineNumber: oldLineNum++,
-    });
-  }
-  while (j < newLines.length) {
-    result.push({
-      type: "add",
-      line: newLines[j++],
-      newLineNumber: newLineNum++,
-    });
   }
 
   return result;

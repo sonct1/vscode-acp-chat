@@ -1123,47 +1123,88 @@ export class ChatViewProvider
             title?.toLowerCase().includes("write") ||
             title?.toLowerCase().includes("edit"))
         ) {
-          // IMPORTANT: Await the snapshot promise to avoid race conditions
-          const oldTextPromise = this.toolCallBaseContents.get(
-            update.toolCallId
-          );
-          let oldText = oldTextPromise ? await oldTextPromise : undefined;
+          let oldText: string | undefined;
 
-          // Check if tool call was cleaned up while awaiting
-          if (!this.pendingToolCalls.has(update.toolCallId)) {
-            return;
-          }
+          // Prefer pre-write snapshot from handleWriteTextFile (captured right
+          // before the disk write). This avoids a race where captureBaseContent
+          // reads the file AFTER the write has already landed.
+          if (this.lastFileContents.has(path)) {
+            const captured = this.lastFileContents.get(path);
+            oldText = captured ?? undefined;
+            this.lastFileContents.delete(path);
+          } else {
+            const oldTextPromise = this.toolCallBaseContents.get(
+              update.toolCallId
+            );
+            oldText = oldTextPromise ? await oldTextPromise : undefined;
 
-          // If tool_call notification was missed, toolCallBaseContents might be empty.
-          // Try to capture it now before completing the diff.
-          if (oldText === undefined && !this.lastFileContents.has(path)) {
-            oldText = await this.captureBaseContent(kind, title, rawInput);
-
-            // Re-check after second await
             if (!this.pendingToolCalls.has(update.toolCallId)) {
               return;
             }
+
+            if (oldText === undefined) {
+              oldText = await this.captureBaseContent(kind, title, rawInput);
+              if (!this.pendingToolCalls.has(update.toolCallId)) {
+                return;
+              }
+            }
           }
 
-          // If tool_call_update arrived after write completed, use the pre-write snapshot
-          if (oldText === undefined && this.lastFileContents.has(path)) {
-            const captured = this.lastFileContents.get(path);
-            oldText = captured ?? undefined; // null becomes undefined for webview
-          }
-          this.lastFileContents.delete(path);
+          let newText: string | undefined =
+            (rawInput?.content as string) ||
+            (rawInput?.text as string) ||
+            (rawInput?.newContent as string) ||
+            (rawInput?.newText as string) ||
+            (rawInput?.new_string as string) ||
+            (rawInput?.replacement as string) ||
+            (rawInput?.data as string) ||
+            (rawInput?.text_content as string) ||
+            (rawInput?.modified_content as string);
 
-          const newText =
-            rawInput?.content ||
-            rawInput?.text ||
-            rawInput?.newContent ||
-            rawInput?.newText ||
-            rawInput?.new_string ||
-            rawInput?.replacement ||
-            rawInput?.data ||
-            rawInput?.text_content ||
-            rawInput?.modified_content;
-
+          // For edit-type tools (old_string + new_string), compute the full
+          // new content by applying the replacement to the original text.
+          // Otherwise newText is only the replacement fragment, which makes
+          // the diff show every unchanged line as deleted.
+          //
+          // Use replaceAll so the agent's replacement matches its intent
+          // when old_string appears multiple times. If old_string is not
+          // found in oldText, fall back to reading the file from disk —
+          // a broken diff (full file as removed, replacement as added) is
+          // more misleading than a correct diff.
+          let editReconstructed = false;
           if (
+            rawInput?.old_string !== undefined &&
+            rawInput?.new_string !== undefined &&
+            oldText !== undefined
+          ) {
+            const oldString = String(rawInput.old_string);
+            const newString = String(rawInput.new_string);
+            if (oldText.includes(oldString)) {
+              newText = oldText.split(oldString).join(newString);
+              editReconstructed = true;
+            } else {
+              try {
+                const uri = vscode.Uri.file(path);
+                const currentBytes = await vscode.workspace.fs.readFile(uri);
+                newText = this.textDecoder.decode(currentBytes);
+                // If the file on disk matches oldText, the write was a no-op
+                // (or round-tripped back to the original) — no diff to show.
+                editReconstructed = newText !== oldText;
+              } catch {
+                editReconstructed = false;
+              }
+            }
+          }
+
+          // For edit tools where we could not reconstruct the full new
+          // content, skip the diff entirely. Pushing just the replacement
+          // fragment would make the diff show the entire file as removed.
+          const hasEditFields =
+            rawInput?.old_string !== undefined &&
+            rawInput?.new_string !== undefined;
+          const shouldEmitDiff = !hasEditFields || editReconstructed;
+          if (
+            shouldEmitDiff &&
             newText !== undefined &&
             !update.content?.some((c) => c.type === "diff")
           ) {

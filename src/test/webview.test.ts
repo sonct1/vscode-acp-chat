@@ -2425,6 +2425,101 @@ suite("Webview", () => {
       assert.strictEqual(result[3].type, "add");
       assert.strictEqual(result[3].line, "New 2");
     });
+
+    test("handles small change in large file correctly", () => {
+      const lines = Array.from({ length: 200 }, (_, i) => `line ${i}`);
+      const oldText = lines.join("\n");
+      const newLines = [...lines];
+      newLines[100] = "MODIFIED";
+      const newText = newLines.join("\n");
+
+      const result = computeLineDiff(oldText, newText);
+      const removes = result.filter((r) => r.type === "remove");
+      const adds = result.filter((r) => r.type === "add");
+      const context = result.filter((r) => r.type === "context");
+
+      assert.strictEqual(result.length, 201, "should have 201 total lines");
+      assert.strictEqual(removes.length, 1, "should have exactly 1 removal");
+      assert.strictEqual(removes[0].line, "line 100");
+      assert.strictEqual(adds.length, 1, "should have exactly 1 addition");
+      assert.strictEqual(adds[0].line, "MODIFIED");
+      assert.strictEqual(context.length, 199, "should have 199 context lines");
+    });
+
+    test("handles duplicate lines in input", () => {
+      const result = computeLineDiff("a\na\na", "a\na");
+      const removes = result.filter((r) => r.type === "remove");
+      const adds = result.filter((r) => r.type === "add");
+      const context = result.filter((r) => r.type === "context");
+
+      assert.strictEqual(removes.length, 1, "should remove only 1 duplicate");
+      assert.strictEqual(adds.length, 0, "no additions");
+      assert.strictEqual(context.length, 2, "should keep 2 as context");
+    });
+
+    test("handles duplicate lines with mid-file change", () => {
+      const oldText = "a\nb\na\nb\na";
+      const newText = "a\nb\nMODIFIED\nb\na";
+      const result = computeLineDiff(oldText, newText);
+      const removes = result.filter((r) => r.type === "remove");
+      const adds = result.filter((r) => r.type === "add");
+      const context = result.filter((r) => r.type === "context");
+
+      assert.strictEqual(removes.length, 1);
+      assert.strictEqual(removes[0].line, "a");
+      assert.strictEqual(adds.length, 1);
+      assert.strictEqual(adds[0].line, "MODIFIED");
+      assert.strictEqual(
+        context.length,
+        4,
+        "should keep surrounding lines as context"
+      );
+    });
+
+    test("handles insertion at beginning of large file", () => {
+      const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+      const oldText = lines.join("\n");
+      const newText = "INSERTED\n" + lines.join("\n");
+
+      const result = computeLineDiff(oldText, newText);
+      const adds = result.filter((r) => r.type === "add");
+      const removes = result.filter((r) => r.type === "remove");
+
+      assert.strictEqual(adds.length, 1, "should have 1 addition");
+      assert.strictEqual(adds[0].line, "INSERTED");
+      assert.strictEqual(removes.length, 0, "should have 0 removals");
+    });
+
+    test("handles multiple scattered changes in large file", () => {
+      const lines = Array.from({ length: 150 }, (_, i) => `line ${i}`);
+      const oldText = lines.join("\n");
+      const newLines = [...lines];
+      newLines[10] = "CHANGED_10";
+      newLines[50] = "CHANGED_50";
+      newLines[120] = "CHANGED_120";
+      const newText = newLines.join("\n");
+
+      const result = computeLineDiff(oldText, newText);
+      const removes = result.filter((r) => r.type === "remove");
+      const adds = result.filter((r) => r.type === "add");
+
+      assert.strictEqual(removes.length, 3, "should have 3 removals");
+      assert.strictEqual(adds.length, 3, "should have 3 additions");
+    });
+
+    test("handles append at end of large file", () => {
+      const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+      const oldText = lines.join("\n");
+      const newText = lines.join("\n") + "\nAPPENDED";
+
+      const result = computeLineDiff(oldText, newText);
+      const adds = result.filter((r) => r.type === "add");
+      const removes = result.filter((r) => r.type === "remove");
+
+      assert.strictEqual(adds.length, 1, "should have 1 addition");
+      assert.strictEqual(adds[0].line, "APPENDED");
+      assert.strictEqual(removes.length, 0, "should have 0 removals");
+    });
   });
 
   suite("renderDiff", () => {
