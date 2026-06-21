@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.6.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.6.0...v1.6.1) (2026-06-21)
+
+### Bug Fixes
+
+- reduce visual gaps between adjacent blocks in chat UI ([c54edb5](https://github.com/pengjiantao/vscode-acp-chat/commit/c54edb5c931a030795cc95c1fbe58a8376c6e411))
+- resolve diff rendering marking all lines as deleted ([94757b9](https://github.com/pengjiantao/vscode-acp-chat/commit/94757b97d1af4e45ddbedaaf0dfc55668f9ee5a1))
+
 ## [1.6.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.5.1...v1.6.0) (2026-06-20)
 
 ### Features
