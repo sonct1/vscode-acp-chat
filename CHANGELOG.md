@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.8.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.8.1...v1.8.2) (2026-06-22)
+
+### Bug Fixes
+
+- compact options bar layout and improve narrow-width responsiveness ([136ed6a](https://github.com/pengjiantao/vscode-acp-chat/commit/136ed6ab9291108b33037a3ed7fa4855f8ca0fb6))
+
 ### [1.8.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.8.0...v1.8.1) (2026-06-21)
 
 ### Bug Fixes
