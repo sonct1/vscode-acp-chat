@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.9.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.8.2...v1.9.0) (2026-06-22)
+
+### Features
+
+- per-model thought_level preference tracking ([856765a](https://github.com/pengjiantao/vscode-acp-chat/commit/856765a57a2a371cf4d290e79ac02ed514975112))
+
 ### [1.8.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.8.1...v1.8.2) (2026-06-22)
 
 ### Bug Fixes
