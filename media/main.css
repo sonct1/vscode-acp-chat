@@ -1440,7 +1440,9 @@ body {
   cursor: pointer;
   border-radius: 4px;
   height: 24px;
-  max-width: 150px; /* cap width so long labels ellipsize instead of pushing siblings off-screen */
+  min-width: 80px; /* ensure dropdowns stay readable */
+  max-width: 320px; /* cap width so long labels ellipsize */
+  flex: 0 1 auto; /* shrink if needed, don't grow */
   background: var(--vscode-dropdown-background, rgba(255, 255, 255, 0.03));
   border: 1px solid transparent;
   transition:
