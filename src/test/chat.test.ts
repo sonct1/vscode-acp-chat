@@ -28,6 +28,7 @@ interface MockACPClient {
   newSession: (dir: string) => Promise<void>;
   setMode: (modeId: string) => Promise<void>;
   setModel: (modelId: string) => Promise<void>;
+  setConfigOption: (configId: string, value: string) => Promise<void>;
   getSessionMetadata: () => unknown;
   dispose: () => void;
 }
@@ -56,8 +57,11 @@ class TestACPClient implements MockACPClient {
   private agentIdValue = "test-agent";
   private setModeCallCount = 0;
   private setModelCallCount = 0;
+  private setConfigOptionCallCount = 0;
   public lastSetModeId: string | null = null;
   public lastSetModelId: string | null = null;
+  public lastSetConfigOptionId: string | null = null;
+  public lastSetConfigOptionValue: string | null = null;
 
   setAgent(config: any): void {
     if (config && config.id) {
@@ -100,10 +104,17 @@ class TestACPClient implements MockACPClient {
     this.lastSetModelId = modelId;
   }
 
+  async setConfigOption(configId: string, value: string): Promise<void> {
+    this.setConfigOptionCallCount++;
+    this.lastSetConfigOptionId = configId;
+    this.lastSetConfigOptionValue = value;
+  }
+
   getSessionMetadata(): unknown {
     return {
       modes: null,
       models: null,
+      genericConfigOptions: [],
       commands: null,
     };
   }
@@ -118,18 +129,32 @@ class TestACPClient implements MockACPClient {
     return this.setModelCallCount;
   }
 
+  getSetConfigOptionCallCount(): number {
+    return this.setConfigOptionCallCount;
+  }
+
   resetCallCounts(): void {
     this.setModeCallCount = 0;
     this.setModelCallCount = 0;
+    this.setConfigOptionCallCount = 0;
     this.lastSetModeId = null;
     this.lastSetModelId = null;
+    this.lastSetConfigOptionId = null;
+    this.lastSetConfigOptionValue = null;
   }
 }
 
 function getAgentPrefs(
   memento: TestMemento,
   agentId: string
-): { modeId?: string; modelId?: string; starredModels: string[] } | undefined {
+):
+  | {
+      modeId?: string;
+      modelId?: string;
+      starredModels: string[];
+      modelConfigOptionValues?: Record<string, Record<string, string>>;
+    }
+  | undefined {
   const all = memento.get<Record<string, any>>(
     "vscode-acp-chat.agentPreferences.v1"
   );
@@ -819,6 +844,340 @@ suite("ChatViewProvider", () => {
         amount: 0.005,
         currency: "EUR",
       });
+    });
+  });
+
+  suite("Per-Model thought_level Preferences", () => {
+    const defaultGenericConfigOptions = [
+      {
+        id: "thought_level",
+        name: "Thought Level",
+        category: "thought_level",
+        options: [
+          { value: "off", name: "Off" },
+          { value: "low", name: "Low" },
+          { value: "medium", name: "Medium" },
+          { value: "high", name: "High" },
+        ],
+        currentValue: "medium",
+      },
+    ];
+
+    test("should save thought_level per model when config option changes", async () => {
+      class ACPClientWithThought extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [{ modelId: "model-a", name: "Model A" }],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: defaultGenericConfigOptions,
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Set model first
+      await (provider as any).handleModelChange("model-a");
+      // Change thought_level
+      await (provider as any).handleConfigOptionChange("thought_level", "high");
+
+      const pref = getAgentPrefs(memento, "test-agent");
+      assert.strictEqual(pref?.modelId, "model-a");
+      assert.strictEqual(
+        pref?.modelConfigOptionValues?.["model-a"]?.["thought_level"],
+        "high"
+      );
+    });
+
+    test("should auto-switch thought_level when model changes", async () => {
+      class ACPClientWithThought extends TestACPClient {
+        private currentThoughtLevel = "medium";
+
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [
+                { modelId: "model-a", name: "Model A" },
+                { modelId: "model-b", name: "Model B" },
+              ],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: [
+              {
+                id: "thought_level",
+                name: "Thought Level",
+                category: "thought_level",
+                options: [
+                  { value: "off", name: "Off" },
+                  { value: "low", name: "Low" },
+                  { value: "medium", name: "Medium" },
+                  { value: "high", name: "High" },
+                ],
+                currentValue: this.currentThoughtLevel,
+              },
+            ],
+            commands: null,
+          };
+        }
+
+        async setConfigOption(configId: string, value: string): Promise<void> {
+          await super.setConfigOption(configId, value);
+          if (configId === "thought_level") {
+            this.currentThoughtLevel = value;
+          }
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Set model-a and save thought_level "high"
+      await (provider as any).handleModelChange("model-a");
+      await (provider as any).handleConfigOptionChange("thought_level", "high");
+
+      // Set model-b and save thought_level "low"
+      await (provider as any).handleModelChange("model-b");
+      client.resetCallCounts();
+      client.lastSetConfigOptionId = null;
+      client.lastSetConfigOptionValue = null;
+      await (provider as any).handleConfigOptionChange("thought_level", "low");
+
+      // Switch back to model-a, should auto-restore "high"
+      client.resetCallCounts();
+      await (provider as any).handleModelChange("model-a");
+
+      assert.strictEqual(client.lastSetConfigOptionId, "thought_level");
+      assert.strictEqual(client.lastSetConfigOptionValue, "high");
+    });
+
+    test("should not switch thought_level if no preference saved for target model", async () => {
+      class ACPClientWithThought extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [
+                { modelId: "model-a", name: "Model A" },
+                { modelId: "model-b", name: "Model B" },
+              ],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: defaultGenericConfigOptions,
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Save thought_level for model-a only
+      await (provider as any).handleModelChange("model-a");
+      await (provider as any).handleConfigOptionChange("thought_level", "high");
+
+      // Switch to model-b (no saved preference)
+      client.resetCallCounts();
+      await (provider as any).handleModelChange("model-b");
+
+      assert.strictEqual(client.getSetConfigOptionCallCount(), 0);
+    });
+
+    test("should validate saved thought_level against available options", async () => {
+      class ACPClientWithLimitedOptions extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [
+                { modelId: "model-a", name: "Model A" },
+                { modelId: "model-b", name: "Model B" },
+              ],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: [
+              {
+                id: "thought_level",
+                name: "Thought Level",
+                category: "thought_level",
+                options: [
+                  { value: "low", name: "Low" },
+                  { value: "medium", name: "Medium" },
+                ],
+                currentValue: "medium",
+              },
+            ],
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithLimitedOptions();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Manually save a preference for model-a with value "high" (not available)
+      await memento.update("vscode-acp-chat.agentPreferences.v1", {
+        "test-agent": {
+          modelId: "model-b",
+          starredModels: [],
+          configOptionValues: {},
+          modelConfigOptionValues: {
+            "model-a": { thought_level: "high" },
+          },
+        },
+      });
+
+      // Switch to model-a
+      client.resetCallCounts();
+      await (provider as any).handleModelChange("model-a");
+
+      // "high" is not in available options, so setConfigOption should NOT be called
+      assert.strictEqual(client.getSetConfigOptionCallCount(), 0);
+    });
+
+    test("should restore per-model thought_level during session restore", async () => {
+      await memento.update("vscode-acp-chat.agentPreferences.v1", {
+        "test-agent": {
+          modelId: "model-a",
+          starredModels: [],
+          configOptionValues: { thought_level: "low" },
+          modelConfigOptionValues: {
+            "model-a": { thought_level: "high" },
+          },
+        },
+      });
+
+      class ACPClientWithThought extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [{ modelId: "model-a", name: "Model A" }],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: [
+              {
+                id: "thought_level",
+                name: "Thought Level",
+                category: "thought_level",
+                options: [
+                  { value: "off", name: "Off" },
+                  { value: "low", name: "Low" },
+                  { value: "medium", name: "Medium" },
+                  { value: "high", name: "High" },
+                ],
+                currentValue: "medium",
+              },
+            ],
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      await (provider as any).restoreSessionPreferences();
+
+      // First restores global configOptionValues ("low"), then overrides with per-model ("high")
+      assert.strictEqual(client.lastSetConfigOptionId, "thought_level");
+      assert.strictEqual(client.lastSetConfigOptionValue, "high");
+    });
+
+    test("should isolate per-model thought_level preferences across agents", async () => {
+      class ACPClientWithThought extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: {
+              availableModels: [{ modelId: "model-a", name: "Model A" }],
+              currentModelId: "model-a",
+            },
+            genericConfigOptions: defaultGenericConfigOptions,
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Agent "test-agent" sets thought_level "high" for model-a
+      await (provider as any).handleModelChange("model-a");
+      await (provider as any).handleConfigOptionChange("thought_level", "high");
+
+      // Switch to agent-b, set thought_level "low" for model-a
+      client.setAgent({ id: "agent-b" });
+      await (provider as any).handleModelChange("model-a");
+      await (provider as any).handleConfigOptionChange("thought_level", "low");
+
+      // Verify isolation
+      const prefsA = getAgentPrefs(memento, "test-agent");
+      const prefsB = getAgentPrefs(memento, "agent-b");
+      assert.strictEqual(
+        prefsA?.modelConfigOptionValues?.["model-a"]?.["thought_level"],
+        "high"
+      );
+      assert.strictEqual(
+        prefsB?.modelConfigOptionValues?.["model-a"]?.["thought_level"],
+        "low"
+      );
+    });
+
+    test("should not save per-model thought_level when no model is active", async () => {
+      class ACPClientWithThought extends TestACPClient {
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: null,
+            genericConfigOptions: defaultGenericConfigOptions,
+            commands: null,
+          };
+        }
+      }
+
+      const client = new ACPClientWithThought();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      // Change thought_level without setting a model first
+      await (provider as any).handleConfigOptionChange("thought_level", "high");
+
+      const pref = getAgentPrefs(memento, "test-agent");
+      assert.strictEqual(pref?.modelId, undefined);
+      assert.strictEqual(pref?.modelConfigOptionValues, undefined);
     });
   });
 });

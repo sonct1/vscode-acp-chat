@@ -38,6 +38,7 @@ interface AgentPreference {
   modelId?: string;
   configOptionValues: Record<string, string>;
   starredModels: string[];
+  modelConfigOptionValues?: Record<string, Record<string, string>>;
 }
 
 type AgentPreferences = Record<string, AgentPreference>;
@@ -1604,6 +1605,7 @@ export class ChatViewProvider
     try {
       await this.acpClient.setModel(modelId);
       await this.updateCurrentAgentPreference((pref) => ({ ...pref, modelId }));
+      await this.restorePerModelConfigOptions(modelId);
       this.sendSessionMetadata();
     } catch (error) {
       console.error("[Chat] Failed to set model:", error);
@@ -1616,13 +1618,25 @@ export class ChatViewProvider
   ): Promise<void> {
     try {
       await this.acpClient.setConfigOption(configId, value);
-      await this.updateCurrentAgentPreference((pref) => ({
-        ...pref,
-        configOptionValues: {
-          ...pref.configOptionValues,
-          [configId]: value,
-        },
-      }));
+      const thoughtLevelIds = this.getThoughtLevelConfigOptionIds();
+      await this.updateCurrentAgentPreference((pref) => {
+        const updated: AgentPreference = {
+          ...pref,
+          configOptionValues: {
+            ...pref.configOptionValues,
+            [configId]: value,
+          },
+        };
+        if (thoughtLevelIds.has(configId) && pref.modelId) {
+          const modelValues = { ...(updated.modelConfigOptionValues ?? {}) };
+          modelValues[pref.modelId] = {
+            ...(modelValues[pref.modelId] ?? {}),
+            [configId]: value,
+          };
+          updated.modelConfigOptionValues = modelValues;
+        }
+        return updated;
+      });
       this.sendSessionMetadata();
     } catch (error) {
       console.error(`[Chat] Failed to set config option ${configId}:`, error);
@@ -1816,6 +1830,54 @@ export class ChatViewProvider
     await this.globalState.update(AGENT_PREFS_KEY, allPrefs);
   }
 
+  private getThoughtLevelConfigOptionIds(): Set<string> {
+    const metadata = this.acpClient.getSessionMetadata();
+    const generic = metadata?.genericConfigOptions ?? [];
+    const ids = new Set<string>();
+    for (const opt of generic) {
+      if (opt.category === "thought_level") {
+        ids.add(opt.id);
+      }
+    }
+    return ids;
+  }
+
+  private async restorePerModelConfigOptions(
+    modelId: string
+  ): Promise<Set<string>> {
+    const restored = new Set<string>();
+    const pref = this.getCurrentAgentPreference();
+    const modelValues = pref.modelConfigOptionValues?.[modelId];
+    if (!modelValues) return restored;
+
+    const metadata = this.acpClient.getSessionMetadata();
+    const generic = metadata?.genericConfigOptions ?? [];
+    for (const [configId, savedValue] of Object.entries(modelValues)) {
+      const opt = generic.find((o) => o.id === configId);
+      if (!opt) continue;
+      const stillAvailable = opt.options.some((o) => o.value === savedValue);
+      if (!stillAvailable) continue;
+      if (opt.currentValue === savedValue) continue;
+      try {
+        await this.acpClient.setConfigOption(configId, savedValue);
+        await this.updateCurrentAgentPreference((p) => ({
+          ...p,
+          configOptionValues: {
+            ...p.configOptionValues,
+            [configId]: savedValue,
+          },
+        }));
+        restored.add(configId);
+      } catch (err) {
+        console.warn(
+          `[Chat] Failed to restore ${configId} for model ${modelId}:`,
+          err
+        );
+      }
+    }
+    return restored;
+  }
+
   private async restoreSessionPreferences(): Promise<void> {
     const metadata = this.acpClient.getSessionMetadata();
     const availableModes = Array.isArray(metadata?.modes?.availableModes)
@@ -1832,7 +1894,7 @@ export class ChatViewProvider
 
     let modeRestored = false;
     let modelRestored = false;
-    const configOptionsRestored: string[] = [];
+    const configOptionsRestored = new Set<string>();
 
     if (
       pref.modeId &&
@@ -1866,7 +1928,7 @@ export class ChatViewProvider
       try {
         await this.acpClient.setConfigOption(opt.id, saved);
         console.log(`[Chat] Restored config option ${opt.id}: ${saved}`);
-        configOptionsRestored.push(opt.id);
+        configOptionsRestored.add(opt.id);
       } catch (error) {
         console.warn(
           `[Chat] Failed to restore config option ${opt.id}:`,
@@ -1875,7 +1937,16 @@ export class ChatViewProvider
       }
     }
 
-    if (modeRestored || modelRestored || configOptionsRestored.length > 0) {
+    if (modelRestored && pref.modelId) {
+      const perModelRestored = await this.restorePerModelConfigOptions(
+        pref.modelId
+      );
+      for (const id of perModelRestored) {
+        configOptionsRestored.add(id);
+      }
+    }
+
+    if (modeRestored || modelRestored || configOptionsRestored.size > 0) {
       const refreshed = this.acpClient.getSessionMetadata();
       this.postMessage({
         type: "sessionMetadata",
