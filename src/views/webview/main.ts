@@ -350,6 +350,16 @@ export function hasAnsiCodes(text: string): boolean {
   return /\x1b\[[0-9;]*m/.test(text);
 }
 
+interface DiffHunk {
+  startIdx: number;
+  endIdx: number;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  hasChanges: boolean;
+}
+
 export function renderDiff(
   path: string | undefined,
   oldText: string | null | undefined,
@@ -392,32 +402,97 @@ export function renderDiff(
   }
   html += '<pre class="diff-content"><div class="diff-content-inner">';
 
-  let lastIndex = -1;
   const sortedIndexes = Array.from(showLineIndexes).sort((a, b) => a - b);
+
+  // Group consecutive change lines into hunks
+  const hunks: DiffHunk[] = [];
+  let currentHunk: DiffHunk | null = null;
+  let lastOldLine = 0;
+  let lastNewLine = 0;
 
   for (const idx of sortedIndexes) {
     const diffLine = diffLines[idx];
+    const isNewHunk =
+      !currentHunk ||
+      idx > currentHunk.endIdx + 1 ||
+      (diffLine.type !== "context" && !currentHunk.hasChanges) ||
+      (diffLine.type === "context" && currentHunk.hasChanges);
 
-    // Add separator if there's a gap
-    if (lastIndex !== -1 && idx > lastIndex + 1) {
+    if (isNewHunk) {
+      if (currentHunk) {
+        hunks.push(currentHunk);
+      }
+      // Calculate start lines: use line numbers if available, otherwise estimate from previous hunk
+      const oldStart = diffLine.oldLineNumber ?? lastOldLine + 1;
+      const newStart = diffLine.newLineNumber ?? lastNewLine + 1;
+      currentHunk = {
+        startIdx: idx,
+        endIdx: idx,
+        oldStart,
+        oldLines:
+          diffLine.type === "remove" || diffLine.type === "context" ? 1 : 0,
+        newStart,
+        newLines:
+          diffLine.type === "add" || diffLine.type === "context" ? 1 : 0,
+        hasChanges: diffLine.type !== "context",
+      } satisfies DiffHunk;
+      // Update last line numbers
+      if (diffLine.oldLineNumber) lastOldLine = diffLine.oldLineNumber;
+      if (diffLine.newLineNumber) lastNewLine = diffLine.newLineNumber;
+    } else if (currentHunk) {
+      currentHunk.endIdx = idx;
+      if (diffLine.type === "remove" || diffLine.type === "context") {
+        currentHunk.oldLines++;
+      }
+      if (diffLine.type === "add" || diffLine.type === "context") {
+        currentHunk.newLines++;
+      }
+      if (diffLine.type !== "context") {
+        currentHunk.hasChanges = true;
+      }
+      // Update last line numbers
+      if (diffLine.oldLineNumber) lastOldLine = diffLine.oldLineNumber;
+      if (diffLine.newLineNumber) lastNewLine = diffLine.newLineNumber;
+    }
+  }
+  if (currentHunk) {
+    hunks.push(currentHunk);
+  }
+
+  // Render hunks
+  for (let hunkIdx = 0; hunkIdx < hunks.length; hunkIdx++) {
+    const hunk = hunks[hunkIdx];
+
+    // Add separator between hunks
+    if (hunkIdx > 0) {
       html += '<div class="diff-hunk-separator">...</div>';
     }
 
-    const prefix =
-      diffLine.type === "add" ? "+" : diffLine.type === "remove" ? "-" : " ";
-    const className = "diff-line diff-" + diffLine.type;
+    // Add hunk header with line range info
+    if (hunk.hasChanges) {
+      const oldRange =
+        hunk.oldLines > 1
+          ? `${hunk.oldStart}-${hunk.oldStart + hunk.oldLines - 1}`
+          : `${hunk.oldStart}`;
+      const newRange =
+        hunk.newLines > 1
+          ? `${hunk.newStart}-${hunk.newStart + hunk.newLines - 1}`
+          : `${hunk.newStart}`;
+      html += `<div class="diff-hunk-header">@@ -${oldRange} +${newRange} @@</div>`;
+    }
 
-    const oldNum = diffLine.oldLineNumber?.toString() || "";
-    const newNum = diffLine.newLineNumber?.toString() || "";
+    // Render lines in this hunk
+    for (let i = hunk.startIdx; i <= hunk.endIdx; i++) {
+      const diffLine = diffLines[i];
+      const prefix =
+        diffLine.type === "add" ? "+" : diffLine.type === "remove" ? "-" : " ";
+      const className = "diff-line diff-" + diffLine.type;
 
-    html += `<div class="${className}">`;
-    html += `<span class="diff-line-number">${oldNum}</span>`;
-    html += `<span class="diff-line-number">${newNum}</span>`;
-    html += `<span class="diff-line-prefix">${prefix}</span>`;
-    html += `<span class="diff-line-code">${escapeHtml(diffLine.line)}</span>`;
-    html += `</div>`;
-
-    lastIndex = idx;
+      html += `<div class="${className}">`;
+      html += `<span class="diff-line-prefix">${prefix}</span>`;
+      html += `<span class="diff-line-code">${escapeHtml(diffLine.line)}</span>`;
+      html += `</div>`;
+    }
   }
 
   html += "</div></pre>";

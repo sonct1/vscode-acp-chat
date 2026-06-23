@@ -2206,17 +2206,16 @@ kbd {
   align-items: flex-start;
 }
 
-.diff-line-number {
-  flex-shrink: 0;
-  min-width: 32px;
-  padding: 0 4px;
-  text-align: right;
+.diff-hunk-header {
+  padding: 4px 8px;
   color: var(--vscode-descriptionForeground);
-  opacity: 0.5;
-  user-select: none;
-  font-size: 9px;
-  border-right: 1px solid var(--vscode-panel-border);
   background: var(--vscode-editor-lineHighlightBackground);
+  border-top: 1px solid var(--vscode-panel-border);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 10px;
+  font-style: italic;
+  opacity: 0.8;
+  margin: 4px 0;
 }
 
 .diff-line-prefix {

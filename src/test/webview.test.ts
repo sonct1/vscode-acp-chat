@@ -2629,11 +2629,45 @@ suite("Webview", () => {
       assert.ok(result.includes("mod2"));
     });
 
-    test("renders line numbers", () => {
+    test("renders hunk header with line range", () => {
       const result = renderDiff(undefined, "old line", "new line");
-      assert.ok(result.includes('class="diff-line-number">1</span>'));
+      assert.ok(result.includes('class="diff-hunk-header"'));
+      assert.ok(result.includes("@@ -1 +1 @@"));
       assert.ok(result.includes('class="diff-line-prefix">-</span>'));
       assert.ok(result.includes('class="diff-line-prefix">+</span>'));
+    });
+
+    test("renders hunk header with multi-line range", () => {
+      const oldText = "line1\nline2\nline3";
+      const newText = "line1\nmodified2\nmodified3\nline4";
+      const result = renderDiff(undefined, oldText, newText);
+      assert.ok(result.includes('class="diff-hunk-header"'));
+      assert.ok(result.includes("@@ -2-3 +2-4 @@"));
+    });
+
+    test("renders multiple hunks with gaps", () => {
+      const oldText = ["match1", ...Array(20).fill("context"), "match2"].join(
+        "\n"
+      );
+      const newText = ["mod1", ...Array(20).fill("context"), "mod2"].join("\n");
+      const result = renderDiff(undefined, oldText, newText);
+      const hunkHeaders = result.match(/class="diff-hunk-header"/g);
+      assert.ok(hunkHeaders);
+      assert.strictEqual(hunkHeaders.length, 2);
+    });
+
+    test("renders hunk header for additions-only", () => {
+      const result = renderDiff(undefined, null, "new line");
+      assert.ok(result.includes('class="diff-hunk-header"'));
+      assert.ok(result.includes("@@ -1 +1 @@"));
+      assert.ok(result.includes('class="diff-line-prefix">+</span>'));
+    });
+
+    test("renders hunk header for removals-only", () => {
+      const result = renderDiff(undefined, "old line", null);
+      assert.ok(result.includes('class="diff-hunk-header"'));
+      assert.ok(result.includes("@@ -1 +1 @@"));
+      assert.ok(result.includes('class="diff-line-prefix">-</span>'));
     });
   });
 });
