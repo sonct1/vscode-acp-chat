@@ -2026,6 +2026,14 @@ suite("Webview", () => {
         true
       );
     });
+
+    test("returns true for plus-bracket ANSI codes", () => {
+      assert.strictEqual(hasAnsiCodes("+[31mred+[0m"), true);
+    });
+
+    test("returns true for plus-bracket bold ANSI code", () => {
+      assert.strictEqual(hasAnsiCodes("+[1mbold+[0m"), true);
+    });
   });
 
   suite("ansiToHtml", () => {
@@ -2127,6 +2135,23 @@ suite("Webview", () => {
     test("escapes HTML within colored text", () => {
       const result = ansiToHtml("\x1b[31m<b>test</b>\x1b[0m");
       assert.ok(result.includes("&lt;b&gt;test&lt;/b&gt;"));
+    });
+
+    test("converts plus-bracket red foreground color", () => {
+      const result = ansiToHtml("+[31mred text+[0m");
+      assert.ok(result.includes('class="ansi-red"'));
+      assert.ok(result.includes("red text"));
+    });
+
+    test("converts plus-bracket green foreground color", () => {
+      const result = ansiToHtml("+[32mgreen+[0m");
+      assert.ok(result.includes('class="ansi-green"'));
+    });
+
+    test("converts plus-bracket bold style", () => {
+      const result = ansiToHtml("+[1mbold+[0m");
+      assert.ok(result.includes('class="ansi-bold"'));
+      assert.ok(result.includes("bold"));
     });
   });
 

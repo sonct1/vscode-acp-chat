@@ -265,7 +265,7 @@ const ANSI_STYLES: Record<number, string> = {
   4: "ansi-underline",
 };
 
-const ANSI_ESCAPE_REGEX = /\x1b\[([0-9;]*)m/g;
+const ANSI_ESCAPE_REGEX = /(?:\x1b|\+)\[([0-9;]*)m/g;
 
 function isForegroundClass(cls: string): boolean {
   return (
@@ -347,7 +347,7 @@ export function ansiToHtml(text: string): string {
 }
 
 export function hasAnsiCodes(text: string): boolean {
-  return /\x1b\[[0-9;]*m/.test(text);
+  return /(?:\x1b|\+)\[[0-9;]*m/.test(text);
 }
 
 interface DiffHunk {
