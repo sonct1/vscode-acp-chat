@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.10.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.9.2...v1.10.0) (2026-06-27)
+
+### Features
+
+- **chat:** allow clicking markdown file links to open them in editor ([fd96f47](https://github.com/pengjiantao/vscode-acp-chat/commit/fd96f47a99c2f470911f966fe5889bf2f21fda5d))
+- **webview:** remove dropdown min-width and show metadata in tooltip ([73cd3fb](https://github.com/pengjiantao/vscode-acp-chat/commit/73cd3fb64f490c50bb4b88ec63a092c22a081ee3))
+
 ### [1.9.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.9.1...v1.9.2) (2026-06-24)
 
 ### Bug Fixes
