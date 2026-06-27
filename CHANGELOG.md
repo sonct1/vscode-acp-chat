@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.11.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.10.1...v1.11.0) (2026-06-27)
+
+### Features
+
+- **webview:** make diff headers clickable to open files ([c619ee3](https://github.com/pengjiantao/vscode-acp-chat/commit/c619ee3b765d7487f92db6f076cb9cff88354c40))
+
 ### [1.10.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.10.0...v1.10.1) (2026-06-27)
 
 ### Code Refactoring
