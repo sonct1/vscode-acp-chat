@@ -379,8 +379,7 @@ export class ChatViewProvider
         case "openFile":
           {
             let uri: vscode.Uri | undefined;
-            let range: { startLine: number; endLine: number } | undefined =
-              message.range;
+            let range: { startLine: number; endLine: number } | undefined;
 
             if (message.href) {
               try {

@@ -502,32 +502,7 @@ export function renderDiff(
         html += `<span class="diff-line-code">${escapeHtml(dl.line)}</span>`;
         html += `</div>`;
       } else {
-        // Compute line range for this change block.
-        // The diff algorithm always groups removals before additions,
-        // so once hasAdds flips true, no more removes will appear.
-        let blockStart = Infinity;
-        let blockEnd = 0;
-        let hasAdds = false;
-        for (let i = group.startIdx; i <= group.endIdx; i++) {
-          const dl = diffLines[i];
-          if (dl.type === "add" && dl.newLineNumber != null) {
-            hasAdds = true;
-            blockStart = Math.min(blockStart, dl.newLineNumber);
-            blockEnd = Math.max(blockEnd, dl.newLineNumber);
-          } else if (dl.type === "remove" && dl.oldLineNumber != null) {
-            if (!hasAdds) {
-              blockStart = Math.min(blockStart, dl.oldLineNumber);
-              blockEnd = Math.max(blockEnd, dl.oldLineNumber);
-            }
-          }
-        }
-        if (blockStart === Infinity) blockStart = 1;
-
-        const dataAttrs = path
-          ? ` data-diff-path="${escapeHtml(path)}" data-diff-start="${blockStart}" data-diff-end="${blockEnd}"`
-          : "";
-
-        html += `<div class="diff-change-block${path ? " diff-clickable" : ""}"${dataAttrs}>`;
+        html += `<div class="diff-change-block">`;
         for (let i = group.startIdx; i <= group.endIdx; i++) {
           const dl = diffLines[i];
           const prefix = dl.type === "add" ? "+" : "-";
@@ -931,24 +906,6 @@ export class WebviewController {
         }, 1500);
       } catch (err) {
         console.error("Failed to copy:", err);
-      }
-    });
-
-    // Delegated click handler for diff change blocks
-    this.elements.messagesEl.addEventListener("click", (e) => {
-      const target = (e.target as HTMLElement).closest?.(
-        ".diff-clickable"
-      ) as HTMLElement | null;
-      if (!target) return;
-      const filePath = target.dataset.diffPath;
-      const startLine = Number(target.dataset.diffStart);
-      const endLine = Number(target.dataset.diffEnd);
-      if (filePath && startLine != null && !isNaN(startLine)) {
-        this.vscode.postMessage({
-          type: "openFile",
-          path: filePath,
-          range: { startLine, endLine: endLine || startLine },
-        });
       }
     });
   }

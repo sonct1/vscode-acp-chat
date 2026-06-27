@@ -2205,14 +2205,6 @@ kbd {
   align-items: flex-start;
 }
 
-.diff-clickable {
-  cursor: pointer;
-}
-
-.diff-clickable:hover {
-  background-color: var(--vscode-list-hoverBackground);
-}
-
 .diff-line-prefix {
   flex-shrink: 0;
   width: 16px;

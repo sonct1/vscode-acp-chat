@@ -2800,12 +2800,12 @@ suite("Webview", () => {
       assert.ok(!result.includes("diff-hunk-separator"));
     });
 
-    test("renders clickable change lines with data attributes", () => {
+    test("renders change block without clickability or data attributes", () => {
       const result = renderDiff("/test/file.ts", "old line", "new line");
-      assert.ok(result.includes("diff-clickable"));
-      assert.ok(result.includes('data-diff-path="'));
-      assert.ok(result.includes("data-diff-start"));
-      assert.ok(result.includes("data-diff-end"));
+      assert.ok(!result.includes("diff-clickable"));
+      assert.ok(!result.includes("data-diff-path"));
+      assert.ok(!result.includes("data-diff-start"));
+      assert.ok(!result.includes("data-diff-end"));
       assert.ok(result.includes("diff-change-block"));
     });
   });
