@@ -121,6 +121,7 @@ export interface ExtensionMessage {
     id: string;
     name: string;
     category: string | null;
+    description?: string | null;
     options: Array<{
       value: string;
       name: string;
@@ -570,6 +571,7 @@ export class Dropdown {
   private onChange?: (id: string) => void;
   private onStarToggle?: (id: string, isStarred: boolean) => void;
   private isOpen = false;
+  private customTitle: string | null = null;
 
   constructor(
     element: HTMLElement,
@@ -595,6 +597,21 @@ export class Dropdown {
     this.popover.addEventListener("click", (e) => e.stopPropagation());
   }
 
+  setCustomTitle(title: string | null): void {
+    this.customTitle = title;
+    if (this.selectedId) {
+      const option = this.options.find(
+        (o) =>
+          o.id === this.selectedId &&
+          o.type !== "header" &&
+          o.type !== "divider"
+      );
+      if (option) {
+        this.labelEl.setAttribute("acp-title", this.customTitle || option.name);
+      }
+    }
+  }
+
   setOptions(options: DropdownOption[], selectedId?: string): void {
     this.options = options;
     this.renderOptions();
@@ -611,7 +628,7 @@ export class Dropdown {
 
     this.selectedId = id;
     this.labelEl.textContent = option.name;
-    this.labelEl.setAttribute("acp-title", option.name);
+    this.labelEl.setAttribute("acp-title", this.customTitle || option.name);
 
     const items = this.popover.querySelectorAll(".dropdown-item");
     items.forEach((item) => {
@@ -3508,6 +3525,10 @@ export class WebviewController {
       }
 
       const dropdown = this.ensureConfigOptionDropdown(opt.id, wrapper);
+      const titleText = opt.description
+        ? `${opt.name}\n${opt.description}`
+        : opt.name;
+      dropdown.setCustomTitle(titleText);
       dropdown.setOptions(
         opt.options.map((o) => ({ id: o.value, name: o.name || o.value })),
         opt.currentValue

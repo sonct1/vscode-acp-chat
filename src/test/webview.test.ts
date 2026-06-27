@@ -1891,6 +1891,47 @@ suite("Webview", () => {
         assert.strictEqual(label?.textContent, "Medium");
       });
 
+      test("sets acp-title to generic config option name and description", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          modes: null,
+          models: null,
+          genericConfigOptions: [
+            {
+              ...thoughtLevel,
+              description: "Controls the thinking budget",
+            },
+          ],
+        });
+
+        const label = elements.configOptionsContainer
+          .querySelector('[data-config-id="thought_level"]')
+          ?.querySelector(".selected-label");
+        assert.strictEqual(
+          label?.getAttribute("acp-title"),
+          "Thought Level\nControls the thinking budget"
+        );
+      });
+
+      test("sets acp-title to generic config option name only if description is absent", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          modes: null,
+          models: null,
+          genericConfigOptions: [
+            {
+              ...thoughtLevel,
+              description: undefined,
+            },
+          ],
+        });
+
+        const label = elements.configOptionsContainer
+          .querySelector('[data-config-id="thought_level"]')
+          ?.querySelector(".selected-label");
+        assert.strictEqual(label?.getAttribute("acp-title"), "Thought Level");
+      });
+
       test("selecting a value posts selectConfigOption with configId and value", () => {
         controller.handleMessage({
           type: "sessionMetadata",

@@ -74,6 +74,7 @@ export interface GenericConfigOption {
   id: string;
   name: string;
   category: string | null;
+  description?: string | null;
   options: Array<{
     value: string;
     name: string;
@@ -152,10 +153,12 @@ export function extractConfigOptions(
     generic.push({
       id: opt.id,
       name: opt.name || opt.id,
+      description: opt.description ?? null,
       category: opt.category ?? null,
       options: flatOptions.map((o) => ({
         value: o.value,
         name: o.name || o.value,
+        description: o.description ?? null,
       })),
       currentValue: opt.currentValue,
     });
@@ -182,13 +185,17 @@ export function extractModelsAndModesFromConfigOptions(
  */
 function flattenSelectOptions(
   options:
-    | Array<{ value: string; name: string }>
+    | Array<{ value: string; name: string; description?: string | null }>
     | Array<{
         group: string;
         name: string;
-        options: Array<{ value: string; name: string }>;
+        options: Array<{
+          value: string;
+          name: string;
+          description?: string | null;
+        }>;
       }>
-): Array<{ value: string; name: string }> {
+): Array<{ value: string; name: string; description?: string | null }> {
   if (!options.length) return [];
 
   // Check if it's grouped (first element has 'group' field)
@@ -197,12 +204,20 @@ function flattenSelectOptions(
       options as Array<{
         group: string;
         name: string;
-        options: Array<{ value: string; name: string }>;
+        options: Array<{
+          value: string;
+          name: string;
+          description?: string | null;
+        }>;
       }>
     ).flatMap((group) => group.options);
   }
 
-  return options as Array<{ value: string; name: string }>;
+  return options as Array<{
+    value: string;
+    name: string;
+    description?: string | null;
+  }>;
 }
 
 export type ACPConnectionState =
