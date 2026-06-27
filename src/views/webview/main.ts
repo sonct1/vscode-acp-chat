@@ -856,6 +856,7 @@ export class WebviewController {
     this.vscode.postMessage({ type: "ready" });
     this.setupTooltip();
     this.setupCodeCopyHandler();
+    this.setupFileLinkHandler();
   }
 
   private setupCodeCopyHandler(): void {
@@ -930,6 +931,32 @@ export class WebviewController {
           type: "openFile",
           path: filePath,
           range: { startLine, endLine: endLine || startLine },
+        });
+      }
+    });
+  }
+
+  private setupFileLinkHandler(): void {
+    // Delegated click handler for file links in markdown
+    this.elements.messagesEl.addEventListener("click", (e) => {
+      const target = (e.target as HTMLElement).closest(
+        "a"
+      ) as HTMLAnchorElement | null;
+      if (!target) return;
+
+      const href = target.getAttribute("href");
+      if (href) {
+        // Ignore anchor-only links
+        if (href.startsWith("#")) return;
+        // Ignore links with a scheme other than file://
+        if (/^[a-zA-Z][a-zA-Z0-9.+-]*:/.test(href) && !href.startsWith("file:"))
+          return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        this.vscode.postMessage({
+          type: "openFile",
+          href: href,
         });
       }
     });

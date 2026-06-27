@@ -1005,6 +1005,85 @@ suite("Webview", () => {
         assert.strictEqual(elements.inputEl.textContent, "Public result");
       });
 
+      test("Clicking a file:// link posts an openFile message to vscode", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Here is [filename](file:///home/fiyqkrc/Documents/project/vscode-acp/src/extension.ts#L10-L20) and [relative](src/extension.ts) and [external](https://github.com) and [anchor](#L10)",
+        });
+        controller.handleMessage({ type: "streamEnd" });
+
+        const fileLink = elements.messagesEl.querySelector(
+          'a[href^="file://"]'
+        ) as HTMLAnchorElement;
+        const relativeLink = elements.messagesEl.querySelector(
+          'a[href="src/extension.ts"]'
+        ) as HTMLAnchorElement;
+        const externalLink = elements.messagesEl.querySelector(
+          'a[href^="https://"]'
+        ) as HTMLAnchorElement;
+        const anchorLink = elements.messagesEl.querySelector(
+          'a[href^="#"]'
+        ) as HTMLAnchorElement;
+
+        assert.ok(fileLink, "expected a file link");
+        assert.ok(relativeLink, "expected a relative link");
+        assert.ok(externalLink, "expected an external link");
+        assert.ok(anchorLink, "expected an anchor link");
+
+        // Test file:// link
+        mockVsCode._clearMessages();
+        fileLink.dispatchEvent(
+          new dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        let messages = mockVsCode._getMessages();
+        assert.strictEqual(messages.length, 1);
+        assert.deepStrictEqual(messages[0], {
+          type: "openFile",
+          href: "file:///home/fiyqkrc/Documents/project/vscode-acp/src/extension.ts#L10-L20",
+        });
+
+        // Test relative path link
+        mockVsCode._clearMessages();
+        relativeLink.dispatchEvent(
+          new dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        messages = mockVsCode._getMessages();
+        assert.strictEqual(messages.length, 1);
+        assert.deepStrictEqual(messages[0], {
+          type: "openFile",
+          href: "src/extension.ts",
+        });
+
+        // Test external link (should not post openFile message)
+        mockVsCode._clearMessages();
+        externalLink.dispatchEvent(
+          new dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        messages = mockVsCode._getMessages();
+        assert.strictEqual(messages.length, 0);
+
+        // Test anchor link (should not post openFile message)
+        mockVsCode._clearMessages();
+        anchorLink.dispatchEvent(
+          new dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+        messages = mockVsCode._getMessages();
+        assert.strictEqual(messages.length, 0);
+      });
+
       test("Turn separation: each turn gets its own container and toolbar", () => {
         // First Turn
         controller.handleMessage({ type: "userMessage", text: "Question 1" });

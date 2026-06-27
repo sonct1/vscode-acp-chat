@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
 import * as vscode from "vscode";
+import * as path from "path";
 import { ChatViewProvider } from "../views/chat";
 
 interface MockMemento {
@@ -1178,6 +1179,175 @@ suite("ChatViewProvider", () => {
       const pref = getAgentPrefs(memento, "test-agent");
       assert.strictEqual(pref?.modelId, undefined);
       assert.strictEqual(pref?.modelConfigOptionValues, undefined);
+    });
+  });
+
+  suite("openFile Message Handling", () => {
+    let originalShowTextDocument: any;
+    let originalWorkspaceFolders: any;
+    let showTextDocumentCalls: any[] = [];
+
+    setup(() => {
+      originalShowTextDocument = vscode.window.showTextDocument;
+      showTextDocumentCalls = [];
+      Object.defineProperty(vscode.window, "showTextDocument", {
+        value: async (
+          uri: vscode.Uri,
+          options?: vscode.TextDocumentShowOptions
+        ) => {
+          showTextDocumentCalls.push({ uri, options });
+          return {} as any;
+        },
+        configurable: true,
+        writable: true,
+      });
+
+      originalWorkspaceFolders = vscode.workspace.workspaceFolders;
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: [{ uri: vscode.Uri.file(path.dirname(__filename)) }],
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    teardown(() => {
+      Object.defineProperty(vscode.window, "showTextDocument", {
+        value: originalShowTextDocument,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: originalWorkspaceFolders,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    function resolveView(provider: ChatViewProvider): {
+      messageHandler: (message: any) => Promise<void>;
+    } {
+      let messageHandler: ((message: any) => Promise<void>) | undefined;
+      const mockWebview = {
+        onDidReceiveMessage: (cb: any) => {
+          messageHandler = cb;
+          return { dispose: () => {} };
+        },
+        asWebviewUri: (uri: vscode.Uri) => uri,
+        cspSource: "",
+        options: {},
+        html: "",
+      };
+      const mockView = {
+        webview: mockWebview,
+        viewType: "test",
+        onDidChangeVisibility: new vscode.EventEmitter<void>().event,
+        onDidDispose: new vscode.EventEmitter<void>().event,
+        title: "test",
+        visible: true,
+        show: () => {},
+      };
+
+      provider.resolveWebviewView(mockView as any, {} as any, {} as any);
+      return { messageHandler: messageHandler! };
+    }
+
+    test("should handle openFile with message.href and parse range correctly", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      const fileUri = vscode.Uri.file(__filename);
+      const testHref = `${fileUri.toString()}#L15-L25`;
+
+      // Fire openFile message with href
+      await messageHandler({
+        type: "openFile",
+        href: testHref,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, fileUri.fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 14);
+      assert.strictEqual(call.options.selection.end.line, 24);
+    });
+
+    test("should handle openFile with relative message.href and resolve it", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      const baseName = path.basename(__filename);
+
+      // Fire openFile message with relative href
+      await messageHandler({
+        type: "openFile",
+        href: `${baseName}#L5`,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      // It should resolve relative to the workspace folder
+      assert.strictEqual(call.uri.fsPath, vscode.Uri.file(__filename).fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 4);
+      assert.strictEqual(call.options.selection.end.line, 4);
+    });
+
+    test("should handle openFile with absolute path href and parse range correctly", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      // Fire openFile message with absolute href
+      await messageHandler({
+        type: "openFile",
+        href: `${__filename}#L10`,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, vscode.Uri.file(__filename).fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 9);
+      assert.strictEqual(call.options.selection.end.line, 9);
+    });
+
+    test("should fallback to showTextDocument when file stat fails", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      // Fire openFile message with a non-existent file href
+      await messageHandler({
+        type: "openFile",
+        href: "file:///non/existent/file.ts#L5-L10",
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(
+        call.uri.fsPath,
+        vscode.Uri.parse("file:///non/existent/file.ts").fsPath
+      );
+      // options should be undefined because it fell back to catch block
+      assert.strictEqual(call.options, undefined);
     });
   });
 });

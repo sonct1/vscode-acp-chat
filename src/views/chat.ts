@@ -81,6 +81,7 @@ interface WebviewMessage {
     dataUrl?: string;
   }>;
   path?: string;
+  href?: string;
   range?: { startLine: number; endLine: number };
   requestId?: string;
   outcome?: { outcome: "selected" | "cancelled"; optionId?: string };
@@ -376,32 +377,105 @@ export class ChatViewProvider
           }
           break;
         case "openFile":
-          if (message.path) {
-            const uri = vscode.Uri.file(message.path);
-            try {
-              const stat = await vscode.workspace.fs.stat(uri);
-              if (stat.type === vscode.FileType.Directory) {
-                await vscode.commands.executeCommand("revealInExplorer", uri);
-              } else {
-                const options: vscode.TextDocumentShowOptions = {
-                  preview: true,
-                };
-                if (message.range) {
-                  const start = new vscode.Position(
-                    Math.max(0, message.range.startLine - 1),
-                    0
-                  );
-                  const end = new vscode.Position(
-                    Math.max(0, message.range.endLine - 1),
-                    0
-                  );
-                  options.selection = new vscode.Range(start, end);
+          {
+            let uri: vscode.Uri | undefined;
+            let range: { startLine: number; endLine: number } | undefined =
+              message.range;
+
+            if (message.href) {
+              try {
+                let pathPart = message.href;
+                let fragmentPart = "";
+                const hashIndex = message.href.indexOf("#");
+                if (hashIndex !== -1) {
+                  pathPart = message.href.substring(0, hashIndex);
+                  fragmentPart = message.href.substring(hashIndex + 1);
                 }
-                await vscode.window.showTextDocument(uri, options);
+
+                if (fragmentPart) {
+                  const match = fragmentPart.match(/^L?(\d+)(?:-L?(\d+))?$/);
+                  if (match) {
+                    const startLine = parseInt(match[1], 10);
+                    const endLine = match[2]
+                      ? parseInt(match[2], 10)
+                      : startLine;
+                    range = { startLine, endLine };
+                  }
+                }
+
+                if (pathPart.startsWith("file://")) {
+                  uri = vscode.Uri.parse(pathPart);
+                } else {
+                  // decodeURIComponent might throw if percent-encoding is malformed,
+                  // which is handled by the outer try/catch.
+                  const decodedPath = decodeURIComponent(pathPart);
+                  if (
+                    decodedPath.startsWith("/") ||
+                    /^[a-zA-Z]:[/\\]/.test(decodedPath)
+                  ) {
+                    uri = vscode.Uri.file(decodedPath);
+                  } else {
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+                    if (workspaceFolders && workspaceFolders.length > 0) {
+                      // Attempt to resolve the relative path against each active workspace folder.
+                      for (const folder of workspaceFolders) {
+                        const possibleUri = vscode.Uri.joinPath(
+                          folder.uri,
+                          decodedPath
+                        );
+                        try {
+                          await vscode.workspace.fs.stat(possibleUri);
+                          uri = possibleUri;
+                          break;
+                        } catch {
+                          // The file does not exist in this folder; ignore and continue checking other folders.
+                        }
+                      }
+                      // Fallback to the first workspace folder if not resolved anywhere else
+                      if (!uri) {
+                        uri = vscode.Uri.joinPath(
+                          workspaceFolders[0].uri,
+                          decodedPath
+                        );
+                      }
+                    } else {
+                      uri = vscode.Uri.file(decodedPath);
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error("Failed to parse href:", message.href, err);
               }
-            } catch {
-              // Fallback to showTextDocument if stat fails or path is not local
-              await vscode.window.showTextDocument(uri);
+            } else if (message.path) {
+              uri = vscode.Uri.file(message.path);
+            }
+
+            if (uri) {
+              try {
+                const stat = await vscode.workspace.fs.stat(uri);
+                if (stat.type === vscode.FileType.Directory) {
+                  await vscode.commands.executeCommand("revealInExplorer", uri);
+                } else {
+                  const options: vscode.TextDocumentShowOptions = {
+                    preview: true,
+                  };
+                  if (range) {
+                    const start = new vscode.Position(
+                      Math.max(0, range.startLine - 1),
+                      0
+                    );
+                    const end = new vscode.Position(
+                      Math.max(0, range.endLine - 1),
+                      0
+                    );
+                    options.selection = new vscode.Range(start, end);
+                  }
+                  await vscode.window.showTextDocument(uri, options);
+                }
+              } catch {
+                // Fallback to opening the document directly if stat fails (e.g. file is not local or lacks read access).
+                await vscode.window.showTextDocument(uri);
+              }
             }
           }
           break;
