@@ -136,6 +136,9 @@ export class ChatViewProvider
   private toolCallRawInputs: Map<string, Record<string, unknown>> = new Map();
   private toolCallKinds: Map<string, string> = new Map();
   private toolCallTitles: Map<string, string> = new Map();
+  // codex-acp streams command output through tool_call_update._meta before
+  // the final status update. Buffer it until toolCallComplete can render it.
+  private toolCallTerminalOutputs: Map<string, string> = new Map();
   private toolCallBaseContents: Map<string, Promise<string | undefined>> =
     new Map();
   private pendingToolCalls: Set<string> = new Set();
@@ -1068,6 +1071,7 @@ export class ChatViewProvider
     this.toolCallRawInputs.clear();
     this.toolCallKinds.clear();
     this.toolCallTitles.clear();
+    this.toolCallTerminalOutputs.clear();
     this.toolCallBaseContents.clear();
     this.lastFileContents.clear();
     this.pendingToolCalls.clear();
@@ -1078,6 +1082,7 @@ export class ChatViewProvider
     this.toolCallRawInputs.delete(toolCallId);
     this.toolCallKinds.delete(toolCallId);
     this.toolCallTitles.delete(toolCallId);
+    this.toolCallTerminalOutputs.delete(toolCallId);
     this.toolCallBaseContents.delete(toolCallId);
     this.pendingToolCalls.delete(toolCallId);
   }
@@ -1088,12 +1093,79 @@ export class ChatViewProvider
     return update.status === "completed" || update.status === "failed";
   }
 
+  private asRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : undefined;
+  }
+
   private asToolCallRawInput(
     rawInput: unknown
   ): Record<string, unknown> | undefined {
-    return rawInput && typeof rawInput === "object"
-      ? (rawInput as Record<string, unknown>)
-      : undefined;
+    return this.asRecord(rawInput);
+  }
+
+  private extractOutputText(value: unknown): string | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const text = String(value);
+    return text.length > 0 ? text : undefined;
+  }
+
+  private extractRawOutputText(rawOutput: unknown): string | undefined {
+    const rawOutputRecord = this.asRecord(rawOutput);
+    if (!rawOutputRecord) {
+      return undefined;
+    }
+
+    // codex-acp uses formatted_output for completed command executions,
+    // while older agents commonly use output.
+    return (
+      this.extractOutputText(rawOutputRecord.formatted_output) ||
+      this.extractOutputText(rawOutputRecord.output)
+    );
+  }
+
+  private extractTerminalOutputMetaText(
+    update: Pick<ToolCall | ToolCallUpdate, "_meta">
+  ): string | undefined {
+    const meta = this.asRecord(update._meta);
+    if (!meta) {
+      return undefined;
+    }
+
+    // codex-acp keeps the ACP terminal content item as an id reference and
+    // sends the actual stdout/stderr stream through these metadata fields.
+    const terminalOutput =
+      this.asRecord(meta.terminal_output) ||
+      this.asRecord(meta.terminal_output_delta);
+    return this.extractOutputText(terminalOutput?.data);
+  }
+
+  private rememberToolCallTerminalOutput(
+    update: Pick<ToolCall | ToolCallUpdate, "toolCallId" | "_meta">
+  ): void {
+    const output = this.extractTerminalOutputMetaText(update);
+    if (!output) {
+      return;
+    }
+
+    const previous = this.toolCallTerminalOutputs.get(update.toolCallId) || "";
+    this.toolCallTerminalOutputs.set(update.toolCallId, previous + output);
+  }
+
+  private hasToolCallPresentation(update: ToolCallUpdate): boolean {
+    // Pure codex-acp terminal-output updates only refresh the output buffer;
+    // they should not create or redraw a visible tool card as a new start event.
+    return (
+      update.kind !== undefined ||
+      update.title !== undefined ||
+      update.content !== undefined ||
+      update.locations !== undefined ||
+      update.rawInput !== undefined
+    );
   }
 
   private rememberToolCallMetadata(
@@ -1148,25 +1220,19 @@ export class ChatViewProvider
     }
 
     let content = update.content;
-    let terminalOutput: string | undefined;
+    // Prefer the final aggregate output when present so loaded history and
+    // live terminal-output streams render with the same completed content.
+    let terminalOutput =
+      this.extractRawOutputText(update.rawOutput) ||
+      this.toolCallTerminalOutputs.get(update.toolCallId);
 
-    if (content && content.length > 0) {
+    if (!terminalOutput && content && content.length > 0) {
       const terminalContent = content.find(
         (c) => c.type === "terminal" && "terminalId" in c
       );
       if (terminalContent && "terminalId" in terminalContent) {
         terminalOutput = `[Terminal: ${terminalContent.terminalId}]`;
       }
-    }
-
-    // Fallback to raw output if no terminal content or explicit output found
-    if (
-      !terminalOutput &&
-      update.rawOutput &&
-      typeof update.rawOutput === "object" &&
-      "output" in update.rawOutput
-    ) {
-      terminalOutput = String(update.rawOutput.output);
     }
 
     // Enrich with diff if it's a file modification and missing
@@ -1394,6 +1460,7 @@ export class ChatViewProvider
     } else if (update.sessionUpdate === "tool_call") {
       this.pendingToolCalls.add(update.toolCallId);
       this.rememberToolCallMetadata(update, true);
+      this.rememberToolCallTerminalOutput(update);
       this.captureToolCallBaseContent(update);
 
       if (this.isFinalToolCall(update)) {
@@ -1414,6 +1481,7 @@ export class ChatViewProvider
         );
       }
     } else if (update.sessionUpdate === "tool_call_update") {
+      this.rememberToolCallTerminalOutput(update);
       if (this.isFinalToolCall(update)) {
         if (!this.pendingToolCalls.has(update.toolCallId)) {
           return;
@@ -1427,17 +1495,19 @@ export class ChatViewProvider
         // here to avoid blocking the notification loop.
         this.captureToolCallBaseContent(update);
 
-        this.postMessage({
-          type: "toolCallStart",
-          name:
-            update.title ||
-            this.toolCallTitles.get(update.toolCallId) ||
-            "Tool",
-          toolCallId: update.toolCallId,
-          kind: update.kind || this.toolCallKinds.get(update.toolCallId),
-          rawInput:
-            update.rawInput || this.toolCallRawInputs.get(update.toolCallId),
-        });
+        if (this.hasToolCallPresentation(update)) {
+          this.postMessage({
+            type: "toolCallStart",
+            name:
+              update.title ||
+              this.toolCallTitles.get(update.toolCallId) ||
+              "Tool",
+            toolCallId: update.toolCallId,
+            kind: update.kind || this.toolCallKinds.get(update.toolCallId),
+            rawInput:
+              update.rawInput || this.toolCallRawInputs.get(update.toolCallId),
+          });
+        }
       }
     } else if (update.sessionUpdate === "current_mode_update") {
       this.postMessage({ type: "modeUpdate", modeId: update.currentModeId });

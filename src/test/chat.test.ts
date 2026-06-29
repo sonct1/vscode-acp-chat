@@ -796,6 +796,127 @@ suite("ChatViewProvider", () => {
         "failed tool_call should not leave stale pending state"
       );
     });
+
+    test("renders codex terminal output metadata on completion", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "command-output-meta",
+          title: "git status --short",
+          kind: "execute",
+          status: "in_progress",
+          content: [
+            {
+              type: "terminal",
+              terminalId: "command-output-meta",
+            },
+          ],
+          rawInput: {
+            command: "git status --short",
+            cwd: "/test/project",
+          },
+        },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-output-meta",
+          _meta: {
+            terminal_output_delta: {
+              data: "M src/views/chat.ts\n",
+              terminal_id: "command-output-meta",
+            },
+          },
+        },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-output-meta",
+          status: "completed",
+          rawOutput: {
+            exit_code: 0,
+          },
+          _meta: {
+            terminal_exit: {
+              exit_code: 0,
+              signal: null,
+              terminal_id: "command-output-meta",
+            },
+          },
+        },
+      });
+
+      const starts = messages.filter((m) => m.type === "toolCallStart");
+      assert.strictEqual(
+        starts.length,
+        1,
+        "terminal output metadata should not create duplicate start messages"
+      );
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "command should complete");
+      assert.strictEqual(complete.toolCallId, "command-output-meta");
+      assert.strictEqual(complete.terminalOutput, "M src/views/chat.ts\n");
+    });
+
+    test("uses codex formatted_output as terminal output", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "command-formatted-output",
+          title: "git diff --check",
+          kind: "execute",
+          status: "in_progress",
+          content: [
+            {
+              type: "terminal",
+              terminalId: "command-formatted-output",
+            },
+          ],
+          rawInput: {
+            command: "git diff --check",
+            cwd: "/test/project",
+          },
+        },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-formatted-output",
+          status: "completed",
+          rawOutput: {
+            formatted_output: "Checked 2 files\n",
+            exit_code: 0,
+          },
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "command should complete");
+      assert.strictEqual(complete.toolCallId, "command-formatted-output");
+      assert.strictEqual(complete.terminalOutput, "Checked 2 files\n");
+    });
   });
 
   suite("Context Usage Indicator", () => {

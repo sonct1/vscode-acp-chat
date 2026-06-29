@@ -651,6 +651,12 @@ export class ACPClient {
               writeTextFile: true,
             },
             terminal: true,
+            // codex-acp uses these metadata capabilities to choose how command
+            // stdout/stderr is forwarded in session updates.
+            _meta: {
+              terminal_output: true,
+              terminal_output_delta: true,
+            },
           },
           clientInfo: {
             name: "vscode-acp-chat",
