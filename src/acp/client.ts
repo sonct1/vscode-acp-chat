@@ -256,6 +256,29 @@ type PermissionCallback = (
   params: RequestPermissionRequest
 ) => Promise<RequestPermissionResponse | null>;
 
+const MCP_SERVER_NAME_INVALID_CHARS = /[^a-zA-Z0-9_-]+/g;
+
+function sanitizeMcpServerName(name: string): string {
+  // VS Code MCP configs can use display-style names such as
+  // `io.github.ChromeDevTools/chrome-devtools-mcp`. Some ACP agents reuse the
+  // name as a config key or tool namespace and reject dots, slashes, or spaces.
+  // Normalize once at the ACP boundary while leaving connection parameters intact.
+  return name.replace(MCP_SERVER_NAME_INVALID_CHARS, "_") || "mcp";
+}
+
+function getUniqueMcpServerName(name: string, usedNames: Set<string>): string {
+  // Different source names can collapse to the same sanitized key. Keep the
+  // request deterministic and avoid silently dropping one of the servers.
+  let uniqueName = name;
+  let suffix = 2;
+  while (usedNames.has(uniqueName)) {
+    uniqueName = `${name}_${suffix}`;
+    suffix += 1;
+  }
+  usedNames.add(uniqueName);
+  return uniqueName;
+}
+
 export type SpawnFunction = (
   command: string,
   args: string[],
@@ -394,14 +417,18 @@ export class ACPClient {
     mcpCapabilities: McpCapabilities | undefined
   ): McpServer[] {
     const result: McpServer[] = [];
+    // Track names per request so session/new and session/load each get a stable
+    // collision set based on the MCP servers sent with that request.
+    const usedMcpNames = new Set<string>();
 
     for (const config of configs) {
       const type = config.type ?? "stdio";
+      let server: McpServer | null = null;
       if (type === "stdio") {
-        result.push(toMcpServerStdio(config));
+        server = toMcpServerStdio(config);
       } else if (type === "http") {
         if (mcpCapabilities?.http) {
-          result.push(toMcpServerHttp(config));
+          server = toMcpServerHttp(config);
         } else {
           console.log(
             `[MCP] Skipping server "${config.name}": agent does not support http transport`
@@ -409,16 +436,39 @@ export class ACPClient {
         }
       } else if (type === "sse") {
         if (mcpCapabilities?.sse) {
-          result.push(toMcpServerSse(config));
+          server = toMcpServerSse(config);
         } else {
           console.log(
             `[MCP] Skipping server "${config.name}": agent does not support sse transport`
           );
         }
       }
+
+      if (server) {
+        result.push(this.normalizeMcpServerName(server, usedMcpNames));
+      }
     }
 
     return result;
+  }
+
+  private normalizeMcpServerName(
+    server: McpServer,
+    usedMcpNames: Set<string>
+  ): McpServer {
+    const sanitizedName = sanitizeMcpServerName(server.name);
+    const uniqueName = getUniqueMcpServerName(sanitizedName, usedMcpNames);
+
+    if (uniqueName === server.name) {
+      return server;
+    }
+
+    console.log(
+      `[MCP] Renaming server "${server.name}" to "${uniqueName}" for agent compatibility`
+    );
+    // Only the identifier changes; command, args, env, URL and headers remain
+    // the original MCP connection definition.
+    return { ...server, name: uniqueName };
   }
 
   async connect(): Promise<InitializeResponse> {

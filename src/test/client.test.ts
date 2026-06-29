@@ -163,6 +163,122 @@ suite("ACPClient with Mock Server", () => {
       assert.strictEqual(metadata.modes?.currentModeId, "code");
     });
 
+    test("should sanitize MCP server names for new sessions", async () => {
+      await client.connect();
+      (client as any).mcpServerConfigs = [
+        {
+          name: "io.github.ChromeDevTools/chrome-devtools-mcp",
+          command: "npx",
+          args: ["chrome"],
+          env: [],
+        },
+        {
+          name: "io.github.ChromeDevTools chrome-devtools-mcp",
+          command: "npx",
+          args: ["chrome-copy"],
+          env: [],
+        },
+      ];
+
+      const agentCtx = client.getAgentContext();
+      assert.ok(agentCtx, "Agent context should be available");
+      const originalRequest = agentCtx.request.bind(agentCtx);
+      let capturedMcpServers: Array<{ name: string }> = [];
+      agentCtx.request = async (method: string, params: any) => {
+        if (method === "session/new") {
+          capturedMcpServers = params.mcpServers;
+        }
+        return originalRequest(method, params);
+      };
+
+      try {
+        await client.newSession("/test/dir");
+      } finally {
+        agentCtx.request = originalRequest;
+      }
+
+      assert.deepStrictEqual(
+        capturedMcpServers.map((server) => server.name),
+        [
+          "io_github_ChromeDevTools_chrome-devtools-mcp",
+          "io_github_ChromeDevTools_chrome-devtools-mcp_2",
+        ]
+      );
+    });
+
+    test("should preserve compatible MCP server names for new sessions", async () => {
+      await client.connect();
+      (client as any).mcpServerConfigs = [
+        {
+          name: "chrome-devtools-mcp",
+          command: "npx",
+          args: ["chrome"],
+          env: [],
+        },
+      ];
+
+      const agentCtx = client.getAgentContext();
+      assert.ok(agentCtx, "Agent context should be available");
+      const originalRequest = agentCtx.request.bind(agentCtx);
+      let capturedMcpServers: Array<{ name: string }> = [];
+      agentCtx.request = async (method: string, params: any) => {
+        if (method === "session/new") {
+          capturedMcpServers = params.mcpServers;
+        }
+        return originalRequest(method, params);
+      };
+
+      try {
+        await client.newSession("/test/dir");
+      } finally {
+        agentCtx.request = originalRequest;
+      }
+
+      assert.deepStrictEqual(
+        capturedMcpServers.map((server) => server.name),
+        ["chrome-devtools-mcp"]
+      );
+    });
+
+    test("should sanitize MCP server names for loaded sessions", async () => {
+      await client.connect();
+      (client as any).mcpServerConfigs = [];
+      const newSession = await client.newSession("/test/dir");
+      (client as any).mcpServerConfigs = [
+        {
+          name: "io.github.ChromeDevTools/chrome-devtools-mcp",
+          command: "npx",
+          args: ["chrome"],
+          env: [],
+        },
+      ];
+
+      const agentCtx = client.getAgentContext();
+      assert.ok(agentCtx, "Agent context should be available");
+      const originalRequest = agentCtx.request.bind(agentCtx);
+      let capturedMcpServers: Array<{ name: string }> = [];
+      agentCtx.request = async (method: string, params: any) => {
+        if (method === "session/load") {
+          capturedMcpServers = params.mcpServers;
+        }
+        return originalRequest(method, params);
+      };
+
+      try {
+        await client.loadSession({
+          sessionId: newSession.sessionId,
+          cwd: "/test/dir",
+        });
+      } finally {
+        agentCtx.request = originalRequest;
+      }
+
+      assert.deepStrictEqual(
+        capturedMcpServers.map((server) => server.name),
+        ["io_github_ChromeDevTools_chrome-devtools-mcp"]
+      );
+    });
+
     test("should receive available commands update", async () => {
       await client.connect();
       await client.newSession("/test/dir");
