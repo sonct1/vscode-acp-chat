@@ -654,7 +654,12 @@ suite("Webview", () => {
 
         const commandChip = msgs[0].querySelector(".command-chip");
         assert.ok(commandChip !== null, "Command chip should be rendered");
-        assert.strictEqual(commandChip.textContent, "explain");
+        assert.strictEqual(commandChip.textContent, "/explain");
+        assert.strictEqual(commandChip.querySelector(".chip-icon"), null);
+        assert.strictEqual(
+          commandChip.querySelector(".chip-prefix")?.textContent,
+          "/"
+        );
         assert.strictEqual(
           (commandChip as HTMLElement).getAttribute("acp-title"),
           "Explain the code"
@@ -1432,6 +1437,8 @@ suite("Webview", () => {
           "/explain this code",
           "Command chip should be serialized to plain text"
         );
+        assert.strictEqual(commandChip.textContent?.startsWith("/"), true);
+        assert.strictEqual(commandChip.querySelector(".chip-icon"), null);
       });
 
       test("Escape clears input", () => {
@@ -1657,6 +1664,20 @@ suite("Webview", () => {
         controller.hideAutocomplete();
         assert.ok(!elements.commandAutocomplete.classList.contains("visible"));
         assert.strictEqual(elements.commandAutocomplete.innerHTML, "");
+      });
+
+      test("command autocomplete items render without command icon", () => {
+        const html = (controller as any).renderCommandItem(testCommands[0], 0);
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = html;
+        const item = wrapper.querySelector(".command-item");
+
+        assert.ok(item, "Command item should be rendered");
+        assert.strictEqual(item.querySelector(".command-icon"), null);
+        assert.strictEqual(
+          item.querySelector(".trigger-char")?.textContent,
+          "/"
+        );
       });
 
       test("selectAutocomplete fills input with command", () => {

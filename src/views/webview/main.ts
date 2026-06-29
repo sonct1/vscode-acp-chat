@@ -2438,7 +2438,6 @@ export class WebviewController {
       : "";
     return `
       <div class="command-item ${i === this.selectedIndex ? "selected" : ""}" data-index="${i}" role="option" aria-selected="${i === this.selectedIndex}">
-        <div class="command-icon codicon codicon-symbol-misc"></div>
         <div class="command-content">
           <div class="command-name"><span class="trigger-char">/</span>${escapeHtml(cmd.name)}</div>
           ${cmd.description ? '<div class="command-description">' + escapeHtml(cmd.description) + "</div>" : ""}
@@ -2765,7 +2764,7 @@ export class WebviewController {
     const displayLabel = command.startsWith("/")
       ? command.substring(1)
       : command;
-    chip.innerHTML = `<span class="chip-icon command-icon codicon codicon-symbol-misc"></span><span class="chip-label">${escapeHtml(
+    chip.innerHTML = `<span class="chip-prefix">/</span><span class="chip-label">${escapeHtml(
       displayLabel
     )}</span>`;
 

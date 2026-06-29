@@ -718,14 +718,18 @@ body {
   top: 0;
 }
 
-.mention-chip .chip-icon,
-.command-chip .chip-icon {
+.mention-chip .chip-icon {
   width: 1em;
   height: 1em;
   display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0.9;
+}
+
+.command-chip .chip-prefix {
+  font-family: var(--vscode-editor-font-family), monospace;
+  opacity: 0.75;
 }
 
 .mention-chip .chip-delete,
