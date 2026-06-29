@@ -931,6 +931,30 @@ suite("Webview", () => {
         );
       });
 
+      test("streamEnd clears stale running tool indicators", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-stale-running",
+          name: "Editing files",
+          kind: "edit",
+        });
+
+        assert.strictEqual(
+          controller.getTools()["tool-stale-running"].status,
+          "running"
+        );
+
+        controller.handleMessage({ type: "streamEnd" });
+
+        const tools = controller.getTools();
+        assert.strictEqual(tools["tool-stale-running"].status, "completed");
+        assert.strictEqual(
+          elements.messagesEl.querySelectorAll(".tool-status.running").length,
+          0
+        );
+      });
+
       test("handles streaming", () => {
         controller.handleMessage({ type: "streamStart" });
         controller.handleMessage({ type: "streamChunk", text: "Hello " });

@@ -1976,6 +1976,23 @@ export class WebviewController {
     this.activeBlock = null;
   }
 
+  private clearStaleRunningToolIndicators(): void {
+    this.blocks
+      .filter((block) => block.type === "tool")
+      .forEach((block) => {
+        const runningStatus = block.element.querySelector(
+          ".tool-status.running"
+        );
+        if (!runningStatus) {
+          return;
+        }
+
+        runningStatus.remove();
+        block.status = block.status || "completed";
+        this.finalizeBlock(block);
+      });
+  }
+
   public showThinking(): void {
     this.ensureBlock("thought");
   }
@@ -3280,6 +3297,7 @@ export class WebviewController {
         }
         break;
       case "streamEnd":
+        this.clearStaleRunningToolIndicators();
         this.finalizeBlocks();
         this.setGenerating(false);
         if (this.currentAssistantMessage) {

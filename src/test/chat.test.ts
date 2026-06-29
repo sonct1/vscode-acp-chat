@@ -917,6 +917,146 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(complete.toolCallId, "command-formatted-output");
       assert.strictEqual(complete.terminalOutput, "Checked 2 files\n");
     });
+
+    test("renders final-only command completion with output", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-final-only",
+          title: "git status --short",
+          kind: "execute",
+          status: "completed",
+          rawInput: {
+            command: "git status --short",
+            cwd: "/test/project",
+          },
+          rawOutput: {
+            formatted_output: "M src/views/chat.ts\n",
+            exit_code: 0,
+          },
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "final-only command should still render");
+      assert.strictEqual(complete.toolCallId, "command-final-only");
+      assert.strictEqual(complete.title, "git status --short");
+      assert.strictEqual(complete.kind, "execute");
+      assert.strictEqual(complete.terminalOutput, "M src/views/chat.ts\n");
+      assert.deepStrictEqual(complete.rawInput, {
+        command: "git status --short",
+        cwd: "/test/project",
+      });
+    });
+
+    test("preserves start content when completion only updates status", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      const diffContent = [
+        {
+          type: "diff",
+          path: "/test/project/src/file.ts",
+          oldText: "old\n",
+          newText: "new\n",
+        },
+      ];
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "file-change-status-only",
+          title: "Editing files",
+          kind: "edit",
+          status: "in_progress",
+          content: diffContent,
+        },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "file-change-status-only",
+          status: "completed",
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "status-only completion should finalize the tool");
+      assert.strictEqual(complete.toolCallId, "file-change-status-only");
+      assert.strictEqual(complete.title, "Editing files");
+      assert.strictEqual(complete.kind, "edit");
+      assert.deepStrictEqual(complete.content, diffContent);
+      assert.strictEqual(
+        (provider as any).pendingToolCalls.has("file-change-status-only"),
+        false,
+        "status-only completion should clear pending state"
+      );
+    });
+
+    test("synthesizes completion for pending live tools before stream end", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      const diffContent = [
+        {
+          type: "diff",
+          path: "/test/project/src/live.ts",
+          oldText: "before\n",
+          newText: "after\n",
+        },
+      ];
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "live-write-no-final",
+          title: "Editing files",
+          kind: "edit",
+          status: "in_progress",
+          content: diffContent,
+        },
+      });
+
+      await (provider as any).finalizePendingToolCalls("end_turn");
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(
+        complete,
+        "pending live tool should be synthesized as complete"
+      );
+      assert.strictEqual(complete.toolCallId, "live-write-no-final");
+      assert.strictEqual(complete.status, "completed");
+      assert.strictEqual(complete.title, "Editing files");
+      assert.strictEqual(complete.kind, "edit");
+      assert.deepStrictEqual(complete.content, diffContent);
+      assert.strictEqual(
+        (provider as any).pendingToolCalls.has("live-write-no-final"),
+        false,
+        "synthesized completion should clear pending state"
+      );
+    });
   });
 
   suite("Context Usage Indicator", () => {

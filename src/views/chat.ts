@@ -144,6 +144,14 @@ type FinalToolCallUpdate = (ToolCall | ToolCallUpdate) & {
   status: "completed" | "failed";
 };
 
+type ToolCallMetadataUpdate = Pick<ToolCall | ToolCallUpdate, "toolCallId"> &
+  Partial<
+    Pick<
+      ToolCall | ToolCallUpdate,
+      "rawInput" | "rawOutput" | "kind" | "title" | "content" | "locations"
+    >
+  >;
+
 export class ChatViewProvider
   implements vscode.WebviewViewProvider, vscode.TextDocumentContentProvider
 {
@@ -160,8 +168,11 @@ export class ChatViewProvider
   private terminals: Map<string, ManagedTerminal> = new Map();
   private toolCallStartTimes: Map<string, number> = new Map();
   private toolCallRawInputs: Map<string, Record<string, unknown>> = new Map();
+  private toolCallRawOutputs: Map<string, unknown> = new Map();
   private toolCallKinds: Map<string, string> = new Map();
   private toolCallTitles: Map<string, string> = new Map();
+  private toolCallContents: Map<string, ToolCall["content"]> = new Map();
+  private toolCallLocations: Map<string, ToolCall["locations"]> = new Map();
   // codex-acp streams command output through tool_call_update._meta before
   // the final status update. Buffer it until toolCallComplete can render it.
   private toolCallTerminalOutputs: Map<string, string> = new Map();
@@ -1107,8 +1118,11 @@ export class ChatViewProvider
   private clearToolCallMetadata(): void {
     this.toolCallStartTimes.clear();
     this.toolCallRawInputs.clear();
+    this.toolCallRawOutputs.clear();
     this.toolCallKinds.clear();
     this.toolCallTitles.clear();
+    this.toolCallContents.clear();
+    this.toolCallLocations.clear();
     this.toolCallTerminalOutputs.clear();
     this.toolCallBaseContents.clear();
     this.lastFileContents.clear();
@@ -1118,8 +1132,11 @@ export class ChatViewProvider
   private cleanupToolCall(toolCallId: string): void {
     this.toolCallStartTimes.delete(toolCallId);
     this.toolCallRawInputs.delete(toolCallId);
+    this.toolCallRawOutputs.delete(toolCallId);
     this.toolCallKinds.delete(toolCallId);
     this.toolCallTitles.delete(toolCallId);
+    this.toolCallContents.delete(toolCallId);
+    this.toolCallLocations.delete(toolCallId);
     this.toolCallTerminalOutputs.delete(toolCallId);
     this.toolCallBaseContents.delete(toolCallId);
     this.pendingToolCalls.delete(toolCallId);
@@ -1207,21 +1224,27 @@ export class ChatViewProvider
   }
 
   private rememberToolCallMetadata(
-    update: Pick<
-      ToolCall | ToolCallUpdate,
-      "toolCallId" | "rawInput" | "kind" | "title"
-    >,
+    update: ToolCallMetadataUpdate,
     resetStartTime = false
   ): void {
     const rawInput = this.asToolCallRawInput(update.rawInput);
     if (rawInput) {
       this.toolCallRawInputs.set(update.toolCallId, rawInput);
     }
-    if (update.kind) {
+    if (update.rawOutput !== undefined) {
+      this.toolCallRawOutputs.set(update.toolCallId, update.rawOutput);
+    }
+    if (typeof update.kind === "string") {
       this.toolCallKinds.set(update.toolCallId, update.kind);
     }
-    if (update.title) {
+    if (typeof update.title === "string") {
       this.toolCallTitles.set(update.toolCallId, update.title);
+    }
+    if (Array.isArray(update.content)) {
+      this.toolCallContents.set(update.toolCallId, update.content);
+    }
+    if (Array.isArray(update.locations)) {
+      this.toolCallLocations.set(update.toolCallId, update.locations);
     }
     if (resetStartTime || !this.toolCallStartTimes.has(update.toolCallId)) {
       this.toolCallStartTimes.set(update.toolCallId, Date.now());
@@ -1257,11 +1280,18 @@ export class ChatViewProvider
       return;
     }
 
-    let content = update.content;
+    let content =
+      update.content ?? this.toolCallContents.get(update.toolCallId);
+    const rawOutput =
+      update.rawOutput !== undefined
+        ? update.rawOutput
+        : this.toolCallRawOutputs.get(update.toolCallId);
+    const locations =
+      update.locations ?? this.toolCallLocations.get(update.toolCallId);
     // Prefer the final aggregate output when present so loaded history and
     // live terminal-output streams render with the same completed content.
     let terminalOutput =
-      this.extractRawOutputText(update.rawOutput) ||
+      this.extractRawOutputText(rawOutput) ||
       this.toolCallTerminalOutputs.get(update.toolCallId);
 
     if (!terminalOutput && content && content.length > 0) {
@@ -1397,18 +1427,40 @@ export class ChatViewProvider
     this.postMessage({
       type: "toolCallComplete",
       toolCallId: update.toolCallId,
-      title: update.title,
-      kind: update.kind,
+      title,
+      kind,
       content,
       rawInput: finalRawInput,
-      rawOutput: update.rawOutput,
+      rawOutput,
       status: update.status,
       terminalOutput,
-      locations: update.locations,
+      locations,
       duration,
     });
 
     this.cleanupToolCall(update.toolCallId);
+  }
+
+  private async finalizePendingToolCalls(
+    stopReason: string | undefined
+  ): Promise<void> {
+    if (this.pendingToolCalls.size === 0) {
+      return;
+    }
+
+    const status =
+      stopReason === "cancelled" || stopReason === "error"
+        ? "failed"
+        : "completed";
+    for (const toolCallId of Array.from(this.pendingToolCalls)) {
+      if (!this.pendingToolCalls.has(toolCallId)) {
+        continue;
+      }
+      await this.completeToolCall({
+        toolCallId,
+        status,
+      });
+    }
   }
 
   public dispose(): void {
@@ -1534,18 +1586,18 @@ export class ChatViewProvider
       this.rememberToolCallTerminalOutput(update);
       if (this.isFinalToolCall(update)) {
         if (!this.pendingToolCalls.has(update.toolCallId)) {
-          return;
+          this.pendingToolCalls.add(update.toolCallId);
         }
         this.rememberToolCallMetadata(update);
         await this.completeToolCall(update);
       } else {
         this.rememberToolCallMetadata(update);
-        this.pendingToolCalls.add(update.toolCallId);
         // Try to capture base content if we haven't already. We do NOT await
         // here to avoid blocking the notification loop.
         this.captureToolCallBaseContent(update);
 
         if (this.hasToolCallPresentation(update)) {
+          this.pendingToolCalls.add(update.toolCallId);
           this.postMessage({
             type: "toolCallStart",
             name:
@@ -1760,6 +1812,7 @@ export class ChatViewProvider
         JSON.stringify(response, null, 2)
       );
 
+      await this.finalizePendingToolCalls(response.stopReason);
       this.postMessage({
         type: "streamEnd",
         stopReason: response.stopReason,
@@ -1772,6 +1825,7 @@ export class ChatViewProvider
         type: "error",
         text: `Error: ${errorMessage}`,
       });
+      await this.finalizePendingToolCalls("error");
       this.postMessage({ type: "streamEnd", stopReason: "error" });
       this.stderrBuffer = "";
     } finally {
