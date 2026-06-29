@@ -28,6 +28,8 @@ import type {
   ReleaseTerminalResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
+  ToolCall,
+  ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
@@ -111,6 +113,10 @@ interface ManagedTerminal {
   exitPromise: Promise<void>;
   exitResolve: () => void;
 }
+
+type FinalToolCallUpdate = (ToolCall | ToolCallUpdate) & {
+  status: "completed" | "failed";
+};
 
 export class ChatViewProvider
   implements vscode.WebviewViewProvider, vscode.TextDocumentContentProvider
@@ -1076,6 +1082,231 @@ export class ChatViewProvider
     this.pendingToolCalls.delete(toolCallId);
   }
 
+  private isFinalToolCall(
+    update: ToolCall | ToolCallUpdate
+  ): update is FinalToolCallUpdate {
+    return update.status === "completed" || update.status === "failed";
+  }
+
+  private asToolCallRawInput(
+    rawInput: unknown
+  ): Record<string, unknown> | undefined {
+    return rawInput && typeof rawInput === "object"
+      ? (rawInput as Record<string, unknown>)
+      : undefined;
+  }
+
+  private rememberToolCallMetadata(
+    update: Pick<
+      ToolCall | ToolCallUpdate,
+      "toolCallId" | "rawInput" | "kind" | "title"
+    >,
+    resetStartTime = false
+  ): void {
+    const rawInput = this.asToolCallRawInput(update.rawInput);
+    if (rawInput) {
+      this.toolCallRawInputs.set(update.toolCallId, rawInput);
+    }
+    if (update.kind) {
+      this.toolCallKinds.set(update.toolCallId, update.kind);
+    }
+    if (update.title) {
+      this.toolCallTitles.set(update.toolCallId, update.title);
+    }
+    if (resetStartTime || !this.toolCallStartTimes.has(update.toolCallId)) {
+      this.toolCallStartTimes.set(update.toolCallId, Date.now());
+    }
+  }
+
+  private captureToolCallBaseContent(
+    update: Pick<
+      ToolCall | ToolCallUpdate,
+      "toolCallId" | "rawInput" | "kind" | "title"
+    >
+  ): void {
+    if (this.toolCallBaseContents.has(update.toolCallId)) {
+      return;
+    }
+
+    const rawInput =
+      this.asToolCallRawInput(update.rawInput) ||
+      this.toolCallRawInputs.get(update.toolCallId);
+    const path = this.extractPath(rawInput);
+    if (!path) {
+      return;
+    }
+
+    const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
+    const title = update.title || this.toolCallTitles.get(update.toolCallId);
+    const capturePromise = this.captureBaseContent(kind, title, rawInput);
+    this.toolCallBaseContents.set(update.toolCallId, capturePromise);
+  }
+
+  private async completeToolCall(update: FinalToolCallUpdate): Promise<void> {
+    if (!this.pendingToolCalls.has(update.toolCallId)) {
+      return;
+    }
+
+    let content = update.content;
+    let terminalOutput: string | undefined;
+
+    if (content && content.length > 0) {
+      const terminalContent = content.find(
+        (c) => c.type === "terminal" && "terminalId" in c
+      );
+      if (terminalContent && "terminalId" in terminalContent) {
+        terminalOutput = `[Terminal: ${terminalContent.terminalId}]`;
+      }
+    }
+
+    // Fallback to raw output if no terminal content or explicit output found
+    if (
+      !terminalOutput &&
+      update.rawOutput &&
+      typeof update.rawOutput === "object" &&
+      "output" in update.rawOutput
+    ) {
+      terminalOutput = String(update.rawOutput.output);
+    }
+
+    // Enrich with diff if it's a file modification and missing
+    const rawInput =
+      this.asToolCallRawInput(update.rawInput) ||
+      this.toolCallRawInputs.get(update.toolCallId);
+    const path = this.extractPath(rawInput);
+
+    const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
+    const title = update.title || this.toolCallTitles.get(update.toolCallId);
+
+    if (
+      typeof path === "string" &&
+      (kind === "write" ||
+        kind === "edit" ||
+        title?.toLowerCase().includes("write") ||
+        title?.toLowerCase().includes("edit"))
+    ) {
+      let oldText: string | undefined;
+
+      // Prefer pre-write snapshot from handleWriteTextFile (captured right
+      // before the disk write). This avoids a race where captureBaseContent
+      // reads the file AFTER the write has already landed.
+      if (this.lastFileContents.has(path)) {
+        const captured = this.lastFileContents.get(path);
+        oldText = captured ?? undefined;
+        this.lastFileContents.delete(path);
+      } else {
+        const oldTextPromise = this.toolCallBaseContents.get(update.toolCallId);
+        oldText = oldTextPromise ? await oldTextPromise : undefined;
+
+        if (!this.pendingToolCalls.has(update.toolCallId)) {
+          return;
+        }
+
+        // Only re-capture if we never attempted it during tool_call.
+        // If oldTextPromise exists but resolved to undefined, the file
+        // didn't exist at capture time (new file). Re-reading now would
+        // pick up content already written by the agent, making oldText
+        // equal to newText and producing an empty diff.
+        if (oldText === undefined && !oldTextPromise) {
+          oldText = await this.captureBaseContent(kind, title, rawInput);
+          if (!this.pendingToolCalls.has(update.toolCallId)) {
+            return;
+          }
+        }
+      }
+
+      let newText: string | undefined =
+        (rawInput?.content as string) ||
+        (rawInput?.text as string) ||
+        (rawInput?.newContent as string) ||
+        (rawInput?.newText as string) ||
+        (rawInput?.new_string as string) ||
+        (rawInput?.replacement as string) ||
+        (rawInput?.data as string) ||
+        (rawInput?.text_content as string) ||
+        (rawInput?.modified_content as string);
+
+      // For edit-type tools (old_string + new_string), compute the full
+      // new content by applying the replacement to the original text.
+      // Otherwise newText is only the replacement fragment, which makes
+      // the diff show every unchanged line as deleted.
+      //
+      // Use replaceAll so the agent's replacement matches its intent
+      // when old_string appears multiple times. If old_string is not
+      // found in oldText, fall back to reading the file from disk —
+      // a broken diff (full file as removed, replacement as added) is
+      // more misleading than a correct diff.
+      let editReconstructed = false;
+      if (
+        rawInput?.old_string !== undefined &&
+        rawInput?.new_string !== undefined &&
+        oldText !== undefined
+      ) {
+        const oldString = String(rawInput.old_string);
+        const newString = String(rawInput.new_string);
+        if (oldText.includes(oldString)) {
+          newText = oldText.split(oldString).join(newString);
+          editReconstructed = true;
+        } else {
+          try {
+            const uri = vscode.Uri.file(path);
+            const currentBytes = await vscode.workspace.fs.readFile(uri);
+            newText = this.textDecoder.decode(currentBytes);
+            // If the file on disk matches oldText, the write was a no-op
+            // (or round-tripped back to the original) — no diff to show.
+            editReconstructed = newText !== oldText;
+          } catch {
+            editReconstructed = false;
+          }
+        }
+      }
+
+      // For edit tools where we could not reconstruct the full new
+      // content, skip the diff entirely. Pushing just the replacement
+      // fragment would make the diff show the entire file as removed.
+      const hasEditFields =
+        rawInput?.old_string !== undefined &&
+        rawInput?.new_string !== undefined;
+      const shouldEmitDiff = !hasEditFields || editReconstructed;
+      if (
+        shouldEmitDiff &&
+        newText !== undefined &&
+        !content?.some((c) => c.type === "diff")
+      ) {
+        content = content ? [...content] : [];
+        content.push({
+          type: "diff",
+          path: path,
+          oldText,
+          newText: String(newText),
+        });
+      }
+    }
+
+    const startTime = this.toolCallStartTimes.get(update.toolCallId);
+    const duration = startTime ? Date.now() - startTime : undefined;
+
+    const finalRawInput =
+      this.asToolCallRawInput(update.rawInput) ||
+      this.toolCallRawInputs.get(update.toolCallId);
+
+    this.postMessage({
+      type: "toolCallComplete",
+      toolCallId: update.toolCallId,
+      title: update.title,
+      kind: update.kind,
+      content,
+      rawInput: finalRawInput,
+      rawOutput: update.rawOutput,
+      status: update.status,
+      terminalOutput,
+      locations: update.locations,
+      duration,
+    });
+
+    this.cleanupToolCall(update.toolCallId);
+  }
+
   public dispose(): void {
     if (this.diffManager) {
       this.diffManager.dispose();
@@ -1162,244 +1393,39 @@ export class ChatViewProvider
       }
     } else if (update.sessionUpdate === "tool_call") {
       this.pendingToolCalls.add(update.toolCallId);
-      this.toolCallStartTimes.set(update.toolCallId, Date.now());
-      if (update.rawInput) {
-        this.toolCallRawInputs.set(
-          update.toolCallId,
-          update.rawInput as Record<string, unknown>
+      this.rememberToolCallMetadata(update, true);
+      this.captureToolCallBaseContent(update);
+
+      if (this.isFinalToolCall(update)) {
+        await this.completeToolCall(update);
+      } else {
+        this.postMessage({
+          type: "toolCallStart",
+          name: update.title,
+          toolCallId: update.toolCallId,
+          kind: update.kind,
+          rawInput: update.rawInput,
+        });
+
+        // Cleanup after 10 minutes to prevent leaks if protocol fails
+        setTimeout(
+          () => this.cleanupToolCall(update.toolCallId),
+          10 * 60 * 1000
         );
       }
-      if (update.kind) {
-        this.toolCallKinds.set(update.toolCallId, update.kind);
-      }
-      if (update.title) {
-        this.toolCallTitles.set(update.toolCallId, update.title);
-      }
-
-      // Early capture base content for diffing if we have a path
-      const path = this.extractPath(update.rawInput as Record<string, unknown>);
-      if (path) {
-        const capturePromise = this.captureBaseContent(
-          update.kind,
-          update.title,
-          update.rawInput as Record<string, unknown>
-        );
-        this.toolCallBaseContents.set(update.toolCallId, capturePromise);
-      }
-
-      this.postMessage({
-        type: "toolCallStart",
-        name: update.title,
-        toolCallId: update.toolCallId,
-        kind: update.kind,
-        rawInput: update.rawInput,
-      });
-
-      // Cleanup after 10 minutes to prevent leaks if protocol fails
-      setTimeout(() => this.cleanupToolCall(update.toolCallId), 10 * 60 * 1000);
     } else if (update.sessionUpdate === "tool_call_update") {
-      if (update.status === "completed" || update.status === "failed") {
+      if (this.isFinalToolCall(update)) {
         if (!this.pendingToolCalls.has(update.toolCallId)) {
           return;
         }
-
-        let terminalOutput: string | undefined;
-
-        if (update.content && update.content.length > 0) {
-          const terminalContent = update.content.find(
-            (c: { type: string; terminalId?: string }) => c.type === "terminal"
-          );
-          if (terminalContent && "terminalId" in terminalContent) {
-            terminalOutput = `[Terminal: ${terminalContent.terminalId}]`;
-          }
-        }
-
-        // Fallback to raw output if no terminal content or explicit output found
-        if (
-          !terminalOutput &&
-          update.rawOutput &&
-          typeof update.rawOutput === "object" &&
-          "output" in update.rawOutput
-        ) {
-          terminalOutput = String(update.rawOutput.output);
-        }
-
-        // Enrich with diff if it's a file modification and missing
-        const rawInput =
-          (update.rawInput as Record<string, unknown>) ||
-          this.toolCallRawInputs.get(update.toolCallId);
-        const path = this.extractPath(rawInput);
-
-        const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
-        const title =
-          update.title || this.toolCallTitles.get(update.toolCallId);
-
-        if (
-          typeof path === "string" &&
-          (kind === "write" ||
-            kind === "edit" ||
-            title?.toLowerCase().includes("write") ||
-            title?.toLowerCase().includes("edit"))
-        ) {
-          let oldText: string | undefined;
-
-          // Prefer pre-write snapshot from handleWriteTextFile (captured right
-          // before the disk write). This avoids a race where captureBaseContent
-          // reads the file AFTER the write has already landed.
-          if (this.lastFileContents.has(path)) {
-            const captured = this.lastFileContents.get(path);
-            oldText = captured ?? undefined;
-            this.lastFileContents.delete(path);
-          } else {
-            const oldTextPromise = this.toolCallBaseContents.get(
-              update.toolCallId
-            );
-            oldText = oldTextPromise ? await oldTextPromise : undefined;
-
-            if (!this.pendingToolCalls.has(update.toolCallId)) {
-              return;
-            }
-
-            // Only re-capture if we never attempted it during tool_call.
-            // If oldTextPromise exists but resolved to undefined, the file
-            // didn't exist at capture time (new file). Re-reading now would
-            // pick up content already written by the agent, making oldText
-            // equal to newText and producing an empty diff.
-            if (oldText === undefined && !oldTextPromise) {
-              oldText = await this.captureBaseContent(kind, title, rawInput);
-              if (!this.pendingToolCalls.has(update.toolCallId)) {
-                return;
-              }
-            }
-          }
-
-          let newText: string | undefined =
-            (rawInput?.content as string) ||
-            (rawInput?.text as string) ||
-            (rawInput?.newContent as string) ||
-            (rawInput?.newText as string) ||
-            (rawInput?.new_string as string) ||
-            (rawInput?.replacement as string) ||
-            (rawInput?.data as string) ||
-            (rawInput?.text_content as string) ||
-            (rawInput?.modified_content as string);
-
-          // For edit-type tools (old_string + new_string), compute the full
-          // new content by applying the replacement to the original text.
-          // Otherwise newText is only the replacement fragment, which makes
-          // the diff show every unchanged line as deleted.
-          //
-          // Use replaceAll so the agent's replacement matches its intent
-          // when old_string appears multiple times. If old_string is not
-          // found in oldText, fall back to reading the file from disk —
-          // a broken diff (full file as removed, replacement as added) is
-          // more misleading than a correct diff.
-          let editReconstructed = false;
-          if (
-            rawInput?.old_string !== undefined &&
-            rawInput?.new_string !== undefined &&
-            oldText !== undefined
-          ) {
-            const oldString = String(rawInput.old_string);
-            const newString = String(rawInput.new_string);
-            if (oldText.includes(oldString)) {
-              newText = oldText.split(oldString).join(newString);
-              editReconstructed = true;
-            } else {
-              try {
-                const uri = vscode.Uri.file(path);
-                const currentBytes = await vscode.workspace.fs.readFile(uri);
-                newText = this.textDecoder.decode(currentBytes);
-                // If the file on disk matches oldText, the write was a no-op
-                // (or round-tripped back to the original) — no diff to show.
-                editReconstructed = newText !== oldText;
-              } catch {
-                editReconstructed = false;
-              }
-            }
-          }
-
-          // For edit tools where we could not reconstruct the full new
-          // content, skip the diff entirely. Pushing just the replacement
-          // fragment would make the diff show the entire file as removed.
-          const hasEditFields =
-            rawInput?.old_string !== undefined &&
-            rawInput?.new_string !== undefined;
-          const shouldEmitDiff = !hasEditFields || editReconstructed;
-          if (
-            shouldEmitDiff &&
-            newText !== undefined &&
-            !update.content?.some((c) => c.type === "diff")
-          ) {
-            update.content = update.content || [];
-            update.content.push({
-              type: "diff",
-              path: path,
-              oldText,
-              newText: String(newText),
-            });
-          }
-        }
-
-        const startTime = this.toolCallStartTimes.get(update.toolCallId);
-        const duration = startTime ? Date.now() - startTime : undefined;
-
-        const finalRawInput =
-          update.rawInput || this.toolCallRawInputs.get(update.toolCallId);
-
-        this.postMessage({
-          type: "toolCallComplete",
-          toolCallId: update.toolCallId,
-          title: update.title,
-          kind: update.kind,
-          content: update.content,
-          rawInput: finalRawInput,
-          rawOutput: update.rawOutput,
-          status: update.status,
-          terminalOutput,
-          locations: update.locations,
-          duration,
-        });
-
-        this.cleanupToolCall(update.toolCallId);
+        this.rememberToolCallMetadata(update);
+        await this.completeToolCall(update);
       } else {
-        // Ensure metadata is always updated from newest notification
-        if (update.rawInput) {
-          this.toolCallRawInputs.set(
-            update.toolCallId,
-            update.rawInput as Record<string, unknown>
-          );
-        }
-        if (update.kind) {
-          this.toolCallKinds.set(update.toolCallId, update.kind);
-        }
-        if (update.title) {
-          this.toolCallTitles.set(update.toolCallId, update.title);
-        }
-
-        if (!this.toolCallStartTimes.has(update.toolCallId)) {
-          this.toolCallStartTimes.set(update.toolCallId, Date.now());
-        }
-
-        // Try to capture base content if we haven't already.
-        // We do NOT await here to avoid blocking notification loop.
-        if (!this.toolCallBaseContents.has(update.toolCallId)) {
-          const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
-          const title =
-            update.title || this.toolCallTitles.get(update.toolCallId);
-          const rawInput =
-            (update.rawInput as Record<string, unknown>) ||
-            this.toolCallRawInputs.get(update.toolCallId);
-
-          if (this.extractPath(rawInput)) {
-            const capturePromise = this.captureBaseContent(
-              kind,
-              title,
-              rawInput
-            );
-            this.toolCallBaseContents.set(update.toolCallId, capturePromise);
-          }
-        }
+        this.rememberToolCallMetadata(update);
+        this.pendingToolCalls.add(update.toolCallId);
+        // Try to capture base content if we haven't already. We do NOT await
+        // here to avoid blocking the notification loop.
+        this.captureToolCallBaseContent(update);
 
         this.postMessage({
           type: "toolCallStart",

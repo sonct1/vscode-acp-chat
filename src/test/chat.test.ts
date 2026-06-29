@@ -714,6 +714,90 @@ suite("ChatViewProvider", () => {
     });
   });
 
+  suite("Tool Call Updates", () => {
+    test("treats a completed tool_call as a complete event", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "file-change-1",
+          title: "Editing files",
+          kind: "edit",
+          status: "completed",
+          content: [
+            {
+              type: "diff",
+              path: "/test/project/NewFile.kt",
+              oldText: null,
+              newText: "class NewFile\n",
+            },
+          ],
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "completed tool_call should finalize the tool");
+      assert.strictEqual(complete.toolCallId, "file-change-1");
+      assert.strictEqual(complete.title, "Editing files");
+      assert.strictEqual(complete.kind, "edit");
+      assert.strictEqual(complete.status, "completed");
+      assert.deepStrictEqual(complete.content, [
+        {
+          type: "diff",
+          path: "/test/project/NewFile.kt",
+          oldText: null,
+          newText: "class NewFile\n",
+        },
+      ]);
+      assert.strictEqual(
+        (provider as any).pendingToolCalls.has("file-change-1"),
+        false,
+        "completed tool_call should not leave stale pending state"
+      );
+    });
+
+    test("treats a failed tool_call as a complete event", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "file-change-failed",
+          title: "Editing files",
+          kind: "edit",
+          status: "failed",
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "failed tool_call should finalize the tool");
+      assert.strictEqual(complete.toolCallId, "file-change-failed");
+      assert.strictEqual(complete.title, "Editing files");
+      assert.strictEqual(complete.kind, "edit");
+      assert.strictEqual(complete.status, "failed");
+      assert.strictEqual(
+        (provider as any).pendingToolCalls.has("file-change-failed"),
+        false,
+        "failed tool_call should not leave stale pending state"
+      );
+    });
+  });
+
   suite("Context Usage Indicator", () => {
     test("forwards usage_update to webview as contextUsage", async () => {
       const provider = new ChatViewProvider(
