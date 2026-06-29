@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.12.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.1...v1.12.2) (2026-06-29)
+
+### Bug Fixes
+
+- finalize live tool calls reliably ([20f7289](https://github.com/pengjiantao/vscode-acp-chat/commit/20f7289228b3a3f2c3111bceaf947ef30315ee84))
+- handle colon-suffixed markdown file links ([b8eaec2](https://github.com/pengjiantao/vscode-acp-chat/commit/b8eaec235de88ef96e98ea741881006b87ef338e))
+- **webview:** stabilize message scroll repaint ([82b9dc9](https://github.com/pengjiantao/vscode-acp-chat/commit/82b9dc9eccdf7a64d0978a1d9ae8eb6c76fd5f20))
+
 ### [1.12.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.0...v1.12.1) (2026-06-29)
 
 ### Bug Fixes
