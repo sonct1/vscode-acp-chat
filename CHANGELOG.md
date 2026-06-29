@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.12.3](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.2...v1.12.3) (2026-06-29)
+
+### Code Refactoring
+
+- **webview:** use slash prefix for command chips ([a10b88c](https://github.com/pengjiantao/vscode-acp-chat/commit/a10b88c328bb53731d32a0778363a8d7cdde752a))
+
 ### [1.12.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.1...v1.12.2) (2026-06-29)
 
 ### Bug Fixes
