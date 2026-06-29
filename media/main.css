@@ -50,11 +50,21 @@ body {
 #messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--container-padding);
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scroll-behavior: smooth;
+  contain: layout paint;
+  overscroll-behavior: contain;
+}
+
+#messages[data-paint-bump="0"] {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0);
+}
+
+#messages[data-paint-bump="1"] {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0);
 }
 
 .messages-fade-top,

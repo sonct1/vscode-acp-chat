@@ -654,8 +654,20 @@ export class Dropdown {
     // Reset styles first
     popover.style.left = "0";
 
-    // Wait for next frame to get accurate width after 'open' class is added
-    requestAnimationFrame(() => {
+    const requestFrame =
+      typeof this.element.ownerDocument.defaultView?.requestAnimationFrame ===
+      "function"
+        ? this.element.ownerDocument.defaultView.requestAnimationFrame.bind(
+            this.element.ownerDocument.defaultView
+          )
+        : (callback: FrameRequestCallback) =>
+            this.element.ownerDocument.defaultView?.setTimeout(
+              () => callback(Date.now()),
+              0
+            ) ?? setTimeout(() => callback(Date.now()), 0);
+
+    // Wait for next frame to get accurate width after 'open' class is added.
+    requestFrame(() => {
       const popoverRect = popover.getBoundingClientRect();
       const rightEdge = rect.left + popoverRect.width;
 
@@ -810,6 +822,10 @@ export class WebviewController {
   }> = [];
   private diffSummaryExpanded = false;
   private isAutoScrollEnabled = true;
+  private pendingBottomScrollFrame: number | null = null;
+  private pendingBottomScrollForce = false;
+  private pendingPaintFrame: number | null = null;
+  private paintBump = false;
 
   constructor(
     vscode: VsCodeApi,
@@ -1603,6 +1619,7 @@ export class WebviewController {
           messagesEl.clientHeight <
         100;
       this.isAutoScrollEnabled = isNearBottom;
+      this.scheduleMessagesPaintInvalidation();
     });
 
     this.win.addEventListener("message", (e: MessageEvent<ExtensionMessage>) =>
@@ -1646,10 +1663,64 @@ export class WebviewController {
   }
 
   private scrollToBottom(force = false): void {
-    const { messagesEl } = this.elements;
-    if (force || this.isAutoScrollEnabled) {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (force) {
+      this.isAutoScrollEnabled = true;
     }
+
+    if (!force && !this.isAutoScrollEnabled) {
+      this.scheduleMessagesPaintInvalidation();
+      return;
+    }
+
+    this.pendingBottomScrollForce = this.pendingBottomScrollForce || force;
+    if (this.pendingBottomScrollFrame !== null) {
+      return;
+    }
+
+    this.pendingBottomScrollFrame = this.requestFrame(() => {
+      this.pendingBottomScrollFrame = null;
+      const shouldScroll =
+        this.pendingBottomScrollForce || this.isAutoScrollEnabled;
+      this.pendingBottomScrollForce = false;
+
+      if (!shouldScroll) {
+        this.scheduleMessagesPaintInvalidation();
+        return;
+      }
+
+      this.performScrollToBottom();
+    });
+  }
+
+  private performScrollToBottom(): void {
+    const { messagesEl } = this.elements;
+    const previousScrollBehavior = messagesEl.style.scrollBehavior;
+    messagesEl.style.scrollBehavior = "auto";
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    void messagesEl.offsetHeight;
+    messagesEl.style.scrollBehavior = previousScrollBehavior;
+    this.isAutoScrollEnabled = true;
+    this.scheduleMessagesPaintInvalidation();
+  }
+
+  private scheduleMessagesPaintInvalidation(): void {
+    if (this.pendingPaintFrame !== null) {
+      return;
+    }
+
+    this.pendingPaintFrame = this.requestFrame(() => {
+      this.pendingPaintFrame = null;
+      this.paintBump = !this.paintBump;
+      this.elements.messagesEl.dataset.paintBump = this.paintBump ? "1" : "0";
+      void this.elements.messagesEl.offsetHeight;
+    });
+  }
+
+  private requestFrame(callback: FrameRequestCallback): number {
+    if (typeof this.win.requestAnimationFrame === "function") {
+      return this.win.requestAnimationFrame(callback);
+    }
+    return this.win.setTimeout(() => callback(Date.now()), 0);
   }
 
   public addMessage(

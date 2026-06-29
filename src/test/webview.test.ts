@@ -521,6 +521,25 @@ suite("Webview", () => {
       dom.window.close();
     });
 
+    function installAnimationFrameQueue() {
+      const frames: FrameRequestCallback[] = [];
+      (window as any).requestAnimationFrame = (
+        callback: FrameRequestCallback
+      ) => {
+        frames.push(callback);
+        return frames.length;
+      };
+
+      return {
+        frames,
+        runNextFrame: () => {
+          const frame = frames.shift();
+          assert.ok(frame, "expected a queued animation frame");
+          frame(Date.now());
+        },
+      };
+    }
+
     test("sends ready message on initialization", () => {
       const messages = mockVsCode._getMessages();
       assert.ok(
@@ -920,6 +939,51 @@ suite("Webview", () => {
         const msgs = elements.messagesEl.querySelectorAll(".message.assistant");
         assert.strictEqual(msgs.length, 1);
         assert.strictEqual(msgs[0].textContent.trim(), "Hello World");
+      });
+
+      test("coalesces automatic bottom scrolling into a single animation frame", () => {
+        const { frames, runNextFrame } = installAnimationFrameQueue();
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          value: 600,
+        });
+
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({ type: "streamChunk", text: "Hello " });
+        controller.handleMessage({ type: "streamChunk", text: "World" });
+
+        assert.strictEqual(frames.length, 1);
+        assert.notStrictEqual(elements.messagesEl.scrollTop, 600);
+
+        runNextFrame();
+
+        assert.strictEqual(elements.messagesEl.scrollTop, 600);
+        assert.strictEqual(frames.length, 1);
+
+        runNextFrame();
+
+        assert.ok(elements.messagesEl.dataset.paintBump);
+      });
+
+      test("invalidates message paint on scroll events", () => {
+        const { frames, runNextFrame } = installAnimationFrameQueue();
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          value: 1000,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          value: 300,
+        });
+        elements.messagesEl.scrollTop = 200;
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+
+        assert.strictEqual(frames.length, 1);
+
+        runNextFrame();
+
+        assert.strictEqual(elements.messagesEl.dataset.paintBump, "1");
       });
 
       test("handles streamEnd with HTML", () => {
