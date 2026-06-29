@@ -1500,6 +1500,30 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(call.options.selection.end.line, 24);
     });
 
+    test("should handle openFile with encoded file URI colon line suffix", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      const fileUri = vscode.Uri.file(__filename);
+
+      await messageHandler({
+        type: "openFile",
+        href: `${fileUri.toString()}%3A10`,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, fileUri.fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 9);
+      assert.strictEqual(call.options.selection.end.line, 9);
+    });
+
     test("should handle openFile with relative message.href and resolve it", async () => {
       const provider = new ChatViewProvider(
         vscode.Uri.file("/test"),
@@ -1547,6 +1571,50 @@ suite("ChatViewProvider", () => {
       assert.ok(call.options.selection);
       assert.strictEqual(call.options.selection.start.line, 9);
       assert.strictEqual(call.options.selection.end.line, 9);
+    });
+
+    test("should handle openFile with absolute path href using colon line suffix", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      await messageHandler({
+        type: "openFile",
+        href: `${__filename}:10`,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, vscode.Uri.file(__filename).fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 9);
+      assert.strictEqual(call.options.selection.end.line, 9);
+    });
+
+    test("should handle openFile with absolute path href using colon line range suffix", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      await messageHandler({
+        type: "openFile",
+        href: `${__filename}:10-20`,
+      });
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, vscode.Uri.file(__filename).fsPath);
+      assert.ok(call.options);
+      assert.ok(call.options.selection);
+      assert.strictEqual(call.options.selection.start.line, 9);
+      assert.strictEqual(call.options.selection.end.line, 19);
     });
 
     test("should fallback to showTextDocument when file stat fails", async () => {

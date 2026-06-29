@@ -93,6 +93,32 @@ interface WebviewMessage {
   checkExists?: boolean;
 }
 
+type FileLineRange = { startLine: number; endLine: number };
+
+function parseFileLineRange(value: string): FileLineRange | undefined {
+  const match = value.match(/^L?(\d+)(?:-L?(\d+))?$/);
+  if (!match) return undefined;
+
+  const startLine = parseInt(match[1], 10);
+  const endLine = match[2] ? parseInt(match[2], 10) : startLine;
+  return { startLine, endLine };
+}
+
+function splitTrailingLineSuffix(pathText: string): {
+  path: string;
+  range?: FileLineRange;
+} {
+  // Supports common markdown file links such as path/to/file.ts:10 and path/to/file.ts:10-20.
+  const match = pathText.match(/^(.*):(\d+)(?:-(\d+)|:\d+)?$/);
+  if (!match || !match[1] || /^[a-zA-Z]$/.test(match[1])) {
+    return { path: pathText };
+  }
+
+  const startLine = parseInt(match[2], 10);
+  const endLine = match[3] ? parseInt(match[3], 10) : startLine;
+  return { path: match[1], range: { startLine, endLine } };
+}
+
 export interface SelectionMention {
   type: "selection" | "terminal";
   name: string;
@@ -402,27 +428,39 @@ export class ChatViewProvider
                 }
 
                 if (fragmentPart) {
-                  const match = fragmentPart.match(/^L?(\d+)(?:-L?(\d+))?$/);
-                  if (match) {
-                    const startLine = parseInt(match[1], 10);
-                    const endLine = match[2]
-                      ? parseInt(match[2], 10)
-                      : startLine;
-                    range = { startLine, endLine };
-                  }
+                  range = parseFileLineRange(fragmentPart);
+                } else {
+                  const parsedPath = splitTrailingLineSuffix(pathPart);
+                  pathPart = parsedPath.path;
+                  range = parsedPath.range;
                 }
 
                 if (pathPart.startsWith("file://")) {
                   uri = vscode.Uri.parse(pathPart);
+                  if (!range) {
+                    const parsedFsPath = splitTrailingLineSuffix(uri.fsPath);
+                    if (parsedFsPath.range) {
+                      uri = vscode.Uri.file(parsedFsPath.path);
+                      range = parsedFsPath.range;
+                    }
+                  }
                 } else {
                   // decodeURIComponent might throw if percent-encoding is malformed,
                   // which is handled by the outer try/catch.
                   const decodedPath = decodeURIComponent(pathPart);
+                  const parsedDecodedPath = range
+                    ? { path: decodedPath }
+                    : splitTrailingLineSuffix(decodedPath);
+                  if (parsedDecodedPath.range) {
+                    range = parsedDecodedPath.range;
+                  }
+
+                  const filePath = parsedDecodedPath.path;
                   if (
-                    decodedPath.startsWith("/") ||
-                    /^[a-zA-Z]:[/\\]/.test(decodedPath)
+                    filePath.startsWith("/") ||
+                    /^[a-zA-Z]:[/\\]/.test(filePath)
                   ) {
-                    uri = vscode.Uri.file(decodedPath);
+                    uri = vscode.Uri.file(filePath);
                   } else {
                     const workspaceFolders = vscode.workspace.workspaceFolders;
                     if (workspaceFolders && workspaceFolders.length > 0) {
@@ -430,7 +468,7 @@ export class ChatViewProvider
                       for (const folder of workspaceFolders) {
                         const possibleUri = vscode.Uri.joinPath(
                           folder.uri,
-                          decodedPath
+                          filePath
                         );
                         try {
                           await vscode.workspace.fs.stat(possibleUri);
@@ -444,11 +482,11 @@ export class ChatViewProvider
                       if (!uri) {
                         uri = vscode.Uri.joinPath(
                           workspaceFolders[0].uri,
-                          decodedPath
+                          filePath
                         );
                       }
                     } else {
-                      uri = vscode.Uri.file(decodedPath);
+                      uri = vscode.Uri.file(filePath);
                     }
                   }
                 }
