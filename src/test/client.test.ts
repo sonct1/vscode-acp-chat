@@ -150,6 +150,70 @@ suite("ACPClient with Mock Server", () => {
         await client.connect();
       }, /Already connected or connecting/);
     });
+
+    test("should pass cwd to spawn options", async () => {
+      let capturedOptions: unknown;
+      const localSpawn: SpawnFunction = (
+        _command: string,
+        _args: string[],
+        options: unknown
+      ): ChildProcess => {
+        capturedOptions = options;
+        return createMockProcess({}) as unknown as ChildProcess;
+      };
+
+      const localClient = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: localSpawn,
+        skipAvailabilityCheck: true,
+      });
+
+      try {
+        await localClient.connect("/workspace/project");
+        assert.deepStrictEqual(capturedOptions, {
+          stdio: ["pipe", "pipe", "pipe"],
+          cwd: "/workspace/project",
+          env: (capturedOptions as any).env,
+        });
+      } finally {
+        localClient.dispose();
+      }
+    });
+
+    test("should allow connect without cwd", async () => {
+      let capturedOptions: unknown;
+      const localSpawn: SpawnFunction = (
+        _command: string,
+        _args: string[],
+        options: unknown
+      ): ChildProcess => {
+        capturedOptions = options;
+        return createMockProcess({}) as unknown as ChildProcess;
+      };
+
+      const localClient = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: localSpawn,
+        skipAvailabilityCheck: true,
+      });
+
+      try {
+        await localClient.connect();
+        assert.strictEqual((capturedOptions as any).cwd, undefined);
+      } finally {
+        localClient.dispose();
+      }
+    });
   });
 
   suite("newSession", () => {

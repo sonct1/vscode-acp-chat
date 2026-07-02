@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import { searchWorkspaceFiles } from "../utils/file-search";
+import { getWorkspaceRoot } from "../utils/workspace";
 import { ACPClient, type ContextUsageUpdate } from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
@@ -691,8 +692,7 @@ export class ChatViewProvider
 
     this.userMessageBuffer = "";
     this.userMessageImages = [];
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    const cwd = workspaceFolder?.uri.fsPath || process.cwd();
+    const cwd = getWorkspaceRoot();
 
     // Clear the current UI
     this.hasSession = false;
@@ -711,7 +711,7 @@ export class ChatViewProvider
 
     try {
       if (!this.acpClient.isConnected()) {
-        await this.acpClient.connect();
+        await this.acpClient.connect(cwd);
       }
       this.sessionManager.syncCapabilities();
       this.documentSyncManager.syncCapabilities();
@@ -1776,13 +1776,13 @@ export class ChatViewProvider
     this.postMessage({ type: "userMessage", text, images, mentions });
 
     try {
+      const workingDir = getWorkspaceRoot();
+
       if (!this.acpClient.isConnected()) {
-        await this.acpClient.connect();
+        await this.acpClient.connect(workingDir);
       }
 
       if (!this.hasSession) {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        const workingDir = workspaceFolder?.uri.fsPath || process.cwd();
         await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
@@ -1916,14 +1916,14 @@ export class ChatViewProvider
 
   private async handleConnect(): Promise<void> {
     try {
+      const workingDir = getWorkspaceRoot();
+
       if (!this.acpClient.isConnected()) {
-        await this.acpClient.connect();
+        await this.acpClient.connect(workingDir);
       }
       this.sessionManager.syncCapabilities();
       this.documentSyncManager.syncCapabilities();
       if (!this.hasSession) {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        const workingDir = workspaceFolder?.uri.fsPath || process.cwd();
         await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
@@ -1963,8 +1963,7 @@ export class ChatViewProvider
 
     try {
       if (this.acpClient.isConnected()) {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        const workingDir = workspaceFolder?.uri.fsPath || process.cwd();
+        const workingDir = getWorkspaceRoot();
         await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();

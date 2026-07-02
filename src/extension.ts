@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ACPClient } from "./acp/client";
 import { ChatViewProvider } from "./views/chat";
 import { getAgentsWithStatus } from "./acp/agents";
+import { getWorkspaceRoot } from "./utils/workspace";
 
 /** VSCode ACP extension client instance. */
 let acpClient: ACPClient | undefined;
@@ -90,7 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       if (!acpClient?.isConnected()) {
         try {
-          await acpClient?.connect();
+          await acpClient?.connect(getWorkspaceRoot());
           vscode.window.showInformationMessage("VSCode ACP connected");
         } catch (error) {
           vscode.window.showErrorMessage(`Failed to connect: ${error}`);

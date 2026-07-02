@@ -512,7 +512,7 @@ export class ACPClient {
     return { ...server, name: uniqueName };
   }
 
-  async connect(): Promise<InitializeResponse> {
+  async connect(cwd?: string): Promise<InitializeResponse> {
     if (this.state === "connected" || this.state === "connecting") {
       throw new Error("Already connected or connecting");
     }
@@ -544,6 +544,7 @@ export class ACPClient {
         this.agentConfig.args,
         {
           stdio: ["pipe", "pipe", "pipe"],
+          cwd,
           env: {
             ...process.env,
             ...this.agentConfig.env,
