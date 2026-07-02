@@ -135,6 +135,11 @@
           "default": true,
           "description": "Send document open/close/change/save/focus notifications to the ACP agent. Requires agent support for NES document events."
         },
+        "vscode-acp-chat.debug": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable debug logging for raw ACP session update events."
+        },
         "vscode-acp-chat.customAgents": {
           "type": "array",
           "default": [],

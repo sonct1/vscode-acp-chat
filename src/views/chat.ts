@@ -784,7 +784,6 @@ export class ChatViewProvider
   private async handleReadTextFile(
     params: ReadTextFileRequest
   ): Promise<ReadTextFileResponse> {
-    console.log("[Chat] Reading file:", params.path);
     try {
       const uri = vscode.Uri.file(params.path);
       const openDoc = vscode.workspace.textDocuments.find(
@@ -809,10 +808,6 @@ export class ChatViewProvider
             errorMessage.includes("File not found") ||
             errorMessage.includes("no such file")
           ) {
-            console.log(
-              "[Chat] File does not exist, returning empty content:",
-              params.path
-            );
             content = "";
           } else {
             throw readError;
@@ -840,7 +835,6 @@ export class ChatViewProvider
   private async handleWriteTextFile(
     params: WriteTextFileRequest
   ): Promise<WriteTextFileResponse> {
-    console.log("[Chat] Writing file:", params.path);
     try {
       const uri = vscode.Uri.file(params.path);
 
@@ -871,7 +865,6 @@ export class ChatViewProvider
   private async handleCreateTerminal(
     params: CreateTerminalRequest
   ): Promise<CreateTerminalResponse> {
-    console.log("[Chat] Creating terminal for:", params.command);
     const terminalId = `term-${++this.terminalCounter}-${Date.now()}`;
 
     let exitResolve: () => void = () => {};
@@ -1062,12 +1055,6 @@ export class ChatViewProvider
     return new Promise((resolve) => {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-      console.log(
-        "[Chat] Permission request:",
-        params.toolCall?.title,
-        params.toolCall?.kind
-      );
-
       // Add to queue
       this.permissionQueue.push({
         id: requestId,
@@ -1105,7 +1092,6 @@ export class ChatViewProvider
       setTimeout(() => {
         const pending = this.permissionQueue.find((p) => p.id === requestId);
         if (pending) {
-          console.log("[Chat] Permission request timeout, cancelling");
           pending.resolver({ outcome: { outcome: "cancelled" } });
           this.permissionQueue = this.permissionQueue.filter(
             (p) => p.id !== requestId
@@ -1509,7 +1495,6 @@ export class ChatViewProvider
     notification: SessionNotification
   ): Promise<void> {
     const update = notification.update;
-    console.log("[Chat] Session update received:", update.sessionUpdate);
 
     // During normal conversation (not loading history), ignore user_message_chunk
     // because opencode echoes back user messages, which would cause duplicate display
@@ -1518,9 +1503,6 @@ export class ChatViewProvider
       update.sessionUpdate === "user_message_chunk" &&
       !this.isLoadingHistory
     ) {
-      console.log(
-        "[Chat] Ignoring user_message_chunk during normal conversation (opencode echo)"
-      );
       return;
     }
 
@@ -1555,9 +1537,11 @@ export class ChatViewProvider
       }
     } else if (update.sessionUpdate === "agent_message_chunk") {
       if (update.content.type === "text") {
-        this.postMessage({ type: "streamChunk", text: update.content.text });
-      } else {
-        console.log("[Chat] Non-text chunk type:", update.content.type);
+        this.postMessage({
+          type: "streamChunk",
+          text: update.content.text,
+          messageId: update.messageId ?? null,
+        });
       }
     } else if (update.sessionUpdate === "tool_call") {
       this.pendingToolCalls.add(update.toolCallId);
@@ -1628,6 +1612,7 @@ export class ChatViewProvider
         this.postMessage({
           type: "thoughtChunk",
           text: update.content.text,
+          messageId: update.messageId ?? null,
         });
       }
     } else if (update.sessionUpdate === "config_option_update") {
@@ -1805,12 +1790,7 @@ export class ChatViewProvider
 
       this.stderrBuffer = "";
       this.postMessage({ type: "streamStart" });
-      console.log("[Chat] Sending message to ACP...");
       const response = await this.acpClient.sendMessage(text, images, mentions);
-      console.log(
-        "[Chat] Prompt response received:",
-        JSON.stringify(response, null, 2)
-      );
 
       await this.finalizePendingToolCalls(response.stopReason);
       this.postMessage({
@@ -2194,7 +2174,6 @@ export class ChatViewProvider
       )
     ) {
       await this.acpClient.setMode(pref.modeId);
-      console.log(`[Chat] Restored mode: ${pref.modeId}`);
       modeRestored = true;
     }
 
@@ -2205,7 +2184,6 @@ export class ChatViewProvider
       )
     ) {
       await this.acpClient.setModel(pref.modelId);
-      console.log(`[Chat] Restored model: ${pref.modelId}`);
       modelRestored = true;
     }
 
@@ -2218,7 +2196,6 @@ export class ChatViewProvider
       if (saved === opt.currentValue) continue;
       try {
         await this.acpClient.setConfigOption(opt.id, saved);
-        console.log(`[Chat] Restored config option ${opt.id}: ${saved}`);
         configOptionsRestored.add(opt.id);
       } catch (error) {
         console.warn(

@@ -712,6 +712,39 @@ suite("ChatViewProvider", () => {
         "userMessage should be sent second"
       );
     });
+
+    test("preserves messageId on agent message and thought chunks", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "agent-message-1",
+          content: { type: "text", text: "Hello" },
+        },
+      });
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          messageId: "agent-thought-1",
+          content: { type: "text", text: "Thinking" },
+        },
+      });
+
+      const streamChunk = messages.find((m) => m.type === "streamChunk");
+      const thoughtChunk = messages.find((m) => m.type === "thoughtChunk");
+
+      assert.strictEqual(streamChunk?.messageId, "agent-message-1");
+      assert.strictEqual(thoughtChunk?.messageId, "agent-thought-1");
+    });
   });
 
   suite("Tool Call Updates", () => {

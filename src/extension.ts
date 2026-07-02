@@ -15,8 +15,6 @@ let statusBarItem: vscode.StatusBarItem | undefined;
  * Sets up the chat view, status bar, commands, and configuration watchers.
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log("VSCode ACP extension is now active");
-
   // Open Developer Tools for webview debugging
   context.subscriptions.push(
     vscode.commands.registerCommand("vscode-acp-chat.openDevTools", () => {
@@ -56,9 +54,6 @@ export function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration("mcp")) {
         try {
           await acpClient?.reloadMcpServers();
-          console.log(
-            "[Extension] MCP servers reloaded due to configuration change"
-          );
         } catch (error) {
           console.error("[Extension] Failed to reload MCP servers:", error);
         }
@@ -66,14 +61,10 @@ export function activate(context: vscode.ExtensionContext) {
 
       if (e.affectsConfiguration("vscode-acp-chat.passMcpServers")) {
         await acpClient?.reloadMcpServers();
-        console.log(`[Extension] MCP passthrough configuration changed`);
       }
 
       if (e.affectsConfiguration("vscode-acp-chat.customAgents")) {
         getAgentsWithStatus(true); // Force refresh agents cache and re-validate
-        console.log(
-          `[Extension] Custom agents configuration changed, cache refreshed`
-        );
       }
     }
   );
@@ -361,6 +352,5 @@ function updateStatusBar(
  * Cleans up resources when the extension is deactivated.
  */
 export function deactivate() {
-  console.log("VSCode ACP extension deactivating");
   acpClient?.dispose();
 }

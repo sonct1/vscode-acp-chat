@@ -172,15 +172,14 @@ export async function getMcpServerConfigs(): Promise<McpServerConfig[]> {
     : null;
   const userMcpPath = getUserMcpConfigPath();
 
-  const urisToCheck: Array<{ uri: vscode.Uri | null; label: string }> = [
+  const urisToCheck: Array<{ uri: vscode.Uri | null }> = [
     {
       uri: workspaceMcpPath ? vscode.Uri.file(workspaceMcpPath) : null,
-      label: "workspace",
     },
-    { uri: vscode.Uri.file(userMcpPath), label: "user" },
+    { uri: vscode.Uri.file(userMcpPath) },
   ];
 
-  for (const { uri, label } of urisToCheck) {
+  for (const { uri } of urisToCheck) {
     if (!uri) continue;
 
     const rawConfig = await readMcpJsonFile(uri);
@@ -204,10 +203,6 @@ export async function getMcpServerConfigs(): Promise<McpServerConfig[]> {
         }
       }
     }
-
-    console.log(
-      `[MCP] Loaded ${configs.length} server(s) from ${label} mcp.json`
-    );
   }
 
   return configs;

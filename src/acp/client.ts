@@ -289,6 +289,7 @@ export interface ACPClientOptions {
   agentConfig?: AgentConfig;
   spawn?: SpawnFunction;
   skipAvailabilityCheck?: boolean;
+  debugLogger?: (message: string) => void;
 }
 
 export class ACPClient {
@@ -314,6 +315,9 @@ export class ACPClient {
   private agentConfig: AgentConfig;
   private spawnFn: SpawnFunction;
   private skipAvailabilityCheck: boolean;
+  private debugLogger: (message: string) => void;
+  private debugLoggingEnabled = true;
+  private debugConfigListener: vscode.Disposable | null = null;
   private mcpServerConfigs: McpServerConfig[] = [];
 
   constructor(options?: ACPClientOptions | AgentConfig) {
@@ -321,17 +325,21 @@ export class ACPClient {
       this.agentConfig = options;
       this.spawnFn = nodeSpawn as SpawnFunction;
       this.skipAvailabilityCheck = false;
+      this.debugLogger = console.log.bind(console);
     } else {
       this.agentConfig = options?.agentConfig ?? getFirstAvailableAgent();
       this.spawnFn = options?.spawn ?? (nodeSpawn as SpawnFunction);
       this.skipAvailabilityCheck = options?.skipAvailabilityCheck ?? false;
+      this.debugLogger = options?.debugLogger ?? console.log.bind(console);
     }
+    this.watchDebugConfiguration();
   }
 
   setAgent(config: AgentConfig): void {
     if (this.state !== "disconnected") {
       this.dispose();
     }
+    this.watchDebugConfiguration();
     this.agentConfig = config;
   }
 
@@ -397,10 +405,8 @@ export class ACPClient {
       .get<boolean>("passMcpServers", true);
     if (passMcpServers) {
       this.mcpServerConfigs = await getMcpServerConfigs();
-      console.log(`[ACP] Loaded ${this.mcpServerConfigs.length} MCP server(s)`);
     } else {
       this.mcpServerConfigs = [];
-      console.log(`[ACP] MCP server passthrough disabled, skipping MCP config`);
     }
   }
 
@@ -410,6 +416,52 @@ export class ACPClient {
 
   getState(): ACPConnectionState {
     return this.state;
+  }
+
+  private readDebugLoggingEnabled(): boolean {
+    return vscode.workspace
+      .getConfiguration("vscode-acp-chat")
+      .get<boolean>("debug", true);
+  }
+
+  private watchDebugConfiguration(): void {
+    this.debugLoggingEnabled = this.readDebugLoggingEnabled();
+    if (this.debugConfigListener) {
+      return;
+    }
+
+    this.debugConfigListener = vscode.workspace.onDidChangeConfiguration(
+      (event) => {
+        if (event.affectsConfiguration("vscode-acp-chat.debug")) {
+          this.debugLoggingEnabled = this.readDebugLoggingEnabled();
+        }
+      }
+    );
+  }
+
+  private stringifyForDebugLog(value: unknown): string {
+    const seen = new WeakSet<object>();
+    return JSON.stringify(value, (_key, item) => {
+      if (typeof item === "bigint") {
+        return item.toString();
+      }
+      if (item && typeof item === "object") {
+        if (seen.has(item)) {
+          return "[Circular]";
+        }
+        seen.add(item);
+      }
+      return item;
+    });
+  }
+
+  private logRawSessionUpdate(params: SessionNotification): void {
+    if (!this.debugLoggingEnabled) {
+      return;
+    }
+    this.debugLogger(
+      `[ACP] session/update ${this.stringifyForDebugLog(params)}`
+    );
   }
 
   private filterAndConvertMcpServers(
@@ -429,18 +481,10 @@ export class ACPClient {
       } else if (type === "http") {
         if (mcpCapabilities?.http) {
           server = toMcpServerHttp(config);
-        } else {
-          console.log(
-            `[MCP] Skipping server "${config.name}": agent does not support http transport`
-          );
         }
       } else if (type === "sse") {
         if (mcpCapabilities?.sse) {
           server = toMcpServerSse(config);
-        } else {
-          console.log(
-            `[MCP] Skipping server "${config.name}": agent does not support sse transport`
-          );
         }
       }
 
@@ -463,9 +507,6 @@ export class ACPClient {
       return server;
     }
 
-    console.log(
-      `[MCP] Renaming server "${server.name}" to "${uniqueName}" for agent compatibility`
-    );
     // Only the identifier changes; command, args, env, URL and headers remain
     // the original MCP connection definition.
     return { ...server, name: uniqueName };
@@ -475,6 +516,8 @@ export class ACPClient {
     if (this.state === "connected" || this.state === "connecting") {
       throw new Error("Already connected or connecting");
     }
+
+    this.watchDebugConfiguration();
 
     if (!this.skipAvailabilityCheck && !isAgentAvailable(this.agentConfig.id)) {
       throw new Error(
@@ -522,9 +565,8 @@ export class ACPClient {
         this.setState("error");
       });
 
-      currentProcess.on("exit", (code) => {
+      currentProcess.on("exit", () => {
         if (this.process !== currentProcess) return;
-        console.log("[ACP] Process exited with code:", code);
         this.teardownConnection();
         this.process = null;
       });
@@ -539,10 +581,7 @@ export class ACPClient {
         params: SessionNotification
       ): Promise<void> => {
         const updateType = params.update?.sessionUpdate ?? "unknown";
-        console.log(`[ACP] Session update: ${updateType}`);
-        if (updateType === "agent_message_chunk") {
-          console.log("[ACP] CHUNK:", JSON.stringify(params.update));
-        }
+        this.logRawSessionUpdate(params);
         if (updateType === "available_commands_update") {
           const update = params.update as {
             availableCommands: AvailableCommand[];
@@ -552,10 +591,6 @@ export class ACPClient {
           } else {
             this.pendingCommands = update.availableCommands;
           }
-          console.log(
-            "[ACP] Commands updated:",
-            update.availableCommands.length
-          );
         }
         await Promise.all(
           Array.from(this.sessionUpdateListeners).map(async (cb) => {
@@ -571,7 +606,6 @@ export class ACPClient {
       const handleReadTextFile = async (
         params: ReadTextFileRequest
       ): Promise<ReadTextFileResponse> => {
-        console.log("[ACP] Read text file request:", params.path);
         if (this.readTextFileHandler) {
           return this.readTextFileHandler(params);
         }
@@ -581,7 +615,6 @@ export class ACPClient {
       const handleWriteTextFile = async (
         params: WriteTextFileRequest
       ): Promise<WriteTextFileResponse> => {
-        console.log("[ACP] Write text file request:", params.path);
         if (this.writeTextFileHandler) {
           return this.writeTextFileHandler(params);
         }
@@ -591,7 +624,6 @@ export class ACPClient {
       const handleCreateTerminal = async (
         params: CreateTerminalRequest
       ): Promise<CreateTerminalResponse> => {
-        console.log("[ACP] Create terminal request:", params.command);
         if (this.createTerminalHandler) {
           return this.createTerminalHandler(params);
         }
@@ -601,7 +633,6 @@ export class ACPClient {
       const handleTerminalOutput = async (
         params: TerminalOutputRequest
       ): Promise<TerminalOutputResponse> => {
-        console.log("[ACP] Terminal output request:", params.terminalId);
         if (this.terminalOutputHandler) {
           return this.terminalOutputHandler(params);
         }
@@ -611,7 +642,6 @@ export class ACPClient {
       const handleWaitForTerminalExit = async (
         params: WaitForTerminalExitRequest
       ): Promise<WaitForTerminalExitResponse> => {
-        console.log("[ACP] Wait for terminal exit:", params.terminalId);
         if (this.waitForTerminalExitHandler) {
           return this.waitForTerminalExitHandler(params);
         }
@@ -621,7 +651,6 @@ export class ACPClient {
       const handleKillTerminal = async (
         params: KillTerminalRequest
       ): Promise<KillTerminalResponse> => {
-        console.log("[ACP] Kill terminal:", params.terminalId);
         if (this.killTerminalCommandHandler) {
           return this.killTerminalCommandHandler(params);
         }
@@ -631,7 +660,6 @@ export class ACPClient {
       const handleReleaseTerminal = async (
         params: ReleaseTerminalRequest
       ): Promise<ReleaseTerminalResponse> => {
-        console.log("[ACP] Release terminal:", params.terminalId);
         if (this.releaseTerminalHandler) {
           return this.releaseTerminalHandler(params);
         }
@@ -721,10 +749,6 @@ export class ACPClient {
       this.setState("connected");
       await this.reloadMcpServers();
       this.agentCapabilities = initResponse.agentCapabilities ?? null;
-      console.log(
-        "[ACP] Agent capabilities:",
-        JSON.stringify(this.agentCapabilities, null, 2)
-      );
       return initResponse;
     } catch (error) {
       this.setState("error");
@@ -829,21 +853,11 @@ export class ACPClient {
   async handleRequestPermission(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
-    console.log(
-      "[ACP] Permission request received from agent:",
-      params.toolCall.title
-    );
-    console.log("[ACP] Request parameters:", JSON.stringify(params, null, 2));
-
     // Iterate through listeners
     for (const listener of this.permissionRequestListeners) {
       try {
         const response = await listener(params);
         if (response) {
-          console.log(
-            "[ACP] Permission handled by listener:",
-            response.outcome.outcome
-          );
           return response;
         }
       } catch (error) {
@@ -855,7 +869,6 @@ export class ACPClient {
     const options = params.options || [];
     const allowOption = options.find((opt) => opt.kind.startsWith("allow"));
     if (allowOption) {
-      console.log("[ACP] Auto-approving permission with:", allowOption.name);
       return {
         outcome: {
           outcome: "selected",
@@ -865,7 +878,6 @@ export class ACPClient {
     }
 
     // Fallback: Cancel
-    console.log("[ACP] No allow option found, cancelling permission request");
     return {
       outcome: {
         outcome: "cancelled",
@@ -1076,7 +1088,6 @@ export class ACPClient {
           prompt,
         }
       );
-      console.log("[ACP] Prompt completed:", JSON.stringify(response, null, 2));
       return response;
     } catch (error) {
       console.error("[ACP] Prompt error:", error);
@@ -1115,6 +1126,8 @@ export class ACPClient {
   }
 
   dispose(): void {
+    this.debugConfigListener?.dispose();
+    this.debugConfigListener = null;
     if (this.process) {
       this.process.kill();
       this.process = null;

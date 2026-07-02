@@ -67,9 +67,8 @@ async function getExcludeFolders(): Promise<string[]> {
     const combined = new Set([...COMMON_EXCLUDE_FOLDERS, ...gitignoreFolders]);
 
     return Array.from(combined);
-  } catch (error) {
+  } catch {
     // 如果没有 .gitignore 文件或者读取失败，使用默认排除列表
-    console.debug("读取 .gitignore 失败，使用默认排除列表", error);
     return COMMON_EXCLUDE_FOLDERS;
   }
 }
@@ -269,10 +268,7 @@ async function searchDirectory(
         );
       }
     }
-  } catch (error) {
+  } catch {
     // 忽略权限错误或无法访问的目录
-    if (error instanceof vscode.FileSystemError) {
-      console.debug(`无法访问目录: ${dirUri.fsPath}`, error);
-    }
   }
 }

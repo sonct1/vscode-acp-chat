@@ -40,6 +40,9 @@ export interface Block {
   element: HTMLElement;
   contentEl: HTMLElement;
   content: string;
+  key: string;
+  streamKey: string;
+  messageId?: string | null;
   toolId?: string;
   kind?: ToolKind;
   title?: string;
@@ -131,6 +134,7 @@ export interface ExtensionMessage {
   }>;
   commands?: AvailableCommand[] | null;
   starredModels?: string[];
+  messageId?: string | null;
   toolCallId?: string;
   agentId?: string;
   agentName?: string;
@@ -790,6 +794,9 @@ export class WebviewController {
   private currentAssistantMessage: HTMLElement | null = null;
   private activeBlock: Block | null = null;
   private blocks: Block[] = [];
+  private blocksByKey: Map<string, Block> = new Map();
+  private activeBlockByStream: Map<string, Block> = new Map();
+  private toolBlockById: Map<string, Block> = new Map();
   private planEl: HTMLElement | null = null;
   private planEntries: PlanEntry[] = [];
   private isPlanExpanded = false;
@@ -1848,18 +1855,39 @@ export class WebviewController {
     setTimeout(() => announcement.remove(), 1000);
   }
 
-  private ensureBlock(type: BlockType, toolId?: string): Block {
-    if (this.activeBlock && this.activeBlock.type === type) {
-      if (type !== "tool" || this.activeBlock.toolId === toolId) {
-        return this.activeBlock;
-      }
-    }
+  private getStreamKey(messageId?: string | null): string {
+    // messageId is optional in ACP. Keep a stable fallback stream for legacy
+    // agents that do not send it, while separating modern concurrent streams.
+    return messageId || "__legacy__";
+  }
 
-    // If we're starting a new block and had an active one, finalize the old one.
-    // This ensures thoughts fold as soon as the next thing (text or tool) starts.
-    if (this.activeBlock) {
-      this.finalizeBlock(this.activeBlock);
-    }
+  private getContentBlockKey(
+    type: Extract<BlockType, "text" | "thought">,
+    messageId?: string | null
+  ): string {
+    return `${type}:${this.getStreamKey(messageId)}`;
+  }
+
+  private resetActiveBlockTracking(): void {
+    this.activeBlock = null;
+    this.activeBlockByStream.clear();
+    this.blocksByKey.clear();
+    this.toolBlockById.clear();
+  }
+
+  private resetRenderedBlockTracking(): void {
+    this.resetActiveBlockTracking();
+    this.blocks = [];
+  }
+
+  private createBlock(options: {
+    type: BlockType;
+    key: string;
+    streamKey: string;
+    messageId?: string | null;
+    toolId?: string;
+  }): Block {
+    const { type, key, streamKey, messageId, toolId } = options;
 
     // Create new block
     if (!this.currentAssistantMessage) {
@@ -1878,6 +1906,10 @@ export class WebviewController {
 
     const blockEl = this.doc.createElement("div");
     blockEl.className = `block block-${type}`;
+    blockEl.dataset.blockKey = key;
+    if (messageId) {
+      blockEl.dataset.messageId = messageId;
+    }
 
     let contentEl: HTMLElement;
 
@@ -1932,16 +1964,92 @@ export class WebviewController {
       element: blockEl,
       contentEl,
       content: "",
+      key,
+      streamKey,
+      messageId,
       toolId,
     };
 
-    this.activeBlock = block;
     this.blocks.push(block);
     return block;
   }
 
-  private updateAssistantMessageText(): void {
-    // No longer needed as we use DOM
+  private ensureBlock(type: BlockType, toolId?: string): Block {
+    if (this.activeBlock && this.activeBlock.type === type) {
+      if (type !== "tool" || this.activeBlock.toolId === toolId) {
+        return this.activeBlock;
+      }
+    }
+
+    // If we're starting a new block and had an active one, finalize the old one.
+    // This ensures thoughts fold as soon as the next thing (text or tool) starts.
+    if (this.activeBlock) {
+      this.finalizeBlock(this.activeBlock);
+    }
+
+    const streamKey = this.getStreamKey(null);
+    const block = this.createBlock({
+      type,
+      key:
+        type === "tool" && toolId ? `tool:${toolId}` : `${type}:${streamKey}`,
+      streamKey,
+      toolId,
+    });
+
+    this.activeBlock = block;
+    if (type === "tool" && toolId) {
+      this.toolBlockById.set(toolId, block);
+    }
+    return block;
+  }
+
+  private ensureContentBlock(
+    type: Extract<BlockType, "text" | "thought">,
+    messageId?: string | null
+  ): Block {
+    if (!messageId) {
+      return this.ensureBlock(type);
+    }
+
+    const streamKey = this.getStreamKey(messageId);
+    const blockKey = this.getContentBlockKey(type, messageId);
+    const existing = this.blocksByKey.get(blockKey);
+    const activeForStream = this.activeBlockByStream.get(streamKey);
+
+    if (existing) {
+      if (activeForStream && activeForStream !== existing) {
+        this.finalizeBlock(activeForStream);
+      }
+      this.activeBlockByStream.set(streamKey, existing);
+      return existing;
+    }
+
+    if (activeForStream) {
+      this.finalizeBlock(activeForStream);
+    }
+
+    const block = this.createBlock({
+      type,
+      key: blockKey,
+      streamKey,
+      messageId,
+    });
+    this.blocksByKey.set(blockKey, block);
+    this.activeBlockByStream.set(streamKey, block);
+    return block;
+  }
+
+  private ensureToolBlock(toolCallId: string): Block {
+    const existing =
+      this.toolBlockById.get(toolCallId) ||
+      this.blocks.find((b) => b.type === "tool" && b.toolId === toolCallId);
+    if (existing) {
+      this.toolBlockById.set(toolCallId, existing);
+      return existing;
+    }
+
+    this.finalizeActiveBlocksExcept();
+    return this.ensureBlock("tool", toolCallId);
   }
 
   private finalizeBlock(block: Block): void {
@@ -1974,6 +2082,23 @@ export class WebviewController {
       this.finalizeBlock(block);
     });
     this.activeBlock = null;
+    this.activeBlockByStream.clear();
+  }
+
+  private finalizeActiveBlocksExcept(blockToKeep?: Block): void {
+    if (this.activeBlock && this.activeBlock !== blockToKeep) {
+      this.finalizeBlock(this.activeBlock);
+      this.activeBlock = null;
+    }
+
+    this.activeBlockByStream.forEach((block, streamKey) => {
+      if (block === blockToKeep) {
+        return;
+      }
+
+      this.finalizeBlock(block);
+      this.activeBlockByStream.delete(streamKey);
+    });
   }
 
   private clearStaleRunningToolIndicators(): void {
@@ -1994,7 +2119,9 @@ export class WebviewController {
   }
 
   public showThinking(): void {
-    this.ensureBlock("thought");
+    // Legacy programmatic API. ACP thought chunks should use thoughtChunk with
+    // messageId so interleaved streams remain separate.
+    this.ensureContentBlock("thought");
   }
 
   public hideThinking(): void {
@@ -2005,7 +2132,9 @@ export class WebviewController {
   }
 
   public appendThought(text: string): void {
-    const block = this.ensureBlock("thought");
+    // Legacy programmatic API. ACP thought chunks should use thoughtChunk with
+    // messageId so interleaved streams remain separate.
+    const block = this.ensureContentBlock("thought");
     block.content += text;
     block.contentEl.innerHTML = marked.parse(block.content) as string;
     this.scrollToBottom();
@@ -3246,7 +3375,6 @@ export class WebviewController {
   }
 
   async handleMessage(msg: ExtensionMessage): Promise<void> {
-    console.log("[Webview] Message received:", msg.type, msg);
     switch (msg.type) {
       case "fileSearchResults":
         if (msg.results) {
@@ -3259,7 +3387,7 @@ export class WebviewController {
         // Always reset assistant state before a new turn, regardless of content
         // This ensures subsequent streamChunk creates a new assistant message and prevents turn merging
         this.currentAssistantMessage = null;
-        this.activeBlock = null;
+        this.resetActiveBlockTracking();
 
         if (msg.text || (msg.images && msg.images.length > 0)) {
           this.addMessage(msg.text || "", "user", msg.mentions);
@@ -3272,13 +3400,12 @@ export class WebviewController {
         break;
       case "streamStart":
         this.currentAssistantMessage = null;
-        this.activeBlock = null;
-        this.blocks = [];
+        this.resetRenderedBlockTracking();
         this.setGenerating(true);
         break;
       case "streamChunk":
         if (msg.text) {
-          const block = this.ensureBlock("text");
+          const block = this.ensureContentBlock("text", msg.messageId);
           block.content += msg.text;
           block.contentEl.innerHTML = marked.parse(block.content) as string;
           // Store raw content on the element for reliable retrieval by action buttons
@@ -3289,7 +3416,7 @@ export class WebviewController {
 
       case "thoughtChunk":
         if (msg.text) {
-          const block = this.ensureBlock("thought");
+          const block = this.ensureContentBlock("thought", msg.messageId);
           block.content += msg.text;
           block.contentEl.innerHTML = marked.parse(block.content) as string;
           this.scrollToBottom();
@@ -3308,12 +3435,7 @@ export class WebviewController {
         break;
       case "toolCallStart":
         if (msg.toolCallId && msg.name) {
-          let block = this.blocks.find(
-            (b) => b.type === "tool" && b.toolId === msg.toolCallId
-          );
-          if (!block) {
-            block = this.ensureBlock("tool", msg.toolCallId);
-          }
+          const block = this.ensureToolBlock(msg.toolCallId);
           if (block) {
             if (msg.kind) block.kind = msg.kind;
             if (msg.name) block.title = msg.name;
@@ -3335,10 +3457,7 @@ export class WebviewController {
         break;
       case "toolCallComplete":
         if (msg.toolCallId) {
-          let block = this.blocks.find((b) => b.toolId === msg.toolCallId);
-          if (!block) {
-            block = this.ensureBlock("tool", msg.toolCallId);
-          }
+          const block = this.ensureToolBlock(msg.toolCallId);
           if (block) {
             // Update metadata from completion message
             if (msg.kind) block.kind = msg.kind;
@@ -3415,8 +3534,7 @@ export class WebviewController {
       case "chatCleared":
         this.elements.messagesEl.innerHTML = "";
         this.currentAssistantMessage = null;
-        this.activeBlock = null;
-        this.blocks = [];
+        this.resetRenderedBlockTracking();
         this.hideAutocomplete();
         this.hidePlan();
         this.diffChanges = [];

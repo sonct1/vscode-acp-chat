@@ -970,6 +970,165 @@ suite("Webview", () => {
         assert.strictEqual(msgs[0].textContent.trim(), "Hello World");
       });
 
+      test("keeps interleaved messageId text streams in separate blocks", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Alpha ",
+          messageId: "agent-a",
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Beta ",
+          messageId: "agent-b",
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "one",
+          messageId: "agent-a",
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "two",
+          messageId: "agent-b",
+        });
+
+        const blocks = elements.messagesEl.querySelectorAll(".block-text");
+        assert.strictEqual(blocks.length, 2);
+        assert.strictEqual(
+          (blocks[0] as HTMLElement).dataset.rawContent,
+          "Alpha one"
+        );
+        assert.strictEqual(
+          (blocks[1] as HTMLElement).dataset.rawContent,
+          "Beta two"
+        );
+      });
+
+      test("keeps interleaved thought streams separate by messageId", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "Planning ",
+          messageId: "agent-a",
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "Checking ",
+          messageId: "agent-b",
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "layout",
+          messageId: "agent-a",
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Answer",
+          messageId: "agent-a",
+        });
+
+        const thoughts = elements.messagesEl.querySelectorAll(".agent-thought");
+        assert.strictEqual(thoughts.length, 2);
+        assert.strictEqual(
+          thoughts[0].querySelector(".thought-content")?.textContent?.trim(),
+          "Planning layout"
+        );
+        assert.strictEqual(
+          thoughts[1].querySelector(".thought-content")?.textContent?.trim(),
+          "Checking"
+        );
+        assert.strictEqual(thoughts[0].getAttribute("open"), null);
+        assert.strictEqual(thoughts[1].getAttribute("open"), "");
+      });
+
+      test("closes legacy thought when a new tool starts", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "Checking before running a command.",
+        });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "legacy-tool",
+          name: "Read file",
+        });
+
+        const thought = elements.messagesEl.querySelector(".agent-thought");
+        assert.ok(thought);
+        assert.strictEqual(thought.getAttribute("open"), null);
+        assert.strictEqual(
+          thought.querySelector(".thought-title")?.textContent,
+          "Thought Process"
+        );
+      });
+
+      test("keeps legacy thought active when an existing tool update arrives", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "legacy-tool",
+          name: "Read file",
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "Checking the file ",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "legacy-tool",
+          status: "completed",
+          rawOutput: { output: "done" },
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "before continuing.",
+        });
+        controller.handleMessage({ type: "streamEnd" });
+
+        const thoughts = elements.messagesEl.querySelectorAll(".agent-thought");
+        assert.strictEqual(thoughts.length, 1);
+        assert.strictEqual(
+          thoughts[0].querySelector(".thought-content")?.textContent?.trim(),
+          "Checking the file before continuing."
+        );
+        assert.strictEqual(thoughts[0].getAttribute("open"), null);
+        assert.strictEqual(
+          thoughts[0].querySelector(".thought-title")?.textContent,
+          "Thought Process"
+        );
+      });
+
+      test("keeps legacy text active when an existing tool update arrives", () => {
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "legacy-tool",
+          name: "Read file",
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Final ",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "legacy-tool",
+          status: "completed",
+          rawOutput: { output: "done" },
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "answer",
+        });
+
+        const textBlocks = elements.messagesEl.querySelectorAll(".block-text");
+        assert.strictEqual(textBlocks.length, 1);
+        assert.strictEqual(
+          (textBlocks[0] as HTMLElement).dataset.rawContent,
+          "Final answer"
+        );
+      });
+
       test("coalesces automatic bottom scrolling into a single animation frame", () => {
         const { frames, runNextFrame } = installAnimationFrameQueue();
         Object.defineProperty(elements.messagesEl, "scrollHeight", {

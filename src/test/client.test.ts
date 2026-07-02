@@ -72,8 +72,10 @@ suite("ACPClient", () => {
 suite("ACPClient with Mock Server", () => {
   let client: ACPClient;
   let mockSpawn: SpawnFunction;
+  let debugLogs: string[];
 
   setup(() => {
+    debugLogs = [];
     mockSpawn = (
       _command: string,
       _args: string[],
@@ -91,6 +93,7 @@ suite("ACPClient with Mock Server", () => {
       },
       spawn: mockSpawn,
       skipAvailabilityCheck: true,
+      debugLogger: (message) => debugLogs.push(message),
     });
   });
 
@@ -335,6 +338,38 @@ suite("ACPClient with Mock Server", () => {
       await client.sendMessage("Hello");
 
       assert.strictEqual(updates1.length, updates2.length);
+    });
+
+    test("logs raw session update JSON when debug logging is enabled by default", async () => {
+      await client.connect();
+      const updateReceived = new Promise<void>((resolve) => {
+        const unsubscribe = client.setOnSessionUpdate(() => {
+          unsubscribe();
+          resolve();
+        });
+      });
+      await client.newSession("/test/dir");
+      await updateReceived;
+
+      const prefix = "[ACP] session/update ";
+      const updateLogs = debugLogs.filter((entry) => entry.startsWith(prefix));
+      assert.ok(updateLogs.length > 0, "expected raw ACP session update log");
+      assert.ok(
+        debugLogs.every((entry) => !entry.includes("[ACP] Session update:")),
+        "legacy session update summary log should not be emitted"
+      );
+      assert.ok(
+        debugLogs.every((entry) => !entry.includes("[ACP] CHUNK:")),
+        "legacy chunk log should not be emitted"
+      );
+
+      const payload = JSON.parse(updateLogs[0].slice(prefix.length));
+      assert.strictEqual(payload.sessionId, "mock-session-1");
+      assert.strictEqual(
+        payload.update.sessionUpdate,
+        "available_commands_update"
+      );
+      assert.ok(Array.isArray(payload.update.availableCommands));
     });
 
     test("should throw if no session", async () => {

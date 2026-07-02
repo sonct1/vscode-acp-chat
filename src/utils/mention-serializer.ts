@@ -306,10 +306,6 @@ export function extractMentions(text: string): {
  * @returns Array of parsed Mention objects
  */
 export function parseMentionsFromText(text: string): Mention[] {
-  console.log(
-    "[MentionSerializer Debug] parseMentionsFromText called. Text length:",
-    text.length
-  );
   const mentions: Mention[] = [];
 
   // Match all mention tags (both self-closing and with content), handling potential HTML escaping
@@ -318,24 +314,12 @@ export function parseMentionsFromText(text: string): Mention[] {
   let match;
 
   while ((match = mentionRegex.exec(text)) !== null) {
-    console.log("[MentionSerializer Debug] Found match:\n", match[0]);
     const mention = parseMention(match[0]);
     if (mention) {
-      console.log(
-        "[MentionSerializer Debug] Parsed mention object:",
-        JSON.stringify(mention)
-      );
       mentions.push(mention);
-    } else {
-      console.log(
-        "[MentionSerializer Debug] parseMention returned null for the match."
-      );
     }
   }
 
-  console.log(
-    `[MentionSerializer Debug] parseMentionsFromText returning ${mentions.length} mentions`
-  );
   return mentions;
 }
 
