@@ -8,10 +8,7 @@ import { FileHandler } from "../acp/file-handler";
 import { TerminalHandler } from "../acp/terminal-handler";
 import { AgentSessionManager, type SessionInfo } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
-import {
-  extractMentions,
-  parseMentionsFromText,
-} from "../utils/mention-serializer";
+import { extractMentions } from "../utils/mention-serializer";
 import {
   type SessionNotification,
   type RequestPermissionRequest,
@@ -1350,26 +1347,6 @@ export class ChatViewProvider
       this.userMessageBuffer = "";
       this.userMessageImages = [];
     }
-  }
-
-  /**
-   * Extract mentions from user message content during history session restoration.
-   * Parses the structured XML-like mention format to restore mention objects.
-   */
-  private extractMentionsFromContent(content: Record<string, unknown>): Array<{
-    name: string;
-    path?: string;
-    type?: "file" | "folder" | "selection" | "terminal" | "image";
-    content?: string;
-    range?: { startLine: number; endLine: number };
-    dataUrl?: string;
-  }> {
-    if (!content || typeof content !== "object") {
-      return [];
-    }
-
-    const text = (content.text as string) || "";
-    return parseMentionsFromText(text);
   }
 
   private extractPath(

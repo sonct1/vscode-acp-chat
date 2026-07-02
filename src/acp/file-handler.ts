@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
-import type {
-  ReadTextFileRequest,
-  ReadTextFileResponse,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
+import {
+  RequestError,
+  type ReadTextFileRequest,
+  type ReadTextFileResponse,
+  type WriteTextFileRequest,
+  type WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
 import type { DiffManager } from "./diff-manager";
 
@@ -73,11 +74,19 @@ export class FileHandler {
               errorMessage.includes("File not found") ||
               errorMessage.includes("no such file")
             ) {
-              content = "";
+              throw RequestError.resourceNotFound(params.path);
             } else if (statError !== undefined) {
-              throw statError;
+              throw statError instanceof RequestError
+                ? statError
+                : new RequestError(-32603, String(statError), {
+                    path: params.path,
+                  });
             } else {
-              throw readError;
+              throw readError instanceof RequestError
+                ? readError
+                : new RequestError(-32603, String(readError), {
+                    path: params.path,
+                  });
             }
           }
         }
@@ -94,7 +103,10 @@ export class FileHandler {
       return { content };
     } catch (error) {
       console.error("[FileHandler] Failed to read file:", error);
-      throw error;
+      if (error instanceof RequestError) {
+        throw error;
+      }
+      throw new RequestError(-32603, String(error), { path: params.path });
     }
   }
 
@@ -103,6 +115,41 @@ export class FileHandler {
   ): Promise<WriteTextFileResponse> {
     try {
       const uri = vscode.Uri.file(params.path);
+
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.type & vscode.FileType.Directory) {
+          throw new RequestError(
+            -32602,
+            `Cannot write to "${params.path}": path is a directory, not a file. Use readTextFile to list directory contents.`,
+            { path: params.path }
+          );
+        }
+      } catch (error) {
+        if (error instanceof RequestError) {
+          throw error;
+        }
+      }
+
+      const parentUri = vscode.Uri.joinPath(uri, "..");
+      try {
+        const parentStat = await vscode.workspace.fs.stat(parentUri);
+        if (!(parentStat.type & vscode.FileType.Directory)) {
+          throw new RequestError(
+            -32602,
+            `Cannot write to "${params.path}": parent path is not a directory.`,
+            { path: params.path, parent: parentUri.fsPath }
+          );
+        }
+      } catch (error) {
+        if (error instanceof RequestError) {
+          throw error;
+        }
+        throw new RequestError(-32603, String(error), {
+          path: params.path,
+          parent: parentUri.fsPath,
+        });
+      }
 
       let oldContent: string | null = null;
       try {
@@ -121,7 +168,10 @@ export class FileHandler {
       return {};
     } catch (error) {
       console.error("[FileHandler] Failed to write file:", error);
-      throw error;
+      if (error instanceof RequestError) {
+        throw error;
+      }
+      throw new RequestError(-32603, String(error), { path: params.path });
     }
   }
 
