@@ -241,68 +241,33 @@ function normalizeKindLabel(kind: string | undefined): string {
   return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
-function renderIOBlock(info: ToolCallSummary): string {
-  const { rawInput, rawOutput, content, terminalOutput } = info;
+function renderExecuteDetails(info: ToolCallSummary): string {
+  const { rawInput, rawOutput, terminalOutput } = info;
   let html = "";
 
   const command =
     rawInput?.command || rawInput?.cmd || rawInput?.script || rawInput?.pattern;
 
-  const skipInputKeys = [
-    "description",
-    "content",
-    "text",
-    "newContent",
-    "newText",
-    "new_string",
-    "old_string",
-    "replacement",
-    "path",
-    "file",
-    "filePath",
-    "file_path",
-    "filename",
-    "uri",
-  ];
-
-  const hasDiff = content?.some((c) => c.type === "diff");
-
   const otherInputEntries = rawInput
-    ? Object.entries(rawInput).filter(([k, v]) => {
+    ? Object.entries(rawInput).filter(([k]) => {
         const skipCmdKeys = ["command", "cmd", "script", "pattern"];
         if (skipCmdKeys.includes(k)) return false;
-        if (hasDiff && skipInputKeys.includes(k)) return false;
-        return v !== undefined;
+        return rawInput[k] !== undefined;
       })
     : [];
 
   let outputText = "";
   let isTerminal = false;
 
-  if (content && content.length > 0) {
-    const terminalItem = content.find((c) => c.type === "terminal");
-    const contentItem = content.find(
-      (c) => c.type === "content" && c.content?.text
-    );
-    const diffItem = content.find((c) => c.type === "diff");
-
-    if (terminalItem) {
-      outputText = terminalOutput || "";
-      isTerminal = hasAnsiCodes(outputText);
-    } else if (contentItem && contentItem.type === "content") {
-      outputText = contentItem.content?.text || "";
-    } else if (diffItem) {
-      return renderDiff(diffItem.path, diffItem.oldText, diffItem.newText);
-    }
-  }
-
-  if (!outputText) {
-    if (terminalOutput) {
-      outputText = terminalOutput;
-      isTerminal = hasAnsiCodes(outputText);
-    } else if (rawOutput?.output) {
-      outputText = String(rawOutput.output);
-    }
+  if (terminalOutput) {
+    outputText = terminalOutput;
+    isTerminal = hasAnsiCodes(outputText);
+  } else if (typeof rawOutput === "string") {
+    outputText = rawOutput;
+  } else if (rawOutput?.output) {
+    outputText = String(rawOutput.output);
+  } else if (rawOutput?.text) {
+    outputText = String(rawOutput.text);
   }
 
   const hasInput = command || otherInputEntries.length > 0;
@@ -476,8 +441,12 @@ const BaseRenderer: ToolRenderer = {
       let output = "";
       if (terminalOutput) {
         output = terminalOutput;
+      } else if (typeof rawOutput === "string") {
+        output = rawOutput;
       } else if (rawOutput?.output) {
         output = String(rawOutput.output);
+      } else if (rawOutput?.text) {
+        output = String(rawOutput.text);
       }
 
       if (output) {
@@ -532,7 +501,7 @@ const Renderers: Partial<Record<ToolKind, ToolRenderer>> = {
   },
   execute: {
     ...BaseRenderer,
-    renderDetails: renderIOBlock,
+    renderDetails: renderExecuteDetails,
   },
   read: {
     ...BaseRenderer,

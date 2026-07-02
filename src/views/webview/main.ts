@@ -97,7 +97,7 @@ export interface ToolCallSummary {
     args?: string[];
     [key: string]: unknown;
   };
-  rawOutput?: { output?: string };
+  rawOutput?: { output?: string; text?: string } | string;
   content?: ToolCallContentItem[];
   duration?: number;
   terminalOutput?: string;
@@ -150,7 +150,7 @@ export interface ExtensionMessage {
     args?: string[];
     [key: string]: unknown;
   };
-  rawOutput?: { output?: string };
+  rawOutput?: { output?: string; text?: string } | string;
   status?: string;
   terminalOutput?: string;
   results?: Array<{

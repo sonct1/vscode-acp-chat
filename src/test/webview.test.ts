@@ -311,6 +311,30 @@ suite("Webview", () => {
       assert.ok(html.includes("All tests passed"));
     });
 
+    test("renders rawOutput string as output", () => {
+      const html = renderToolDetails({
+        toolCallId: "tool-1",
+        title: "test",
+        kind: "execute",
+        status: "completed",
+        rawOutput: "hello world\n",
+      });
+      assert.ok(html.includes('<div class="io-block">'));
+      assert.ok(html.includes("hello world"));
+    });
+
+    test("renders rawOutput text field as output", () => {
+      const html = renderToolDetails({
+        toolCallId: "tool-1",
+        title: "test",
+        kind: "execute",
+        status: "completed",
+        rawOutput: { text: "command output here" },
+      });
+      assert.ok(html.includes('<div class="io-block">'));
+      assert.ok(html.includes("command output here"));
+    });
+
     test("renders terminal output with ANSI support", () => {
       const html = renderToolDetails({
         toolCallId: "tool-1",

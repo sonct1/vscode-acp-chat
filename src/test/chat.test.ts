@@ -830,7 +830,7 @@ suite("ChatViewProvider", () => {
       );
     });
 
-    test("renders codex terminal output metadata on completion", async () => {
+    test("uses rawOutput text field as terminal output", async () => {
       const provider = new ChatViewProvider(
         mockExtensionUri,
         acpClient as any,
@@ -842,65 +842,93 @@ suite("ChatViewProvider", () => {
       await (provider as any).handleSessionUpdate({
         sessionId: "test",
         update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "command-output-meta",
-          title: "git status --short",
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-text-output",
+          title: "run command",
           kind: "execute",
-          status: "in_progress",
-          content: [
-            {
-              type: "terminal",
-              terminalId: "command-output-meta",
-            },
-          ],
+          status: "completed",
           rawInput: {
-            command: "git status --short",
+            command: "ls",
             cwd: "/test/project",
           },
-        },
-      });
-      await (provider as any).handleSessionUpdate({
-        sessionId: "test",
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "command-output-meta",
-          _meta: {
-            terminal_output_delta: {
-              data: "M src/views/chat.ts\n",
-              terminal_id: "command-output-meta",
-            },
-          },
-        },
-      });
-      await (provider as any).handleSessionUpdate({
-        sessionId: "test",
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "command-output-meta",
-          status: "completed",
           rawOutput: {
-            exit_code: 0,
-          },
-          _meta: {
-            terminal_exit: {
-              exit_code: 0,
-              signal: null,
-              terminal_id: "command-output-meta",
-            },
+            type: "text",
+            text: "Exited with code 0. Final output:\nschema.json\n",
           },
         },
       });
 
-      const starts = messages.filter((m) => m.type === "toolCallStart");
-      assert.strictEqual(
-        starts.length,
-        1,
-        "terminal output metadata should not create duplicate start messages"
-      );
       const complete = messages.find((m) => m.type === "toolCallComplete");
       assert.ok(complete, "command should complete");
-      assert.strictEqual(complete.toolCallId, "command-output-meta");
-      assert.strictEqual(complete.terminalOutput, "M src/views/chat.ts\n");
+      assert.strictEqual(complete.toolCallId, "command-text-output");
+      assert.strictEqual(
+        complete.terminalOutput,
+        "Exited with code 0. Final output:\nschema.json\n"
+      );
+    });
+
+    test("uses rawOutput string directly as terminal output", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-string-output",
+          title: "run command",
+          kind: "execute",
+          status: "completed",
+          rawInput: {
+            command: "echo hello",
+          },
+          rawOutput: "hello\n",
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "command should complete");
+      assert.strictEqual(complete.toolCallId, "command-string-output");
+      assert.strictEqual(complete.terminalOutput, "hello\n");
+    });
+
+    test("falls back to key:value format when no known output fields match", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "command-kv-fallback",
+          title: "run command",
+          kind: "execute",
+          status: "completed",
+          rawInput: {
+            command: "test",
+            cwd: "/test/project",
+          },
+          rawOutput: {
+            exit_code: 0,
+            signal: null,
+          },
+        },
+      });
+
+      const complete = messages.find((m) => m.type === "toolCallComplete");
+      assert.ok(complete, "command should complete");
+      assert.strictEqual(complete.toolCallId, "command-kv-fallback");
+      assert.strictEqual(complete.terminalOutput, "exit_code: 0\nsignal: null");
     });
 
     test("uses codex formatted_output as terminal output", async () => {
