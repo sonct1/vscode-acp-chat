@@ -1857,4 +1857,112 @@ suite("ChatViewProvider", () => {
       );
     });
   });
+
+  suite("handleReadTextFile - directory handling", () => {
+    let tmpDir: string;
+    let tmpCleanup: string[] = [];
+
+    setup(async () => {
+      const os = await import("os");
+      const fs = await import("fs/promises");
+      const pathMod = await import("path");
+      tmpDir = await fs.mkdtemp(pathMod.join(os.tmpdir(), "vscode-acp-test-"));
+    });
+
+    teardown(async () => {
+      const fs = await import("fs/promises");
+      for (const p of tmpCleanup) {
+        try {
+          await fs.rm(p, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
+      try {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    });
+
+    function makeProvider(): ChatViewProvider {
+      return new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+    }
+
+    test("should return formatted listing for an empty directory", async () => {
+      const provider = makeProvider();
+      const fileHandler = (provider as any).fileHandler;
+      const handler = fileHandler.handleReadTextFile.bind(fileHandler);
+
+      const result = await handler({ sessionId: "s", path: tmpDir });
+      assert.ok(result.content, "content should be a non-empty string");
+      assert.ok(
+        result.content.includes("[Directory listing for:"),
+        `content should include directory header, got: ${result.content}`
+      );
+      assert.ok(
+        result.content.includes(tmpDir),
+        `content should include the path, got: ${result.content}`
+      );
+      assert.ok(
+        result.content.includes("(empty directory)"),
+        `empty directory should be noted, got: ${result.content}`
+      );
+      assert.ok(
+        result.content.includes("Recursive listing is not supported"),
+        "limitations note should be present"
+      );
+    });
+
+    test("should return formatted listing with metadata for non-empty directory", async () => {
+      const fs = await import("fs/promises");
+      const pathMod = await import("path");
+      const subDir = pathMod.join(tmpDir, "sub");
+      const filePath = pathMod.join(tmpDir, "file.ts");
+      await fs.mkdir(subDir);
+      await fs.writeFile(filePath, "x");
+      await fs.chmod(filePath, 0o444); // readonly
+
+      const provider = makeProvider();
+      const fileHandler = (provider as any).fileHandler;
+      const handler = fileHandler.handleReadTextFile.bind(fileHandler);
+      const result = await handler({ sessionId: "s", path: tmpDir });
+
+      assert.ok(result.content.includes("[DIR] sub"), "sub listed as DIR");
+      assert.ok(
+        result.content.includes("[FILE] file.ts"),
+        "file.ts listed as FILE"
+      );
+      assert.ok(
+        result.content.includes("size="),
+        "size field present in content"
+      );
+      assert.ok(
+        result.content.includes("mtime="),
+        "mtime field present in content"
+      );
+      assert.ok(
+        result.content.includes("perms="),
+        "permissions field present in content"
+      );
+      assert.ok(result.content.includes("Recursive listing is not supported"));
+    });
+
+    test("should still read regular files normally (regression)", async () => {
+      const fs = await import("fs/promises");
+      const pathMod = await import("path");
+      const filePath = pathMod.join(tmpDir, "regular.txt");
+      await fs.writeFile(filePath, "hello world");
+
+      const provider = makeProvider();
+      const fileHandler = (provider as any).fileHandler;
+      const handler = fileHandler.handleReadTextFile.bind(fileHandler);
+      const result = await handler({ sessionId: "s", path: filePath });
+      assert.strictEqual(result.content, "hello world");
+    });
+  });
 });

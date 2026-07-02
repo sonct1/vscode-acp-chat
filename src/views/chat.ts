@@ -1,36 +1,23 @@
 import * as vscode from "vscode";
-import { spawn } from "child_process";
 import { searchWorkspaceFiles } from "../utils/file-search";
 import { getWorkspaceRoot } from "../utils/workspace";
 import { ACPClient, type ContextUsageUpdate } from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
+import { FileHandler } from "../acp/file-handler";
+import { TerminalHandler } from "../acp/terminal-handler";
 import { AgentSessionManager, type SessionInfo } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
 import {
   extractMentions,
   parseMentionsFromText,
 } from "../utils/mention-serializer";
-import type {
-  SessionNotification,
-  ReadTextFileRequest,
-  ReadTextFileResponse,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
-  CreateTerminalRequest,
-  CreateTerminalResponse,
-  TerminalOutputRequest,
-  TerminalOutputResponse,
-  WaitForTerminalExitRequest,
-  WaitForTerminalExitResponse,
-  KillTerminalRequest,
-  KillTerminalResponse,
-  ReleaseTerminalRequest,
-  ReleaseTerminalResponse,
-  RequestPermissionRequest,
-  RequestPermissionResponse,
-  ToolCall,
-  ToolCallUpdate,
+import {
+  type SessionNotification,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type ToolCall,
+  type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
@@ -128,19 +115,6 @@ export interface SelectionMention {
   range?: { startLine: number; endLine: number };
 }
 
-interface ManagedTerminal {
-  id: string;
-  terminal?: vscode.Terminal;
-  proc: ReturnType<typeof spawn> | null;
-  output: string;
-  outputByteLimit: number | null;
-  truncated: boolean;
-  exitCode: number | null;
-  signal: string | null;
-  exitPromise: Promise<void>;
-  exitResolve: () => void;
-}
-
 type FinalToolCallUpdate = (ToolCall | ToolCallUpdate) & {
   status: "completed" | "failed";
 };
@@ -166,7 +140,6 @@ export class ChatViewProvider
   private userMessageBuffer: string = "";
   /** Stores image dataUrl for current user message being reconstructed during history load */
   private userMessageImages: string[] = [];
-  private terminals: Map<string, ManagedTerminal> = new Map();
   private toolCallStartTimes: Map<string, number> = new Map();
   private toolCallRawInputs: Map<string, Record<string, unknown>> = new Map();
   private toolCallRawOutputs: Map<string, unknown> = new Map();
@@ -180,10 +153,10 @@ export class ChatViewProvider
   private toolCallBaseContents: Map<string, Promise<string | undefined>> =
     new Map();
   private pendingToolCalls: Set<string> = new Set();
-  private terminalCounter = 0;
   private textDecoder = new TextDecoder();
-  private textEncoder = new TextEncoder();
   private diffManager: DiffManager;
+  private fileHandler: FileHandler;
+  private terminalHandler: TerminalHandler;
   private documentSyncManager: DocumentSyncManager;
   private permissionQueue: Array<{
     id: string;
@@ -212,6 +185,8 @@ export class ChatViewProvider
   ) {
     this.globalState = globalState;
     this.diffManager = new DiffManager();
+    this.fileHandler = new FileHandler(this.diffManager);
+    this.terminalHandler = new TerminalHandler();
     this.sessionManager = new AgentSessionManager(acpClient);
     this.documentSyncManager = new DocumentSyncManager(acpClient);
 
@@ -261,43 +236,33 @@ export class ChatViewProvider
       this.handleStderr(text);
     });
 
-    this.acpClient.setOnReadTextFile(async (params: ReadTextFileRequest) => {
-      return this.handleReadTextFile(params);
+    this.acpClient.setOnReadTextFile(async (params) => {
+      return this.fileHandler.handleReadTextFile(params);
     });
 
-    this.acpClient.setOnWriteTextFile(async (params: WriteTextFileRequest) => {
-      return this.handleWriteTextFile(params);
+    this.acpClient.setOnWriteTextFile(async (params) => {
+      return this.fileHandler.handleWriteTextFile(params);
     });
 
-    this.acpClient.setOnCreateTerminal(
-      async (params: CreateTerminalRequest) => {
-        return this.handleCreateTerminal(params);
-      }
-    );
+    this.acpClient.setOnCreateTerminal(async (params) => {
+      return this.terminalHandler.handleCreateTerminal(params);
+    });
 
-    this.acpClient.setOnTerminalOutput(
-      async (params: TerminalOutputRequest) => {
-        return this.handleTerminalOutput(params);
-      }
-    );
+    this.acpClient.setOnTerminalOutput(async (params) => {
+      return this.terminalHandler.handleTerminalOutput(params);
+    });
 
-    this.acpClient.setOnWaitForTerminalExit(
-      async (params: WaitForTerminalExitRequest) => {
-        return this.handleWaitForTerminalExit(params);
-      }
-    );
+    this.acpClient.setOnWaitForTerminalExit(async (params) => {
+      return this.terminalHandler.handleWaitForTerminalExit(params);
+    });
 
-    this.acpClient.setOnKillTerminalCommand(
-      async (params: KillTerminalRequest) => {
-        return this.handleKillTerminalCommand(params);
-      }
-    );
+    this.acpClient.setOnKillTerminalCommand(async (params) => {
+      return this.terminalHandler.handleKillTerminalCommand(params);
+    });
 
-    this.acpClient.setOnReleaseTerminal(
-      async (params: ReleaseTerminalRequest) => {
-        return this.handleReleaseTerminal(params);
-      }
-    );
+    this.acpClient.setOnReleaseTerminal(async (params) => {
+      return this.terminalHandler.handleReleaseTerminal(params);
+    });
 
     this.acpClient.setOnPermissionRequest(
       this.handlePermissionRequest.bind(this)
@@ -781,274 +746,6 @@ export class ChatViewProvider
     }
   }
 
-  private async handleReadTextFile(
-    params: ReadTextFileRequest
-  ): Promise<ReadTextFileResponse> {
-    try {
-      const uri = vscode.Uri.file(params.path);
-      const openDoc = vscode.workspace.textDocuments.find(
-        (doc) => doc.uri.fsPath === uri.fsPath
-      );
-
-      let content: string;
-      if (openDoc) {
-        content = openDoc.getText();
-      } else {
-        try {
-          const fileContent = await vscode.workspace.fs.readFile(uri);
-          content = this.textDecoder.decode(fileContent);
-        } catch (readError) {
-          // Return empty string when file doesn't exist, instead of throwing error
-          // This prevents gemini-cli from showing "Internal error" when checking new files
-          // VSCode filesystem errors typically contain ENOENT or "File not found"
-          const errorMessage =
-            readError instanceof Error ? readError.message : String(readError);
-          if (
-            errorMessage.includes("ENOENT") ||
-            errorMessage.includes("File not found") ||
-            errorMessage.includes("no such file")
-          ) {
-            content = "";
-          } else {
-            throw readError;
-          }
-        }
-      }
-
-      if (params.line !== undefined || params.limit !== undefined) {
-        const lines = content.split("\n");
-        const startLine = params.line ?? 0;
-        const lineLimit = params.limit ?? lines.length;
-        const selectedLines = lines.slice(startLine, startLine + lineLimit);
-        content = selectedLines.join("\n");
-      }
-
-      return { content };
-    } catch (error) {
-      console.error("[Chat] Failed to read file:", error);
-      throw error;
-    }
-  }
-
-  private lastFileContents: Map<string, string | null> = new Map();
-
-  private async handleWriteTextFile(
-    params: WriteTextFileRequest
-  ): Promise<WriteTextFileResponse> {
-    try {
-      const uri = vscode.Uri.file(params.path);
-
-      let oldContent: string | null = null;
-      // Capture old content for diffing in webview (fallback for missing tool_call_update)
-      try {
-        const fileContent = await vscode.workspace.fs.readFile(uri);
-        oldContent = this.textDecoder.decode(fileContent);
-        this.lastFileContents.set(params.path, oldContent);
-      } catch {
-        // Use null to indicate a new file (vs undefined which means not yet captured)
-        this.lastFileContents.set(params.path, null);
-      }
-
-      const content = this.textEncoder.encode(params.content);
-      await vscode.workspace.fs.writeFile(uri, content);
-
-      // Record change in diffManager
-      this.diffManager.recordChange(params.path, oldContent, params.content);
-
-      return {};
-    } catch (error) {
-      console.error("[Chat] Failed to write file:", error);
-      throw error;
-    }
-  }
-
-  private async handleCreateTerminal(
-    params: CreateTerminalRequest
-  ): Promise<CreateTerminalResponse> {
-    const terminalId = `term-${++this.terminalCounter}-${Date.now()}`;
-
-    let exitResolve: () => void = () => {};
-    const exitPromise = new Promise<void>((resolve) => {
-      exitResolve = resolve;
-    });
-
-    const managedTerminal: ManagedTerminal = {
-      id: terminalId,
-      proc: null,
-      output: "",
-      outputByteLimit: params.outputByteLimit ?? null,
-      truncated: false,
-      exitCode: null,
-      signal: null,
-      exitPromise,
-      exitResolve,
-    };
-
-    const writeEmitter = new vscode.EventEmitter<string>();
-    const closeEmitter = new vscode.EventEmitter<number | void>();
-
-    const pty: vscode.Pseudoterminal = {
-      onDidWrite: writeEmitter.event,
-      onDidClose: closeEmitter.event,
-      open: () => {
-        const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const cwd =
-          params.cwd && params.cwd.trim() !== ""
-            ? params.cwd
-            : workspaceCwd ||
-              process.env.HOME ||
-              process.env.USERPROFILE ||
-              process.cwd();
-
-        const proc = spawn(params.command, params.args || [], {
-          cwd,
-          env: {
-            ...process.env,
-            ...(params.env?.reduce(
-              (acc, e) => ({ ...acc, [e.name]: e.value }),
-              {}
-            ) || {}),
-          },
-          shell: true,
-        });
-
-        managedTerminal.proc = proc;
-
-        proc.stdout?.on("data", (data: Buffer) => {
-          const text = data.toString();
-          writeEmitter.fire(text.replace(/\n/g, "\r\n"));
-          this.appendTerminalOutput(managedTerminal, text);
-        });
-
-        proc.stderr?.on("data", (data: Buffer) => {
-          const text = data.toString();
-          writeEmitter.fire(text.replace(/\n/g, "\r\n"));
-          this.appendTerminalOutput(managedTerminal, text);
-        });
-
-        proc.on("close", (code: number | null, signal: string | null) => {
-          managedTerminal.exitCode = code;
-          managedTerminal.signal = signal;
-          managedTerminal.exitResolve();
-          closeEmitter.fire(code ?? 0);
-        });
-
-        proc.on("error", (err: Error) => {
-          writeEmitter.fire(`\r\nError: ${err.message}\r\n`);
-          managedTerminal.exitCode = 1;
-          managedTerminal.exitResolve();
-          closeEmitter.fire(1);
-        });
-      },
-      close: () => {
-        if (managedTerminal.proc && !managedTerminal.proc.killed) {
-          try {
-            managedTerminal.proc.kill();
-          } catch {}
-        }
-      },
-    };
-
-    const terminal = vscode.window.createTerminal({
-      name: `ACP: ${params.command}`,
-      pty,
-    });
-
-    managedTerminal.terminal = terminal;
-    this.terminals.set(terminalId, managedTerminal);
-
-    terminal.show(true);
-
-    return { terminalId };
-  }
-
-  private appendTerminalOutput(terminal: ManagedTerminal, text: string): void {
-    terminal.output += text;
-    if (terminal.outputByteLimit !== null) {
-      const byteLength = Buffer.byteLength(terminal.output, "utf8");
-      if (byteLength > terminal.outputByteLimit) {
-        const encoded = Buffer.from(terminal.output, "utf8");
-        const sliced = encoded.slice(-terminal.outputByteLimit);
-        terminal.output = sliced.toString("utf8");
-        terminal.truncated = true;
-      }
-    }
-  }
-
-  private async handleTerminalOutput(
-    params: TerminalOutputRequest
-  ): Promise<TerminalOutputResponse> {
-    const terminal = this.terminals.get(params.terminalId);
-    if (!terminal) {
-      throw new Error(`Terminal not found: ${params.terminalId}`);
-    }
-
-    const exitStatus =
-      terminal.exitCode !== null
-        ? {
-            exitCode: terminal.exitCode,
-            ...(terminal.signal !== null && { signal: terminal.signal }),
-          }
-        : null;
-
-    return {
-      output: terminal.output,
-      truncated: terminal.truncated,
-      exitStatus,
-    };
-  }
-
-  private async handleWaitForTerminalExit(
-    params: WaitForTerminalExitRequest
-  ): Promise<WaitForTerminalExitResponse> {
-    const terminal = this.terminals.get(params.terminalId);
-    if (!terminal) {
-      throw new Error(`Terminal not found: ${params.terminalId}`);
-    }
-
-    await terminal.exitPromise;
-
-    return {
-      exitCode: terminal.exitCode,
-      ...(terminal.signal !== null && { signal: terminal.signal }),
-    };
-  }
-
-  private killTerminalProcess(terminal: ManagedTerminal): void {
-    if (terminal.proc && !terminal.proc.killed) {
-      try {
-        terminal.proc.kill();
-      } catch {}
-    }
-  }
-
-  private async handleKillTerminalCommand(
-    params: KillTerminalRequest
-  ): Promise<KillTerminalResponse> {
-    const terminal = this.terminals.get(params.terminalId);
-    if (!terminal) {
-      throw new Error(`Terminal not found: ${params.terminalId}`);
-    }
-
-    this.killTerminalProcess(terminal);
-    terminal.terminal?.dispose();
-    return {};
-  }
-
-  private async handleReleaseTerminal(
-    params: ReleaseTerminalRequest
-  ): Promise<ReleaseTerminalResponse> {
-    const terminal = this.terminals.get(params.terminalId);
-    if (!terminal) {
-      return {};
-    }
-
-    this.killTerminalProcess(terminal);
-    terminal.terminal?.dispose();
-    this.terminals.delete(params.terminalId);
-    return {};
-  }
-
   private async handlePermissionRequest(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
@@ -1111,7 +808,7 @@ export class ChatViewProvider
     this.toolCallLocations.clear();
     this.toolCallTerminalOutputs.clear();
     this.toolCallBaseContents.clear();
-    this.lastFileContents.clear();
+    this.fileHandler.clearLastFileContents();
     this.pendingToolCalls.clear();
   }
 
@@ -1310,10 +1007,9 @@ export class ChatViewProvider
       // Prefer pre-write snapshot from handleWriteTextFile (captured right
       // before the disk write). This avoids a race where captureBaseContent
       // reads the file AFTER the write has already landed.
-      if (this.lastFileContents.has(path)) {
-        const captured = this.lastFileContents.get(path);
+      const captured = this.fileHandler.getLastFileContent(path);
+      if (captured !== undefined) {
         oldText = captured ?? undefined;
-        this.lastFileContents.delete(path);
       } else {
         const oldTextPromise = this.toolCallBaseContents.get(update.toolCallId);
         oldText = oldTextPromise ? await oldTextPromise : undefined;
@@ -1456,13 +1152,8 @@ export class ChatViewProvider
     if (this.documentSyncManager) {
       this.documentSyncManager.dispose();
     }
-    for (const terminal of this.terminals.values()) {
-      this.killTerminalProcess(terminal);
-      try {
-        terminal.terminal?.dispose();
-      } catch {}
-    }
-    this.terminals.clear();
+    this.fileHandler.dispose();
+    this.terminalHandler.dispose();
     this.clearToolCallMetadata();
   }
 
