@@ -75,8 +75,12 @@ export interface LoadSessionResult {
 
 /** Pluggable storage for local session records. */
 export interface SessionStore {
+  /** Read all sessions from the store. */
   read(): Promise<StoredSessionRecord[]>;
-  write(sessions: StoredSessionRecord[]): Promise<void>;
+  /** Read a single session by ID, or undefined if not found. */
+  readOne(sessionId: string): Promise<StoredSessionRecord | undefined>;
+  /** Write or update a single session. */
+  writeOne(session: StoredSessionRecord): Promise<void>;
 }
 
 /**
@@ -94,20 +98,59 @@ export type SessionStoreFactory = (agentId: string) => SessionStore;
 /**
  * Create a `SessionStore` backed by VS Code's `globalState` Memento.
  *
- * The store is scoped to a single key and transparently serializes the
- * session array as JSON. The factory returns a plain object so callers can
- * pass it to `AgentSessionManager` without depending on VS Code directly.
+ * Each session is stored under a separate key (`<prefix>.<sessionId>`) with an
+ * in-memory cache and debounced writes for high-frequency updates.
  */
 export function globalStateSessionStore(
   globalState: vscode.Memento,
-  key: string
+  prefix: string
 ): SessionStore {
+  const cache = new Map<string, StoredSessionRecord>();
+  const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+  const WRITE_DEBOUNCE_MS = 1000;
+
+  function scheduleFlush(sessionId: string): void {
+    const existing = pendingWrites.get(sessionId);
+    if (existing) clearTimeout(existing);
+    pendingWrites.set(
+      sessionId,
+      setTimeout(() => {
+        pendingWrites.delete(sessionId);
+        const record = cache.get(sessionId);
+        if (record) {
+          globalState.update(`${prefix}.${sessionId}`, record);
+        }
+      }, WRITE_DEBOUNCE_MS)
+    );
+  }
+
   return {
     async read(): Promise<StoredSessionRecord[]> {
-      return globalState.get<StoredSessionRecord[]>(key, []);
+      if (cache.size === 0) {
+        // Cold start: scan keys with prefix
+        const keys = globalState
+          .keys()
+          .filter((k) => k.startsWith(`${prefix}.`));
+        for (const key of keys) {
+          const record = globalState.get<StoredSessionRecord>(key);
+          if (record) cache.set(record.sessionId, record);
+        }
+      }
+      return Array.from(cache.values());
     },
-    async write(sessions: StoredSessionRecord[]): Promise<void> {
-      await globalState.update(key, sessions);
+
+    async readOne(sessionId: string): Promise<StoredSessionRecord | undefined> {
+      let record = cache.get(sessionId);
+      if (!record) {
+        record = globalState.get<StoredSessionRecord>(`${prefix}.${sessionId}`);
+        if (record) cache.set(sessionId, record);
+      }
+      return record;
+    },
+
+    async writeOne(session: StoredSessionRecord): Promise<void> {
+      cache.set(session.sessionId, session);
+      scheduleFlush(session.sessionId);
     },
   };
 }
@@ -256,20 +299,17 @@ export class AgentSessionManager extends SessionManager {
   ): Promise<void> {
     const now = new Date().toISOString();
     const store = this.getStore();
-    const sessions = await store.read();
+    const existing = await store.readOne(sessionId);
 
-    const existingIndex = sessions.findIndex((s) => s.sessionId === sessionId);
-
-    if (existingIndex >= 0) {
-      // Refresh timestamps but preserve existing title unless explicitly provided.
-      const existing = sessions[existingIndex];
+    if (existing) {
       existing.cwd = cwd;
       existing.updatedAt = now;
       if (title !== undefined) {
         existing.title = title;
       }
+      await store.writeOne(existing);
     } else {
-      sessions.push({
+      await store.writeOne({
         sessionId,
         title: title ?? `Session ${sessionId}`,
         cwd,
@@ -277,8 +317,6 @@ export class AgentSessionManager extends SessionManager {
         updatedAt: now,
       });
     }
-
-    await store.write(sessions);
   }
 
   /**
@@ -291,8 +329,7 @@ export class AgentSessionManager extends SessionManager {
     sessionId: string
   ): Promise<void> {
     const store = this.getStore();
-    const sessions = await store.read();
-    const session = sessions.find((s) => s.sessionId === sessionId);
+    const session = await store.readOne(sessionId);
 
     if (!session) {
       return;
@@ -305,7 +342,7 @@ export class AgentSessionManager extends SessionManager {
       session.updatedAt = update.updatedAt ?? session.updatedAt;
     }
 
-    await store.write(sessions);
+    await store.writeOne(session);
   }
 
   /**
