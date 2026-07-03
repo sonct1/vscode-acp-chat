@@ -984,6 +984,222 @@ suite("Webview", () => {
         );
       });
 
+      test("keeps multiple concurrent tool blocks expanded while running", () => {
+        controller.handleMessage({ type: "streamStart" });
+
+        // Start multiple tool calls concurrently
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-1",
+          name: "Read file",
+          kind: "read",
+        });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-2",
+          name: "Search files",
+          kind: "search",
+        });
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-3",
+          name: "Run command",
+          kind: "execute",
+        });
+
+        // All tool blocks should be expanded (have open attribute)
+        const toolBlocks = elements.messagesEl.querySelectorAll(".tool-item");
+        assert.strictEqual(toolBlocks.length, 3);
+        assert.strictEqual(
+          toolBlocks[0].getAttribute("open"),
+          "",
+          "First tool should be expanded"
+        );
+        assert.strictEqual(
+          toolBlocks[1].getAttribute("open"),
+          "",
+          "Second tool should be expanded"
+        );
+        assert.strictEqual(
+          toolBlocks[2].getAttribute("open"),
+          "",
+          "Third tool should be expanded"
+        );
+
+        // All should show running status
+        const runningStatuses = elements.messagesEl.querySelectorAll(
+          ".tool-status.running"
+        );
+        assert.strictEqual(
+          runningStatuses.length,
+          3,
+          "All tools should show running status"
+        );
+      });
+
+      test("explicit in_progress status keeps tool block expanded", () => {
+        controller.handleMessage({ type: "streamStart" });
+
+        // Start a tool and explicitly set in_progress status
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-in-progress-1",
+          name: "Read file",
+          kind: "read",
+          status: "in_progress",
+        });
+
+        // Start another tool to trigger finalizeActiveBlocksExcept
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-in-progress-2",
+          name: "Search",
+          kind: "search",
+        });
+
+        // Both tools should be expanded
+        const toolBlocks = elements.messagesEl.querySelectorAll(".tool-item");
+        assert.strictEqual(toolBlocks.length, 2);
+        assert.strictEqual(
+          toolBlocks[0].getAttribute("open"),
+          "",
+          "Explicit in_progress tool should stay expanded"
+        );
+        assert.strictEqual(
+          toolBlocks[1].getAttribute("open"),
+          "",
+          "Second tool should be expanded"
+        );
+      });
+
+      test("completed non-special tool blocks are closed after completion", () => {
+        controller.handleMessage({ type: "streamStart" });
+
+        // Start a read tool (non-special type)
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-read-1",
+          name: "Read file",
+          kind: "read",
+        });
+
+        // Tool should be expanded while running
+        let toolBlock = elements.messagesEl.querySelector(".tool-item");
+        assert.strictEqual(
+          toolBlock?.getAttribute("open"),
+          "",
+          "Tool should be expanded while running"
+        );
+
+        // Complete the tool
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-read-1",
+          status: "completed",
+          rawOutput: { output: "file content" },
+        });
+
+        // Non-special completed tool should be closed
+        toolBlock = elements.messagesEl.querySelector(".tool-item");
+        assert.strictEqual(
+          toolBlock?.getAttribute("open"),
+          null,
+          "Completed read tool should be closed"
+        );
+      });
+
+      test("completed edit/write/execute tool blocks stay expanded", () => {
+        controller.handleMessage({ type: "streamStart" });
+
+        // Start and complete an edit tool
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-edit-1",
+          name: "Edit file",
+          kind: "edit",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-edit-1",
+          status: "completed",
+        });
+
+        // Start and complete a write tool
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-write-1",
+          name: "Write file",
+          kind: "write",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-write-1",
+          status: "completed",
+        });
+
+        // Start and complete an execute tool
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-exec-1",
+          name: "Run command",
+          kind: "execute",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-exec-1",
+          status: "completed",
+        });
+
+        // All special tools should stay expanded
+        const toolBlocks = elements.messagesEl.querySelectorAll(".tool-item");
+        assert.strictEqual(toolBlocks.length, 3);
+        assert.strictEqual(
+          toolBlocks[0].getAttribute("open"),
+          "",
+          "Edit tool should stay expanded"
+        );
+        assert.strictEqual(
+          toolBlocks[1].getAttribute("open"),
+          "",
+          "Write tool should stay expanded"
+        );
+        assert.strictEqual(
+          toolBlocks[2].getAttribute("open"),
+          "",
+          "Execute tool should stay expanded"
+        );
+      });
+
+      test("failed tool blocks stay expanded regardless of type", () => {
+        controller.handleMessage({ type: "streamStart" });
+
+        // Start and fail a read tool
+        controller.handleMessage({
+          type: "toolCallStart",
+          toolCallId: "tool-fail-1",
+          name: "Read file",
+          kind: "read",
+        });
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-fail-1",
+          status: "failed",
+          rawOutput: { output: "Error: file not found" },
+        });
+
+        // Failed tool should stay expanded
+        const toolBlock = elements.messagesEl.querySelector(".tool-item");
+        assert.strictEqual(
+          toolBlock?.getAttribute("open"),
+          "",
+          "Failed tool should stay expanded"
+        );
+        assert.ok(
+          toolBlock?.classList.contains("tool-failed"),
+          "Failed tool should have tool-failed class"
+        );
+      });
+
       test("handles streaming", () => {
         controller.handleMessage({ type: "streamStart" });
         controller.handleMessage({ type: "streamChunk", text: "Hello " });

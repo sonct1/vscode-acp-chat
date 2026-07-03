@@ -2078,6 +2078,11 @@ export class WebviewController {
     } else if (block.type === "tool") {
       const details = block.element.querySelector("details");
       if (details) {
+        // Don't close running tool blocks - they should stay expanded
+        if (!block.status || block.status === "in_progress") {
+          return;
+        }
+
         // Keep edit/write/execute tools open if they are completed successfully
         const isWriteOrEdit = block.kind === "edit" || block.kind === "write";
         const isExecute = block.kind === "execute";
