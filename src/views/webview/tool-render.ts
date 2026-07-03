@@ -319,11 +319,13 @@ const BaseRenderer: ToolRenderer = {
     const identifier = getIdentifier(info);
 
     let kindLabel = normalizeKindLabel(kind);
+    // Suppress the generic "Other:" prefix since it carries no useful meaning to the user.
+    const hideKindLabel = kindLabel === "Other";
 
     return `
       ${statusIcon}
       ${icon ? `<span class="tool-kind-icon">${icon}</span> ` : ""}
-      <span class="tool-name"><strong>${kindLabel}:</strong> ${escapeHtml(identifier)}${durationStr}</span>
+      <span class="tool-name">${hideKindLabel ? "" : `<strong>${kindLabel}:</strong> `}${escapeHtml(identifier)}${durationStr}</span>
     `;
   },
 
