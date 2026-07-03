@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.14.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.13.1...v1.14.0) (2026-07-03)
+
+### Features
+
+- **webview:** show line range in read tool summary ([c62646d](https://github.com/pengjiantao/vscode-acp-chat/commit/c62646d5aabecb780e2ea49c0a282e08409fe77d))
+
+### Bug Fixes
+
+- 修复命令输出 ANSI 渲染 ([b71e0dc](https://github.com/pengjiantao/vscode-acp-chat/commit/b71e0dc44cac5726f92d9fbe13ac966d72532910))
+
+### Code Refactoring
+
+- remove messageId stream tracking, simplify block management ([f656f14](https://github.com/pengjiantao/vscode-acp-chat/commit/f656f1410e3991e06ff24f6723a3a05356a21f46))
+
 ### [1.13.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.13.0...v1.13.1) (2026-07-03)
 
 ### Bug Fixes
