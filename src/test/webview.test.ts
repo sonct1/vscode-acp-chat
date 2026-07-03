@@ -1,17 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import { JSDOM, DOMWindow } from "jsdom";
 import {
-  escapeHtml,
   getElements,
   WebviewController,
   initWebview,
-  ansiToHtml,
-  hasAnsiCodes,
   renderDiff,
   type VsCodeApi,
   type WebviewElements,
 } from "../views/webview/main";
+import { ansiToHtml, hasAnsiCodes } from "../views/webview/ansi-render";
+import { escapeHtml } from "../views/webview/html-utils";
 import {
   renderToolSummary,
   renderToolDetails,
@@ -2734,6 +2735,10 @@ suite("Webview", () => {
       assert.strictEqual(hasAnsiCodes("plain text"), false);
     });
 
+    test("returns false for plain plus-bracket text", () => {
+      assert.strictEqual(hasAnsiCodes("array +[value]"), false);
+    });
+
     test("returns false for empty string", () => {
       assert.strictEqual(hasAnsiCodes(""), false);
     });
@@ -2752,6 +2757,10 @@ suite("Webview", () => {
     test("returns true for plus-bracket bold ANSI code", () => {
       assert.strictEqual(hasAnsiCodes("+[1mbold+[0m"), true);
     });
+
+    test("returns true for terminal cursor and erase control codes", () => {
+      assert.strictEqual(hasAnsiCodes("\x1b[2K\x1b[1Gready"), true);
+    });
   });
 
   suite("ansiToHtml", () => {
@@ -2761,6 +2770,10 @@ suite("Webview", () => {
 
     test("escapes HTML in plain text", () => {
       assert.strictEqual(ansiToHtml("<script>"), "&lt;script&gt;");
+    });
+
+    test("preserves plain plus-bracket text", () => {
+      assert.strictEqual(ansiToHtml("array +[value]"), "array +[value]");
     });
 
     test("converts red foreground color", () => {
@@ -2871,6 +2884,28 @@ suite("Webview", () => {
       assert.ok(result.includes('class="ansi-bold"'));
       assert.ok(result.includes("bold"));
     });
+
+    test("normalizes vitest-style terminal control sequences", () => {
+      const result = ansiToHtml(
+        [
+          "\x1b[?25l\x1b[36m DEV \x1b[39m /repo",
+          "\x1b[2K\x1b[1G\x1b[31m> src/test/webview.test.ts\x1b[39m (0 test)",
+          "progress 10%\rprogress 100%",
+          "\x1b[?25h",
+        ].join("\n")
+      );
+
+      assert.ok(result.includes('class="ansi-cyan"'));
+      assert.ok(result.includes(" DEV "));
+      assert.ok(result.includes('class="ansi-red"'));
+      assert.ok(result.includes("&gt; src/test/webview.test.ts"));
+      assert.ok(result.includes("progress 100%"));
+      assert.ok(!result.includes("progress 10%"));
+      assert.ok(!result.includes("[2K"));
+      assert.ok(!result.includes("[1G"));
+      assert.ok(!result.includes("?25"));
+      assert.ok(!result.includes("\x1b"));
+    });
   });
 
   suite("renderToolDetails with ANSI and XSS", () => {
@@ -2896,6 +2931,40 @@ suite("Webview", () => {
       });
       assert.ok(html.includes("&lt;error&gt;"));
       assert.ok(html.includes('class="ansi-red"'));
+    });
+
+    test("renders terminal output with non-color control codes safely", () => {
+      const html = renderToolDetails({
+        toolCallId: "tool-1",
+        title: "test",
+        kind: "execute",
+        status: "completed",
+        terminalOutput: "\x1b[2K\x1b[1Gdone",
+      });
+
+      assert.ok(html.includes('class="tool-output terminal"'));
+      assert.ok(html.includes("done"));
+      assert.ok(!html.includes("[2K"));
+      assert.ok(!html.includes("[1G"));
+      assert.ok(!html.includes("\x1b"));
+    });
+  });
+
+  suite("tool output typography CSS", () => {
+    test("keeps terminal output on the monospace command-output font stack", () => {
+      const css = fs.readFileSync(
+        path.resolve(process.cwd(), "media", "main.css"),
+        "utf8"
+      );
+      const dom = new JSDOM(
+        `<!DOCTYPE html><style>${css}</style><pre class="tool-output terminal">abc</pre>`
+      );
+      const output = dom.window.document.querySelector(".tool-output.terminal");
+      assert.ok(output);
+
+      const fontFamily = dom.window.getComputedStyle(output).fontFamily;
+      assert.ok(fontFamily.includes("--vscode-editor-font-family"));
+      assert.ok(fontFamily.includes("monospace"));
     });
   });
 

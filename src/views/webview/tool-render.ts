@@ -1,11 +1,6 @@
-import {
-  ToolKind,
-  ToolCallSummary,
-  escapeHtml,
-  renderDiff,
-  hasAnsiCodes,
-  ansiToHtml,
-} from "./main";
+import { ToolKind, ToolCallSummary, renderDiff } from "./main";
+import { hasAnsiCodes, ansiToHtml } from "./ansi-render";
+import { escapeHtml } from "./html-utils";
 
 export interface ToolRenderer {
   renderSummary(info: ToolCallSummary): string;

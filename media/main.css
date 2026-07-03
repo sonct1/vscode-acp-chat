@@ -2513,7 +2513,6 @@ kbd {
 }
 
 .tool-output.terminal {
-  font-family: var(--vscode-terminal-font-family);
   font-size: 11px;
 }
 
