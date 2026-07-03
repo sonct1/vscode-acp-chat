@@ -322,13 +322,7 @@ suite("SessionManager", () => {
       });
 
       test("should isolate sessions per agent", async () => {
-        const stores = new Map<string, SessionStore>();
-        const factory = (agentId: string) => {
-          if (!stores.has(agentId)) {
-            stores.set(agentId, inMemorySessionStore());
-          }
-          return stores.get(agentId)!;
-        };
+        const factory = () => inMemorySessionStore();
 
         const noListSpawn = (
           _command: string,

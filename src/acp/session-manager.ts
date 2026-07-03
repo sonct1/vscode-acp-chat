@@ -207,6 +207,7 @@ export class AgentSessionManager extends SessionManager {
   private _supportsLoadSession = false;
   private _supportsListSessions = false;
   private _initialized = false;
+  private readonly _stores = new Map<string, SessionStore>();
 
   constructor(
     private readonly acpClient: IACPClient,
@@ -216,7 +217,13 @@ export class AgentSessionManager extends SessionManager {
   }
 
   private getStore(): SessionStore {
-    return this.storeFactory(this.acpClient.getAgentId());
+    const agentId = this.acpClient.getAgentId();
+    let store = this._stores.get(agentId);
+    if (!store) {
+      store = this.storeFactory(agentId);
+      this._stores.set(agentId, store);
+    }
+    return store;
   }
 
   /** Call after `acpClient.connect()` to read the agent capabilities. */
