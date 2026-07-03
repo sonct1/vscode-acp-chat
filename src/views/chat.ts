@@ -136,6 +136,18 @@ type ToolCallMetadataUpdate = Pick<ToolCall | ToolCallUpdate, "toolCallId"> &
     >
   >;
 
+interface ToolCallState {
+  pending?: boolean;
+  startTime?: number;
+  rawInput?: Record<string, unknown>;
+  rawOutput?: unknown;
+  kind?: string;
+  title?: string;
+  content?: ToolCall["content"];
+  locations?: ToolCall["locations"];
+  baseContent?: Promise<string | undefined>;
+}
+
 export class ChatViewProvider
   implements vscode.WebviewViewProvider, vscode.TextDocumentContentProvider
 {
@@ -149,16 +161,7 @@ export class ChatViewProvider
   private userMessageBuffer: string = "";
   /** Stores image dataUrl for current user message being reconstructed during history load */
   private userMessageImages: string[] = [];
-  private toolCallStartTimes: Map<string, number> = new Map();
-  private toolCallRawInputs: Map<string, Record<string, unknown>> = new Map();
-  private toolCallRawOutputs: Map<string, unknown> = new Map();
-  private toolCallKinds: Map<string, string> = new Map();
-  private toolCallTitles: Map<string, string> = new Map();
-  private toolCallContents: Map<string, ToolCall["content"]> = new Map();
-  private toolCallLocations: Map<string, ToolCall["locations"]> = new Map();
-  private toolCallBaseContents: Map<string, Promise<string | undefined>> =
-    new Map();
-  private pendingToolCalls: Set<string> = new Set();
+  private toolCalls: Map<string, ToolCallState> = new Map();
   private textDecoder = new TextDecoder();
   private diffManager: DiffManager;
   private fileHandler: FileHandler;
@@ -773,7 +776,7 @@ export class ChatViewProvider
       });
 
       if (params.toolCall?.toolCallId) {
-        this.pendingToolCalls.add(params.toolCall.toolCallId);
+        this.markToolCallPending(params.toolCall.toolCallId);
         this.postMessage({
           type: "toolCallStart",
           name: params.toolCall.title || "Tool",
@@ -812,28 +815,37 @@ export class ChatViewProvider
   }
 
   private clearToolCallMetadata(): void {
-    this.toolCallStartTimes.clear();
-    this.toolCallRawInputs.clear();
-    this.toolCallRawOutputs.clear();
-    this.toolCallKinds.clear();
-    this.toolCallTitles.clear();
-    this.toolCallContents.clear();
-    this.toolCallLocations.clear();
-    this.toolCallBaseContents.clear();
+    this.toolCalls.clear();
     this.fileHandler.clearLastFileContents();
-    this.pendingToolCalls.clear();
   }
 
   private cleanupToolCall(toolCallId: string): void {
-    this.toolCallStartTimes.delete(toolCallId);
-    this.toolCallRawInputs.delete(toolCallId);
-    this.toolCallRawOutputs.delete(toolCallId);
-    this.toolCallKinds.delete(toolCallId);
-    this.toolCallTitles.delete(toolCallId);
-    this.toolCallContents.delete(toolCallId);
-    this.toolCallLocations.delete(toolCallId);
-    this.toolCallBaseContents.delete(toolCallId);
-    this.pendingToolCalls.delete(toolCallId);
+    this.toolCalls.delete(toolCallId);
+  }
+
+  private getToolCallState(toolCallId: string): ToolCallState {
+    let state = this.toolCalls.get(toolCallId);
+    if (!state) {
+      state = {};
+      this.toolCalls.set(toolCallId, state);
+    }
+    return state;
+  }
+
+  private markToolCallPending(toolCallId: string): ToolCallState {
+    const state = this.getToolCallState(toolCallId);
+    state.pending = true;
+    return state;
+  }
+
+  private isToolCallPending(toolCallId: string): boolean {
+    return this.toolCalls.get(toolCallId)?.pending === true;
+  }
+
+  private getPendingToolCallIds(): string[] {
+    return Array.from(this.toolCalls.entries())
+      .filter(([, state]) => state.pending)
+      .map(([toolCallId]) => toolCallId);
   }
 
   private isFinalToolCall(
@@ -904,27 +916,28 @@ export class ChatViewProvider
     update: ToolCallMetadataUpdate,
     resetStartTime = false
   ): void {
+    const state = this.getToolCallState(update.toolCallId);
     const rawInput = this.asToolCallRawInput(update.rawInput);
     if (rawInput) {
-      this.toolCallRawInputs.set(update.toolCallId, rawInput);
+      state.rawInput = rawInput;
     }
     if (update.rawOutput !== undefined) {
-      this.toolCallRawOutputs.set(update.toolCallId, update.rawOutput);
+      state.rawOutput = update.rawOutput;
     }
     if (typeof update.kind === "string") {
-      this.toolCallKinds.set(update.toolCallId, update.kind);
+      state.kind = update.kind;
     }
     if (typeof update.title === "string") {
-      this.toolCallTitles.set(update.toolCallId, update.title);
+      state.title = update.title;
     }
     if (Array.isArray(update.content)) {
-      this.toolCallContents.set(update.toolCallId, update.content);
+      state.content = update.content;
     }
     if (Array.isArray(update.locations)) {
-      this.toolCallLocations.set(update.toolCallId, update.locations);
+      state.locations = update.locations;
     }
-    if (resetStartTime || !this.toolCallStartTimes.has(update.toolCallId)) {
-      this.toolCallStartTimes.set(update.toolCallId, Date.now());
+    if (resetStartTime || state.startTime === undefined) {
+      state.startTime = Date.now();
     }
   }
 
@@ -934,37 +947,32 @@ export class ChatViewProvider
       "toolCallId" | "rawInput" | "kind" | "title"
     >
   ): void {
-    if (this.toolCallBaseContents.has(update.toolCallId)) {
+    const state = this.getToolCallState(update.toolCallId);
+    if (state.baseContent) {
       return;
     }
 
-    const rawInput =
-      this.asToolCallRawInput(update.rawInput) ||
-      this.toolCallRawInputs.get(update.toolCallId);
+    const rawInput = this.asToolCallRawInput(update.rawInput) || state.rawInput;
     const path = this.extractPath(rawInput);
     if (!path) {
       return;
     }
 
-    const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
-    const title = update.title || this.toolCallTitles.get(update.toolCallId);
-    const capturePromise = this.captureBaseContent(kind, title, rawInput);
-    this.toolCallBaseContents.set(update.toolCallId, capturePromise);
+    const kind = update.kind || state.kind;
+    const title = update.title || state.title;
+    state.baseContent = this.captureBaseContent(kind, title, rawInput);
   }
 
   private async completeToolCall(update: FinalToolCallUpdate): Promise<void> {
-    if (!this.pendingToolCalls.has(update.toolCallId)) {
+    if (!this.isToolCallPending(update.toolCallId)) {
       return;
     }
 
-    let content =
-      update.content ?? this.toolCallContents.get(update.toolCallId);
+    const state = this.getToolCallState(update.toolCallId);
+    let content = update.content ?? state.content;
     const rawOutput =
-      update.rawOutput !== undefined
-        ? update.rawOutput
-        : this.toolCallRawOutputs.get(update.toolCallId);
-    const locations =
-      update.locations ?? this.toolCallLocations.get(update.toolCallId);
+      update.rawOutput !== undefined ? update.rawOutput : state.rawOutput;
+    const locations = update.locations ?? state.locations;
     let terminalOutput = this.extractRawOutputText(rawOutput);
 
     if (!terminalOutput && content && content.length > 0) {
@@ -977,13 +985,11 @@ export class ChatViewProvider
     }
 
     // Enrich with diff if it's a file modification and missing
-    const rawInput =
-      this.asToolCallRawInput(update.rawInput) ||
-      this.toolCallRawInputs.get(update.toolCallId);
+    const rawInput = this.asToolCallRawInput(update.rawInput) || state.rawInput;
     const path = this.extractPath(rawInput);
 
-    const kind = update.kind || this.toolCallKinds.get(update.toolCallId);
-    const title = update.title || this.toolCallTitles.get(update.toolCallId);
+    const kind = update.kind || state.kind;
+    const title = update.title || state.title;
 
     if (
       typeof path === "string" &&
@@ -1001,10 +1007,10 @@ export class ChatViewProvider
       if (captured !== undefined) {
         oldText = captured ?? undefined;
       } else {
-        const oldTextPromise = this.toolCallBaseContents.get(update.toolCallId);
+        const oldTextPromise = state.baseContent;
         oldText = oldTextPromise ? await oldTextPromise : undefined;
 
-        if (!this.pendingToolCalls.has(update.toolCallId)) {
+        if (!this.isToolCallPending(update.toolCallId)) {
           return;
         }
 
@@ -1015,7 +1021,7 @@ export class ChatViewProvider
         // equal to newText and producing an empty diff.
         if (oldText === undefined && !oldTextPromise) {
           oldText = await this.captureBaseContent(kind, title, rawInput);
-          if (!this.pendingToolCalls.has(update.toolCallId)) {
+          if (!this.isToolCallPending(update.toolCallId)) {
             return;
           }
         }
@@ -1089,12 +1095,7 @@ export class ChatViewProvider
       }
     }
 
-    const startTime = this.toolCallStartTimes.get(update.toolCallId);
-    const duration = startTime ? Date.now() - startTime : undefined;
-
-    const finalRawInput =
-      this.asToolCallRawInput(update.rawInput) ||
-      this.toolCallRawInputs.get(update.toolCallId);
+    const duration = state.startTime ? Date.now() - state.startTime : undefined;
 
     this.postMessage({
       type: "toolCallComplete",
@@ -1102,7 +1103,7 @@ export class ChatViewProvider
       title,
       kind,
       content,
-      rawInput: finalRawInput,
+      rawInput,
       rawOutput,
       status: update.status,
       terminalOutput,
@@ -1116,7 +1117,8 @@ export class ChatViewProvider
   private async finalizePendingToolCalls(
     stopReason: string | undefined
   ): Promise<void> {
-    if (this.pendingToolCalls.size === 0) {
+    const pendingToolCallIds = this.getPendingToolCallIds();
+    if (pendingToolCallIds.length === 0) {
       return;
     }
 
@@ -1124,8 +1126,8 @@ export class ChatViewProvider
       stopReason === "cancelled" || stopReason === "error"
         ? "failed"
         : "completed";
-    for (const toolCallId of Array.from(this.pendingToolCalls)) {
-      if (!this.pendingToolCalls.has(toolCallId)) {
+    for (const toolCallId of pendingToolCallIds) {
+      if (!this.isToolCallPending(toolCallId)) {
         continue;
       }
       await this.completeToolCall({
@@ -1198,7 +1200,7 @@ export class ChatViewProvider
         });
       }
     } else if (update.sessionUpdate === "tool_call") {
-      this.pendingToolCalls.add(update.toolCallId);
+      this.markToolCallPending(update.toolCallId);
       this.rememberToolCallMetadata(update, true);
       this.captureToolCallBaseContent(update);
 
@@ -1221,8 +1223,8 @@ export class ChatViewProvider
       }
     } else if (update.sessionUpdate === "tool_call_update") {
       if (this.isFinalToolCall(update)) {
-        if (!this.pendingToolCalls.has(update.toolCallId)) {
-          this.pendingToolCalls.add(update.toolCallId);
+        if (!this.isToolCallPending(update.toolCallId)) {
+          this.markToolCallPending(update.toolCallId);
         }
         this.rememberToolCallMetadata(update);
         await this.completeToolCall(update);
@@ -1233,17 +1235,13 @@ export class ChatViewProvider
         this.captureToolCallBaseContent(update);
 
         if (this.hasToolCallPresentation(update)) {
-          this.pendingToolCalls.add(update.toolCallId);
+          const state = this.markToolCallPending(update.toolCallId);
           this.postMessage({
             type: "toolCallStart",
-            name:
-              update.title ||
-              this.toolCallTitles.get(update.toolCallId) ||
-              "Tool",
+            name: update.title || state.title || "Tool",
             toolCallId: update.toolCallId,
-            kind: update.kind || this.toolCallKinds.get(update.toolCallId),
-            rawInput:
-              update.rawInput || this.toolCallRawInputs.get(update.toolCallId),
+            kind: update.kind || state.kind,
+            rawInput: update.rawInput || state.rawInput,
           });
         }
       }

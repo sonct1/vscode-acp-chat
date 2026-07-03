@@ -791,9 +791,9 @@ suite("ChatViewProvider", () => {
         },
       ]);
       assert.strictEqual(
-        (provider as any).pendingToolCalls.has("file-change-1"),
+        (provider as any).toolCalls.has("file-change-1"),
         false,
-        "completed tool_call should not leave stale pending state"
+        "completed tool_call should not leave stale tool call state"
       );
     });
 
@@ -824,9 +824,9 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(complete.kind, "edit");
       assert.strictEqual(complete.status, "failed");
       assert.strictEqual(
-        (provider as any).pendingToolCalls.has("file-change-failed"),
+        (provider as any).toolCalls.has("file-change-failed"),
         false,
-        "failed tool_call should not leave stale pending state"
+        "failed tool_call should not leave stale tool call state"
       );
     });
 
@@ -1064,9 +1064,9 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(complete.kind, "edit");
       assert.deepStrictEqual(complete.content, diffContent);
       assert.strictEqual(
-        (provider as any).pendingToolCalls.has("file-change-status-only"),
+        (provider as any).toolCalls.has("file-change-status-only"),
         false,
-        "status-only completion should clear pending state"
+        "status-only completion should clear tool call state"
       );
     });
 
@@ -1113,9 +1113,9 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(complete.kind, "edit");
       assert.deepStrictEqual(complete.content, diffContent);
       assert.strictEqual(
-        (provider as any).pendingToolCalls.has("live-write-no-final"),
+        (provider as any).toolCalls.has("live-write-no-final"),
         false,
-        "synthesized completion should clear pending state"
+        "synthesized completion should clear tool call state"
       );
     });
   });
