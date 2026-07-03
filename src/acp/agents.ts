@@ -32,13 +32,13 @@ export const AGENTS: AgentConfig[] = [
     id: "claude-code",
     name: "Claude Code",
     command: "npx",
-    args: ["@agentclientprotocol/claude-agent-acp"],
+    args: ["@agentclientprotocol/claude-agent-acp@latest"],
   },
   {
     id: "codex",
     name: "Codex CLI",
     command: "npx",
-    args: ["@agentclientprotocol/codex-acp"],
+    args: ["@agentclientprotocol/codex-acp@latest"],
   },
   {
     id: "gemini",
