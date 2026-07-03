@@ -1258,76 +1258,59 @@ suite("Webview", () => {
         assert.strictEqual(msgs[0].textContent.trim(), "Hello World");
       });
 
-      test("keeps interleaved messageId text streams in separate blocks", () => {
+      test("merges text chunks from different sources into one block", () => {
         controller.handleMessage({ type: "streamStart" });
         controller.handleMessage({
           type: "streamChunk",
           text: "Alpha ",
-          messageId: "agent-a",
         });
         controller.handleMessage({
           type: "streamChunk",
           text: "Beta ",
-          messageId: "agent-b",
         });
         controller.handleMessage({
           type: "streamChunk",
           text: "one",
-          messageId: "agent-a",
         });
         controller.handleMessage({
           type: "streamChunk",
           text: "two",
-          messageId: "agent-b",
         });
 
         const blocks = elements.messagesEl.querySelectorAll(".block-text");
-        assert.strictEqual(blocks.length, 2);
+        assert.strictEqual(blocks.length, 1);
         assert.strictEqual(
           (blocks[0] as HTMLElement).dataset.rawContent,
-          "Alpha one"
-        );
-        assert.strictEqual(
-          (blocks[1] as HTMLElement).dataset.rawContent,
-          "Beta two"
+          "Alpha Beta onetwo"
         );
       });
 
-      test("keeps interleaved thought streams separate by messageId", () => {
+      test("closes thought when text starts regardless of source", () => {
         controller.handleMessage({ type: "streamStart" });
         controller.handleMessage({
           type: "thoughtChunk",
           text: "Planning ",
-          messageId: "agent-a",
         });
         controller.handleMessage({
           type: "thoughtChunk",
           text: "Checking ",
-          messageId: "agent-b",
         });
         controller.handleMessage({
           type: "thoughtChunk",
           text: "layout",
-          messageId: "agent-a",
         });
         controller.handleMessage({
           type: "streamChunk",
           text: "Answer",
-          messageId: "agent-a",
         });
 
         const thoughts = elements.messagesEl.querySelectorAll(".agent-thought");
-        assert.strictEqual(thoughts.length, 2);
+        assert.strictEqual(thoughts.length, 1);
         assert.strictEqual(
           thoughts[0].querySelector(".thought-content")?.textContent?.trim(),
-          "Planning layout"
-        );
-        assert.strictEqual(
-          thoughts[1].querySelector(".thought-content")?.textContent?.trim(),
-          "Checking"
+          "Planning Checking layout"
         );
         assert.strictEqual(thoughts[0].getAttribute("open"), null);
-        assert.strictEqual(thoughts[1].getAttribute("open"), "");
       });
 
       test("closes legacy thought when a new tool starts", () => {

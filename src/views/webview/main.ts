@@ -43,8 +43,6 @@ export interface Block {
   contentEl: HTMLElement;
   content: string;
   key: string;
-  streamKey: string;
-  messageId?: string | null;
   toolId?: string;
   kind?: ToolKind;
   title?: string;
@@ -136,7 +134,6 @@ export interface ExtensionMessage {
   }>;
   commands?: AvailableCommand[] | null;
   starredModels?: string[];
-  messageId?: string | null;
   toolCallId?: string;
   agentId?: string;
   agentName?: string;
@@ -669,8 +666,6 @@ export class WebviewController {
   private currentAssistantMessage: HTMLElement | null = null;
   private activeBlock: Block | null = null;
   private blocks: Block[] = [];
-  private blocksByKey: Map<string, Block> = new Map();
-  private activeBlockByStream: Map<string, Block> = new Map();
   private toolBlockById: Map<string, Block> = new Map();
   private planEl: HTMLElement | null = null;
   private planEntries: PlanEntry[] = [];
@@ -1744,23 +1739,8 @@ export class WebviewController {
     setTimeout(() => announcement.remove(), 1000);
   }
 
-  private getStreamKey(messageId?: string | null): string {
-    // messageId is optional in ACP. Keep a stable fallback stream for legacy
-    // agents that do not send it, while separating modern concurrent streams.
-    return messageId || "__legacy__";
-  }
-
-  private getContentBlockKey(
-    type: Extract<BlockType, "text" | "thought">,
-    messageId?: string | null
-  ): string {
-    return `${type}:${this.getStreamKey(messageId)}`;
-  }
-
   private resetActiveBlockTracking(): void {
     this.activeBlock = null;
-    this.activeBlockByStream.clear();
-    this.blocksByKey.clear();
     this.toolBlockById.clear();
   }
 
@@ -1772,11 +1752,9 @@ export class WebviewController {
   private createBlock(options: {
     type: BlockType;
     key: string;
-    streamKey: string;
-    messageId?: string | null;
     toolId?: string;
   }): Block {
-    const { type, key, streamKey, messageId, toolId } = options;
+    const { type, key, toolId } = options;
 
     // Create new block
     if (!this.currentAssistantMessage) {
@@ -1796,9 +1774,6 @@ export class WebviewController {
     const blockEl = this.doc.createElement("div");
     blockEl.className = `block block-${type}`;
     blockEl.dataset.blockKey = key;
-    if (messageId) {
-      blockEl.dataset.messageId = messageId;
-    }
 
     let contentEl: HTMLElement;
 
@@ -1854,8 +1829,6 @@ export class WebviewController {
       contentEl,
       content: "",
       key,
-      streamKey,
-      messageId,
       toolId,
     };
 
@@ -1876,12 +1849,10 @@ export class WebviewController {
       this.finalizeBlock(this.activeBlock);
     }
 
-    const streamKey = this.getStreamKey(null);
+    const key = type === "tool" && toolId ? `tool:${toolId}` : `${type}:main`;
     const block = this.createBlock({
       type,
-      key:
-        type === "tool" && toolId ? `tool:${toolId}` : `${type}:${streamKey}`,
-      streamKey,
+      key,
       toolId,
     });
 
@@ -1889,42 +1860,6 @@ export class WebviewController {
     if (type === "tool" && toolId) {
       this.toolBlockById.set(toolId, block);
     }
-    return block;
-  }
-
-  private ensureContentBlock(
-    type: Extract<BlockType, "text" | "thought">,
-    messageId?: string | null
-  ): Block {
-    if (!messageId) {
-      return this.ensureBlock(type);
-    }
-
-    const streamKey = this.getStreamKey(messageId);
-    const blockKey = this.getContentBlockKey(type, messageId);
-    const existing = this.blocksByKey.get(blockKey);
-    const activeForStream = this.activeBlockByStream.get(streamKey);
-
-    if (existing) {
-      if (activeForStream && activeForStream !== existing) {
-        this.finalizeBlock(activeForStream);
-      }
-      this.activeBlockByStream.set(streamKey, existing);
-      return existing;
-    }
-
-    if (activeForStream) {
-      this.finalizeBlock(activeForStream);
-    }
-
-    const block = this.createBlock({
-      type,
-      key: blockKey,
-      streamKey,
-      messageId,
-    });
-    this.blocksByKey.set(blockKey, block);
-    this.activeBlockByStream.set(streamKey, block);
     return block;
   }
 
@@ -1976,7 +1911,6 @@ export class WebviewController {
       this.finalizeBlock(block);
     });
     this.activeBlock = null;
-    this.activeBlockByStream.clear();
   }
 
   private finalizeActiveBlocksExcept(blockToKeep?: Block): void {
@@ -1984,15 +1918,6 @@ export class WebviewController {
       this.finalizeBlock(this.activeBlock);
       this.activeBlock = null;
     }
-
-    this.activeBlockByStream.forEach((block, streamKey) => {
-      if (block === blockToKeep) {
-        return;
-      }
-
-      this.finalizeBlock(block);
-      this.activeBlockByStream.delete(streamKey);
-    });
   }
 
   private clearStaleRunningToolIndicators(): void {
@@ -2013,9 +1938,7 @@ export class WebviewController {
   }
 
   public showThinking(): void {
-    // Legacy programmatic API. ACP thought chunks should use thoughtChunk with
-    // messageId so interleaved streams remain separate.
-    this.ensureContentBlock("thought");
+    this.ensureBlock("thought");
   }
 
   public hideThinking(): void {
@@ -2026,9 +1949,7 @@ export class WebviewController {
   }
 
   public appendThought(text: string): void {
-    // Legacy programmatic API. ACP thought chunks should use thoughtChunk with
-    // messageId so interleaved streams remain separate.
-    const block = this.ensureContentBlock("thought");
+    const block = this.ensureBlock("thought");
     block.content += text;
     block.contentEl.innerHTML = marked.parse(block.content) as string;
     this.scrollToBottom();
@@ -3299,7 +3220,7 @@ export class WebviewController {
         break;
       case "streamChunk":
         if (msg.text) {
-          const block = this.ensureContentBlock("text", msg.messageId);
+          const block = this.ensureBlock("text");
           block.content += msg.text;
           block.contentEl.innerHTML = marked.parse(block.content) as string;
           // Store raw content on the element for reliable retrieval by action buttons
@@ -3310,7 +3231,7 @@ export class WebviewController {
 
       case "thoughtChunk":
         if (msg.text) {
-          const block = this.ensureContentBlock("thought", msg.messageId);
+          const block = this.ensureBlock("thought");
           block.content += msg.text;
           block.contentEl.innerHTML = marked.parse(block.content) as string;
           this.scrollToBottom();

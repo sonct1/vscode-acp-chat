@@ -713,7 +713,7 @@ suite("ChatViewProvider", () => {
       );
     });
 
-    test("preserves messageId on agent message and thought chunks", async () => {
+    test("sends streamChunk and thoughtChunk to webview", async () => {
       const provider = new ChatViewProvider(
         mockExtensionUri,
         acpClient as any,
@@ -726,7 +726,6 @@ suite("ChatViewProvider", () => {
         sessionId: "test",
         update: {
           sessionUpdate: "agent_message_chunk",
-          messageId: "agent-message-1",
           content: { type: "text", text: "Hello" },
         },
       });
@@ -734,7 +733,6 @@ suite("ChatViewProvider", () => {
         sessionId: "test",
         update: {
           sessionUpdate: "agent_thought_chunk",
-          messageId: "agent-thought-1",
           content: { type: "text", text: "Thinking" },
         },
       });
@@ -742,8 +740,8 @@ suite("ChatViewProvider", () => {
       const streamChunk = messages.find((m) => m.type === "streamChunk");
       const thoughtChunk = messages.find((m) => m.type === "thoughtChunk");
 
-      assert.strictEqual(streamChunk?.messageId, "agent-message-1");
-      assert.strictEqual(thoughtChunk?.messageId, "agent-thought-1");
+      assert.strictEqual(streamChunk?.text, "Hello");
+      assert.strictEqual(thoughtChunk?.text, "Thinking");
     });
   });
 
