@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.15.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.14.0...v1.15.0) (2026-07-03)
+
+### Features
+
+- add local session cache for agents without session/list ([b6ca823](https://github.com/pengjiantao/vscode-acp-chat/commit/b6ca823d4e93b2d1a2b17de20e7308d915039225))
+- gate session/list calls behind agent capability ([ab9863b](https://github.com/pengjiantao/vscode-acp-chat/commit/ab9863b15db33900a7b296ad1d4535e1ad804b13))
+
+### Bug Fixes
+
+- replace explicit any types in session_manager test with proper type annotations ([30ff145](https://github.com/pengjiantao/vscode-acp-chat/commit/30ff145024143e38cf37da9e466e0c2808475224))
+- **webview:** use consistent guard in toolCallComplete handler ([1a8ac6b](https://github.com/pengjiantao/vscode-acp-chat/commit/1a8ac6b8f5d2bf250e748a0e2c4f63276678b170))
+
+### Code Refactoring
+
+- **webview:** decouple spinner management from tool renderers ([2e176ea](https://github.com/pengjiantao/vscode-acp-chat/commit/2e176ea2cb09a41c8445b3c964f8a4fa85abc828))
+
 ## [1.14.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.13.1...v1.14.0) (2026-07-03)
 
 ### Features
