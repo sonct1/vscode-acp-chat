@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.13.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.13.0...v1.13.1) (2026-07-03)
+
+### Bug Fixes
+
+- disable debug logging by default ([1033c98](https://github.com/pengjiantao/vscode-acp-chat/commit/1033c987f3bc60a01dd619de7964fe16d7b5cfd3))
+
 ## [1.13.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.3...v1.13.0) (2026-07-03)
 
 ### Features
