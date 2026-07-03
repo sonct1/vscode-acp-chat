@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.15.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.15.0...v1.15.1) (2026-07-03)
+
+### Bug Fixes
+
+- **session-manager:** cache session stores per agent ([79332f4](https://github.com/pengjiantao/vscode-acp-chat/commit/79332f47a2ea31d20f3f4747ea25038adfe1a4ca))
+
+### Code Refactoring
+
+- **session-manager:** per-session key storage with cache and debounce ([ba79590](https://github.com/pengjiantao/vscode-acp-chat/commit/ba79590ba98db869c0d2a9716e7af737b8a7dd24))
+
 ## [1.15.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.14.0...v1.15.0) (2026-07-03)
 
 ### Features
