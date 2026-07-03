@@ -6,7 +6,11 @@ import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
 import { FileHandler } from "../acp/file-handler";
 import { TerminalHandler } from "../acp/terminal-handler";
-import { AgentSessionManager, type SessionInfo } from "../acp/session-manager";
+import {
+  AgentSessionManager,
+  globalStateSessionStore,
+  type SessionInfo,
+} from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
 import { extractMentions } from "../utils/mention-serializer";
 import { AsyncSerialQueue, AsyncSerialProcessor } from "../utils/async-queue";
@@ -16,6 +20,7 @@ import {
   type RequestPermissionResponse,
   type ToolCall,
   type ToolCallUpdate,
+  type SessionInfoUpdate,
 } from "@agentclientprotocol/sdk";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
@@ -203,7 +208,12 @@ export class ChatViewProvider
     this.diffManager = new DiffManager();
     this.fileHandler = new FileHandler(this.diffManager);
     this.terminalHandler = new TerminalHandler();
-    this.sessionManager = new AgentSessionManager(acpClient);
+    this.sessionManager = new AgentSessionManager(acpClient, (agentId) =>
+      globalStateSessionStore(
+        globalState,
+        `vscode-acp-chat.localSessions.v1.${agentId}`
+      )
+    );
     this.documentSyncManager = new DocumentSyncManager(acpClient);
 
     vscode.workspace.registerTextDocumentContentProvider(
@@ -1297,6 +1307,14 @@ export class ChatViewProvider
         cost,
       });
       this.sendContextUsage();
+    } else if (update.sessionUpdate === "session_info_update") {
+      const currentSessionId = this.acpClient.getCurrentSessionId();
+      if (currentSessionId) {
+        await this.sessionManager.onSessionInfoUpdate(
+          update as SessionInfoUpdate,
+          currentSessionId
+        );
+      }
     }
   }
 
@@ -1418,9 +1436,13 @@ export class ChatViewProvider
       }
 
       if (!this.hasSession) {
-        await this.acpClient.newSession(workingDir);
+        const newSession = await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
+        await this.sessionManager.recordNewSession(
+          newSession.sessionId,
+          workingDir
+        );
       }
 
       this.stderrBuffer = "";
@@ -1559,9 +1581,13 @@ export class ChatViewProvider
       this.sessionManager.syncCapabilities();
       this.documentSyncManager.syncCapabilities();
       if (!this.hasSession) {
-        await this.acpClient.newSession(workingDir);
+        const newSession = await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
+        await this.sessionManager.recordNewSession(
+          newSession.sessionId,
+          workingDir
+        );
       }
     } catch (error) {
       this.postMessage({
@@ -1599,9 +1625,13 @@ export class ChatViewProvider
     try {
       if (this.acpClient.isConnected()) {
         const workingDir = getWorkspaceRoot();
-        await this.acpClient.newSession(workingDir);
+        const newSession = await this.acpClient.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
+        await this.sessionManager.recordNewSession(
+          newSession.sessionId,
+          workingDir
+        );
       }
     } catch (error) {
       console.error("[Chat] Failed to create new session:", error);

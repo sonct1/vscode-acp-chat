@@ -1,17 +1,19 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
 import { ChildProcess } from "child_process";
 import { ACPClient, type SpawnFunction } from "../acp/client";
-import { AgentSessionManager } from "../acp/session-manager";
+import { AgentSessionManager, type SessionStore } from "../acp/session-manager";
+import { inMemorySessionStore } from "./mocks/session-store";
 import { createMockProcess } from "./mocks/acp-server";
 
 suite("SessionManager", () => {
   suite("AgentSessionManager", () => {
     let client: ACPClient;
     let manager: AgentSessionManager;
+    let store: SessionStore;
     let mockSpawn: SpawnFunction;
 
     setup(() => {
+      store = inMemorySessionStore();
       mockSpawn = (
         _command: string,
         _args: string[],
@@ -32,7 +34,7 @@ suite("SessionManager", () => {
         spawn: mockSpawn,
         skipAvailabilityCheck: true,
       });
-      manager = new AgentSessionManager(client);
+      manager = new AgentSessionManager(client, () => store);
     });
 
     teardown(() => {
@@ -77,7 +79,9 @@ suite("SessionManager", () => {
           spawn: disabledSpawn,
           skipAvailabilityCheck: true,
         });
-        const disabledManager = new AgentSessionManager(disabledClient);
+        const disabledManager = new AgentSessionManager(disabledClient, () =>
+          inMemorySessionStore()
+        );
 
         await disabledClient.connect();
         disabledManager.syncCapabilities();
@@ -120,7 +124,9 @@ suite("SessionManager", () => {
           spawn: disabledSpawn,
           skipAvailabilityCheck: true,
         });
-        const disabledManager = new AgentSessionManager(disabledClient);
+        const disabledManager = new AgentSessionManager(disabledClient, () =>
+          inMemorySessionStore()
+        );
 
         await disabledClient.connect();
         disabledManager.syncCapabilities();
@@ -151,7 +157,9 @@ suite("SessionManager", () => {
           spawn: disabledSpawn,
           skipAvailabilityCheck: true,
         });
-        const disabledManager = new AgentSessionManager(disabledClient);
+        const disabledManager = new AgentSessionManager(disabledClient, () =>
+          inMemorySessionStore()
+        );
 
         await disabledClient.connect();
         disabledManager.syncCapabilities();
@@ -160,6 +168,220 @@ suite("SessionManager", () => {
         assert.deepStrictEqual(sessions, []);
 
         disabledClient.dispose();
+      });
+    });
+
+    suite("local session cache", () => {
+      function createNoListManager(): {
+        client: ACPClient;
+        manager: AgentSessionManager;
+        store: SessionStore;
+      } {
+        const noListSpawn = (
+          _command: string,
+          _args: string[],
+          _options: unknown
+        ): ChildProcess => {
+          return createMockProcess({
+            enableLoadSession: true,
+            enableListSessions: false,
+          }) as unknown as ChildProcess;
+        };
+
+        const noListClient = new ACPClient({
+          agentConfig: {
+            id: "mock-no-list",
+            name: "Mock No List",
+            command: "mock",
+            args: [],
+          },
+          spawn: noListSpawn,
+          skipAvailabilityCheck: true,
+        });
+        const noListStore = inMemorySessionStore();
+        const noListManager = new AgentSessionManager(
+          noListClient,
+          () => noListStore
+        );
+
+        return {
+          client: noListClient,
+          manager: noListManager,
+          store: noListStore,
+        };
+      }
+
+      test("should list locally recorded sessions when agent lacks list capability", async () => {
+        const { client: noListClient, manager: noListManager } =
+          createNoListManager();
+
+        await noListClient.connect();
+        noListManager.syncCapabilities();
+
+        await noListManager.recordNewSession(
+          "session-1",
+          "/test",
+          "First chat"
+        );
+        await noListManager.recordNewSession(
+          "session-2",
+          "/other",
+          "Other chat"
+        );
+        await noListManager.recordNewSession("session-3", "/test");
+
+        const sessions = await noListManager.listSessions("/test");
+        assert.strictEqual(sessions.length, 2);
+        const sessionIds = sessions.map((s) => s.sessionId);
+        assert.ok(sessionIds.includes("session-1"));
+        assert.ok(sessionIds.includes("session-3"));
+        assert.ok(!sessionIds.includes("session-2"));
+        assert.strictEqual(
+          sessions.find((s) => s.sessionId === "session-1")?.title,
+          "First chat"
+        );
+
+        noListClient.dispose();
+      });
+
+      test("recordNewSession should update existing record instead of duplicating", async () => {
+        const { client: noListClient, manager: noListManager } =
+          createNoListManager();
+        await noListClient.connect();
+        noListManager.syncCapabilities();
+
+        await noListManager.recordNewSession("session-1", "/test", "Initial");
+        await noListManager.recordNewSession("session-1", "/test", "Renamed");
+
+        const sessions = await noListManager.listSessions("/test");
+        assert.strictEqual(sessions.length, 1);
+        assert.strictEqual(sessions[0].title, "Renamed");
+
+        noListClient.dispose();
+      });
+
+      test("onSessionInfoUpdate should update title and updatedAt", async () => {
+        const { client: noListClient, manager: noListManager } =
+          createNoListManager();
+        await noListClient.connect();
+        noListManager.syncCapabilities();
+
+        await noListManager.recordNewSession("session-1", "/test", "Initial");
+        const before = (await noListManager.listSessions("/test"))[0];
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await noListManager.onSessionInfoUpdate(
+          { title: "Updated title", updatedAt: new Date().toISOString() },
+          "session-1"
+        );
+
+        const after = (await noListManager.listSessions("/test"))[0];
+        assert.strictEqual(after.title, "Updated title");
+        assert.ok(
+          new Date(after.updatedAt).getTime() >=
+            new Date(before.updatedAt).getTime()
+        );
+
+        noListClient.dispose();
+      });
+
+      test("should ignore session_info_update for unknown session", async () => {
+        const { client: noListClient, manager: noListManager } =
+          createNoListManager();
+        await noListClient.connect();
+        noListManager.syncCapabilities();
+
+        await noListManager.recordNewSession("session-1", "/test", "Initial");
+        await noListManager.onSessionInfoUpdate(
+          { title: "Updated title" },
+          "unknown-session"
+        );
+
+        const sessions = await noListManager.listSessions("/test");
+        assert.strictEqual(sessions[0].title, "Initial");
+
+        noListClient.dispose();
+      });
+
+      test("should return agent-listed sessions directly without writing to local cache", async () => {
+        await client.connect();
+        manager.syncCapabilities();
+
+        await client.newSession("/test/dir");
+        await client.sendMessage("Hello");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const sessions = await manager.listSessions("/test/dir");
+        assert.ok(sessions.length >= 1);
+        assert.ok(sessions[0].sessionId.startsWith("mock-session-"));
+
+        // Local cache should remain empty for agent-listed sessions
+        const localSessions = await store.read();
+        assert.strictEqual(localSessions.length, 0);
+      });
+
+      test("should isolate sessions per agent", async () => {
+        const stores = new Map<string, SessionStore>();
+        const factory = (agentId: string) => {
+          if (!stores.has(agentId)) {
+            stores.set(agentId, inMemorySessionStore());
+          }
+          return stores.get(agentId)!;
+        };
+
+        const noListSpawn = (
+          _command: string,
+          _args: string[],
+          _options: unknown
+        ): ChildProcess => {
+          return createMockProcess({
+            enableLoadSession: true,
+            enableListSessions: false,
+          }) as unknown as ChildProcess;
+        };
+
+        const noListClientA = new ACPClient({
+          agentConfig: {
+            id: "mock-no-list-a",
+            name: "Mock No List A",
+            command: "mock",
+            args: [],
+          },
+          spawn: noListSpawn,
+          skipAvailabilityCheck: true,
+        });
+        const noListClientB = new ACPClient({
+          agentConfig: {
+            id: "mock-no-list-b",
+            name: "Mock No List B",
+            command: "mock",
+            args: [],
+          },
+          spawn: noListSpawn,
+          skipAvailabilityCheck: true,
+        });
+
+        const managerA = new AgentSessionManager(noListClientA, factory);
+        const managerB = new AgentSessionManager(noListClientB, factory);
+
+        await noListClientA.connect();
+        managerA.syncCapabilities();
+        await noListClientB.connect();
+        managerB.syncCapabilities();
+
+        await managerA.recordNewSession("agent-a-session", "/test");
+        await managerB.recordNewSession("agent-b-session", "/test");
+
+        const sessionsA = await managerA.listSessions("/test");
+        assert.strictEqual(sessionsA.length, 1);
+        assert.strictEqual(sessionsA[0].sessionId, "agent-a-session");
+
+        const sessionsB = await managerB.listSessions("/test");
+        assert.strictEqual(sessionsB.length, 1);
+        assert.strictEqual(sessionsB[0].sessionId, "agent-b-session");
+
+        noListClientA.dispose();
+        noListClientB.dispose();
       });
     });
 
@@ -240,7 +462,9 @@ suite("SessionManager", () => {
           spawn: disabledSpawn,
           skipAvailabilityCheck: true,
         });
-        const disabledManager = new AgentSessionManager(disabledClient);
+        const disabledManager = new AgentSessionManager(disabledClient, () =>
+          inMemorySessionStore()
+        );
 
         await disabledClient.connect();
         disabledManager.syncCapabilities();

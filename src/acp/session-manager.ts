@@ -5,13 +5,17 @@
  *   - `SessionInfo`: common metadata for a session entry
  *   - `SessionManager`: abstract base class defining the contract
  *   - `AgentSessionManager`: concrete implementation that delegates to the ACP agent
+ *     and persists a local cache of sessions for agents that do not support
+ *     the `session/list` capability.
  *   - Future: `LocalSessionManager`, `HybridSessionManager`, etc.
  */
 
+import * as vscode from "vscode";
 import type {
   LoadSessionResponse,
   ListSessionsResponse,
   AgentCapabilities,
+  SessionInfoUpdate,
 } from "@agentclientprotocol/sdk";
 
 /**
@@ -19,6 +23,7 @@ import type {
  * This avoids a circular dependency with the full ACPClient class.
  */
 export interface IACPClient {
+  getAgentId(): string;
   getAgentCapabilities(): AgentCapabilities | null;
   isConnected(): boolean;
   loadSession(params: {
@@ -49,12 +54,62 @@ export interface SessionInfo {
   meta?: Record<string, unknown>;
 }
 
+/** A locally persisted session record. */
+export interface StoredSessionRecord {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  /** ISO-8601 timestamp of when the session was first recorded locally. */
+  createdAt: string;
+  /** ISO-8601 timestamp of the last recorded activity. */
+  updatedAt: string;
+}
+
 /** Result of loading a session. */
 export interface LoadSessionResult {
   /** The loaded session's ID. */
   sessionId: string;
   /** Whether the agent advertised `loadSession` support. */
   supportedByAgent: boolean;
+}
+
+/** Pluggable storage for local session records. */
+export interface SessionStore {
+  read(): Promise<StoredSessionRecord[]>;
+  write(sessions: StoredSessionRecord[]): Promise<void>;
+}
+
+/**
+ * Factory that creates a per-agent `SessionStore`.
+ *
+ * This allows sessions recorded for different agents to be isolated from
+ * each other while keeping `AgentSessionManager` agnostic of VS Code APIs.
+ */
+export type SessionStoreFactory = (agentId: string) => SessionStore;
+
+// ---------------------------------------------------------------------------
+// Storage helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a `SessionStore` backed by VS Code's `globalState` Memento.
+ *
+ * The store is scoped to a single key and transparently serializes the
+ * session array as JSON. The factory returns a plain object so callers can
+ * pass it to `AgentSessionManager` without depending on VS Code directly.
+ */
+export function globalStateSessionStore(
+  globalState: vscode.Memento,
+  key: string
+): SessionStore {
+  return {
+    async read(): Promise<StoredSessionRecord[]> {
+      return globalState.get<StoredSessionRecord[]>(key, []);
+    },
+    async write(sessions: StoredSessionRecord[]): Promise<void> {
+      await globalState.update(key, sessions);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +150,24 @@ export abstract class SessionManager {
   ): Promise<LoadSessionResult>;
 
   /**
+   * Record a newly created session so it can be listed later, even when the
+   * agent does not support `session/list`.
+   */
+  abstract recordNewSession(
+    sessionId: string,
+    cwd: string,
+    title?: string
+  ): Promise<void>;
+
+  /**
+   * Apply a `session_info_update` notification to the local session cache.
+   */
+  abstract onSessionInfoUpdate(
+    update: SessionInfoUpdate,
+    sessionId: string
+  ): Promise<void>;
+
+  /**
    * Whether this manager can actually load sessions (agent advertises the
    * `loadSession` capability). When `false`, `loadSession()` may still be
    * called but is expected to fail or fall back.
@@ -104,7 +177,7 @@ export abstract class SessionManager {
   /**
    * Whether this manager can list discoverable sessions (agent advertises the
    * `sessionCapabilities.list` capability). When `false`, `listSessions()` may
-   * still be called but is expected to fail or fall back.
+   * still be called but is expected to fall back to locally stored records.
    */
   abstract get supportsListSessions(): boolean;
 }
@@ -125,8 +198,8 @@ export abstract class SessionManager {
  * If the agent does **not** advertise `loadSession`, `supportsLoadSession` is
  * `false` and the UI can hide or disable loading of history sessions.
  * If the agent does **not** advertise `sessionCapabilities.list`,
- * `supportsListSessions` is `false` and the UI can hide or disable listing
- * of history sessions.
+ * `supportsListSessions` is `false` and `listSessions()` falls back to the
+ * local session cache stored in `globalState`.
  */
 export class AgentSessionManager extends SessionManager {
   readonly kind = "agent";
@@ -135,8 +208,15 @@ export class AgentSessionManager extends SessionManager {
   private _supportsListSessions = false;
   private _initialized = false;
 
-  constructor(private readonly acpClient: IACPClient) {
+  constructor(
+    private readonly acpClient: IACPClient,
+    private readonly storeFactory: SessionStoreFactory
+  ) {
     super();
+  }
+
+  private getStore(): SessionStore {
+    return this.storeFactory(this.acpClient.getAgentId());
   }
 
   /** Call after `acpClient.connect()` to read the agent capabilities. */
@@ -156,10 +236,78 @@ export class AgentSessionManager extends SessionManager {
   }
 
   /**
-   * List sessions from the agent via `session/list`.
+   * Record a newly created session in the local cache.
    *
-   * If the agent doesn't advertise the `sessionCapabilities.list` capability,
-   * or the call fails, this returns an empty array.
+   * This allows the session to be listed later even when the current agent
+   * does not support the `session/list` capability. The caller should
+   * invoke this immediately after a successful `session/new` response.
+   */
+  async recordNewSession(
+    sessionId: string,
+    cwd: string,
+    title?: string
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const store = this.getStore();
+    const sessions = await store.read();
+
+    const existingIndex = sessions.findIndex((s) => s.sessionId === sessionId);
+
+    if (existingIndex >= 0) {
+      // Refresh timestamps but preserve existing title unless explicitly provided.
+      const existing = sessions[existingIndex];
+      existing.cwd = cwd;
+      existing.updatedAt = now;
+      if (title !== undefined) {
+        existing.title = title;
+      }
+    } else {
+      sessions.push({
+        sessionId,
+        title: title ?? `Session ${sessionId}`,
+        cwd,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    await store.write(sessions);
+  }
+
+  /**
+   * Apply a `session_info_update` notification to the local cache.
+   *
+   * Updates the title and/or `updatedAt` timestamp for the given sessionId.
+   */
+  async onSessionInfoUpdate(
+    update: SessionInfoUpdate,
+    sessionId: string
+  ): Promise<void> {
+    const store = this.getStore();
+    const sessions = await store.read();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    if (update.title !== undefined) {
+      session.title = update.title ?? session.title;
+    }
+    if (update.updatedAt !== undefined) {
+      session.updatedAt = update.updatedAt ?? session.updatedAt;
+    }
+
+    await store.write(sessions);
+  }
+
+  /**
+   * List sessions for the given working directory.
+   *
+   * If the agent advertises `sessionCapabilities.list`, the agent result is
+   * returned directly and is **not** written back to the local cache.
+   * Otherwise, the local cache is filtered by `cwd` and returned as a
+   * fallback.
    */
   async listSessions(cwd: string): Promise<SessionInfo[]> {
     if (!this._initialized) {
@@ -170,28 +318,21 @@ export class AgentSessionManager extends SessionManager {
 
     if (!this._supportsListSessions) {
       console.warn(
-        "[SessionManager] Current agent does not support the `session/list` capability"
+        "[SessionManager] Agent does not support session/list; falling back to local cache"
       );
-      return [];
+      return this.listLocalSessions(cwd);
     }
 
     try {
       const response = await this.acpClient.listSessions({ cwd });
-
-      return response.sessions.map((s) => ({
-        sessionId: s.sessionId,
-        title: s.title ?? `Session ${s.sessionId}`,
-        cwd: s.cwd ?? cwd,
-        updatedAt: s.updatedAt ?? new Date().toISOString(),
-        meta: s._meta ?? undefined,
-      }));
+      return this.mapAgentSessions(response, cwd);
     } catch (error) {
-      // Agent doesn't support listSessions or call failed – return empty
+      // Agent call failed – fall back to local cache
       console.warn(
-        "[SessionManager] Failed to list sessions from agent:",
+        "[SessionManager] Failed to list sessions from agent; falling back to local cache:",
         error
       );
-      return [];
+      return this.listLocalSessions(cwd);
     }
   }
 
@@ -220,5 +361,51 @@ export class AgentSessionManager extends SessionManager {
       sessionId,
       supportedByAgent: true,
     };
+  }
+
+  /**
+   * Map agent-returned sessions to `SessionInfo` without touching the local
+   * cache.
+   */
+  private mapAgentSessions(
+    response: ListSessionsResponse,
+    cwd: string
+  ): SessionInfo[] {
+    return response.sessions
+      .filter((s) => (s.cwd ?? cwd) === cwd)
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt ?? 0).getTime() -
+          new Date(a.updatedAt ?? 0).getTime()
+      )
+      .map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title ?? `Session ${s.sessionId}`,
+        cwd: s.cwd ?? cwd,
+        updatedAt: s.updatedAt ?? new Date().toISOString(),
+      }));
+  }
+
+  /**
+   * Filter and sort the local session cache by `cwd`.
+   *
+   * Sorted newest-first by `updatedAt`.
+   */
+  private async listLocalSessions(cwd: string): Promise<SessionInfo[]> {
+    const store = this.getStore();
+    const sessions = await store.read();
+
+    return sessions
+      .filter((s) => s.cwd === cwd)
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      )
+      .map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title,
+        cwd: s.cwd,
+        updatedAt: s.updatedAt,
+      }));
   }
 }
