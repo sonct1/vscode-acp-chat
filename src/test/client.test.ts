@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
 import { ChildProcess } from "child_process";
+import * as vscode from "vscode";
 import {
   ACPClient,
   extractConfigOptions,
@@ -74,7 +75,7 @@ suite("ACPClient with Mock Server", () => {
   let mockSpawn: SpawnFunction;
   let debugLogs: string[];
 
-  setup(() => {
+  setup(async () => {
     debugLogs = [];
     mockSpawn = (
       _command: string,
@@ -83,6 +84,10 @@ suite("ACPClient with Mock Server", () => {
     ): ChildProcess => {
       return createMockProcess({}) as unknown as ChildProcess;
     };
+
+    await vscode.workspace
+      .getConfiguration("vscode-acp-chat")
+      .update("debug", true, vscode.ConfigurationTarget.Global);
 
     client = new ACPClient({
       agentConfig: {
