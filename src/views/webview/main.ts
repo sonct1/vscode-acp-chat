@@ -1,6 +1,7 @@
 import { marked } from "./marked-config";
 import { renderToolSummary, renderToolDetails } from "./tool-render";
 import { computeLineDiff } from "../../utils/diff";
+import { AsyncSerialQueue } from "../../utils/async-queue";
 
 export interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -833,6 +834,10 @@ export class WebviewController {
   private pendingBottomScrollForce = false;
   private pendingPaintFrame: number | null = null;
   private paintBump = false;
+  // Serializes messages from the extension host so they are processed
+  // one-at-a-time in arrival order, preventing DOM update races when
+  // multiple messages arrive in quick succession.
+  private incomingNotifier = new AsyncSerialQueue();
 
   constructor(
     vscode: VsCodeApi,
@@ -1630,8 +1635,18 @@ export class WebviewController {
     });
 
     this.win.addEventListener("message", (e: MessageEvent<ExtensionMessage>) =>
-      this.handleMessage(e.data)
+      this.enqueueExtensionMessage(e.data)
     );
+  }
+
+  private enqueueExtensionMessage(msg: ExtensionMessage): void {
+    this.incomingNotifier.enqueue(async () => {
+      try {
+        await this.handleMessage(msg);
+      } catch (error) {
+        console.error("[Webview] Error handling extension message:", error);
+      }
+    });
   }
 
   private handleImageAttachment(file: File): void {

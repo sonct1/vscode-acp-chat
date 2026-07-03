@@ -44,7 +44,162 @@ class MockWebviewView implements vscode.WebviewView {
   public show() {}
 }
 
+class DelayedMockWebview extends MockWebview {
+  constructor(private readonly delayFor: (message: any) => number) {
+    super();
+  }
+
+  override async postMessage(message: any) {
+    const delay = this.delayFor(message);
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    this.messages.push(message);
+    return true;
+  }
+}
+
+function createHistoryLoadClient() {
+  const client = {
+    sessionUpdateHandler: (_update: any) => {},
+    setAgent: () => {},
+    getAgentId: () => "test-agent",
+    getAgentName: () => "Test Agent",
+    getState: () => "connected",
+    getCurrentSessionId: () => "current-session",
+    getAgentCapabilities: () => ({ loadSession: true }),
+    getNesDocumentCapabilities: () => ({
+      didOpen: false,
+      didChange: null,
+      didClose: false,
+      didSave: false,
+      didFocus: false,
+    }),
+    getSessionMetadata: () => ({
+      modes: null,
+      models: null,
+      genericConfigOptions: [],
+      commands: null,
+      lastUsageUpdate: null,
+    }),
+    clearLastUsageUpdate: () => {},
+    setOnStateChange: () => () => {},
+    setOnSessionUpdate: (cb: any) => {
+      client.sessionUpdateHandler = cb;
+      return () => {};
+    },
+    setOnStderr: () => () => {},
+    setOnReadTextFile: () => {},
+    setOnWriteTextFile: () => {},
+    setOnCreateTerminal: () => {},
+    setOnTerminalOutput: () => {},
+    setOnWaitForTerminalExit: () => {},
+    setOnKillTerminalCommand: () => {},
+    setOnReleaseTerminal: () => {},
+    setOnPermissionRequest: () => {},
+    isConnected: () => true,
+    connect: async () => {},
+    newSession: async () => {},
+    listSessions: async () => ({ sessions: [] }),
+    loadSession: async () => {
+      client.sessionUpdateHandler({
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "History answer." },
+        },
+      });
+      client.sessionUpdateHandler({
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-late-complete",
+          status: "completed",
+          kind: "write",
+          title: "Write generated file",
+          rawInput: {
+            path: "/tmp/vscode-acp-history-restoration-missing-file.txt",
+            content: "generated content",
+          },
+        },
+      });
+    },
+    dispose: () => {},
+  };
+
+  return client;
+}
+
+async function waitForProviderQueues(
+  provider: ChatViewProvider
+): Promise<void> {
+  await (provider as any).sessionUpdateNotifier.waitForIdle();
+  await (provider as any).webviewPostNotifier.waitForIdle();
+}
+
 suite("History Restoration Order Integration", () => {
+  test("serializes webview postMessage calls so streamEnd cannot overtake earlier messages", async () => {
+    const memento = new MockMemento();
+    const mockAcpClient = createHistoryLoadClient();
+    const provider = new ChatViewProvider(
+      vscode.Uri.file("/test"),
+      mockAcpClient as any,
+      memento
+    );
+    const mockView = new MockWebviewView();
+    mockView.webview = new DelayedMockWebview((message) =>
+      message.type === "streamChunk" ? 10 : 0
+    ) as any;
+    (provider as any).view = mockView;
+
+    (provider as any).postMessage({ type: "streamChunk", text: "slow" });
+    (provider as any).postMessage({ type: "streamEnd" });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.deepStrictEqual(
+      mockView.webview.messages.map((m: any) => m.type),
+      ["streamChunk", "streamEnd"]
+    );
+  });
+
+  test("posts final history streamEnd after queued session updates are rendered", async () => {
+    const memento = new MockMemento();
+    const mockAcpClient = createHistoryLoadClient();
+    const provider = new ChatViewProvider(
+      vscode.Uri.file("/test"),
+      mockAcpClient as any,
+      memento
+    );
+    const mockView = new MockWebviewView();
+    (provider as any).view = mockView;
+
+    await provider.loadHistorySession("history-session");
+    await waitForProviderQueues(provider);
+
+    const messages = mockView.webview.messages;
+    const finalStreamEndIndex = messages.findIndex(
+      (m: any) => m.type === "streamEnd" && m.stopReason === "history_load"
+    );
+    const toolCompleteIndex = messages.findIndex(
+      (m: any) =>
+        m.type === "toolCallComplete" && m.toolCallId === "tool-late-complete"
+    );
+
+    assert.notStrictEqual(
+      finalStreamEndIndex,
+      -1,
+      "history load should post a final streamEnd"
+    );
+    assert.notStrictEqual(
+      toolCompleteIndex,
+      -1,
+      "queued tool completion should be rendered"
+    );
+    assert.ok(
+      toolCompleteIndex < finalStreamEndIndex,
+      "final streamEnd should not render before queued history updates"
+    );
+  });
+
   test("should post userMessage before thoughtChunk during history restoration", async () => {
     const memento = new MockMemento();
     const mockAcpClient = {
@@ -116,6 +271,7 @@ suite("History Restoration Order Integration", () => {
         content: { type: "text", text: "Thinking..." },
       },
     });
+    await waitForProviderQueues(provider);
 
     // 3. Verify order
     const messages = mockView.webview.messages;
@@ -213,6 +369,7 @@ suite("History Restoration Order Integration", () => {
         content: { type: "text", text: "Here is the answer." },
       },
     });
+    await waitForProviderQueues(provider);
 
     const messages = mockView.webview.messages;
     const userMessages = messages.filter((m: any) => m.type === "userMessage");

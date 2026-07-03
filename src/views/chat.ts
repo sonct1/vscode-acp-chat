@@ -9,6 +9,7 @@ import { TerminalHandler } from "../acp/terminal-handler";
 import { AgentSessionManager, type SessionInfo } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
 import { extractMentions } from "../utils/mention-serializer";
+import { AsyncSerialQueue, AsyncSerialProcessor } from "../utils/async-queue";
 import {
   type SessionNotification,
   type RequestPermissionRequest,
@@ -168,8 +169,15 @@ export class ChatViewProvider
     params: RequestPermissionRequest;
     resolver: (response: RequestPermissionResponse) => void;
   }> = [];
-  private sessionUpdateQueue: SessionNotification[] = [];
-  private isProcessingQueue = false;
+  // Serializes ACP session updates so they render in arrival order.
+  // Without this, rapid updates can interleave and cause out-of-order
+  // messages (e.g. streamEnd arriving before the last tool_call_complete).
+  private sessionUpdateNotifier = new AsyncSerialProcessor<SessionNotification>(
+    (update) => this.handleSessionUpdate(update)
+  );
+  // Serializes webview.postMessage calls so fast messages (streamEnd)
+  // cannot overtake slower ones (streamChunk) that are still pending.
+  private webviewPostNotifier = new AsyncSerialQueue();
 
   // Flag to track if we're currently loading history via loadSession
   private isLoadingHistory = false;
@@ -230,11 +238,7 @@ export class ChatViewProvider
     });
 
     this.acpClient.setOnSessionUpdate((update) => {
-      // Queue session updates to ensure they are processed in order
-      this.sessionUpdateQueue.push(update);
-      this.processSessionUpdateQueue().catch((error) => {
-        console.error("[Chat] Error processing session update queue:", error);
-      });
+      this.sessionUpdateNotifier.push(update);
     });
 
     this.acpClient.setOnStderr((text) => {
@@ -689,6 +693,10 @@ export class ChatViewProvider
       // Set flag to indicate we're loading history
       this.isLoadingHistory = true;
       await this.sessionManager.loadSession(sessionId, cwd);
+      // Wait for all queued session updates to finish rendering before
+      // sending the final streamEnd — otherwise the webview receives
+      // streamEnd before the history content arrives.
+      await this.sessionUpdateNotifier.waitForIdle();
       // Flush buffer and send streamEnd to separate thinking blocks
       this.flushUserMessageBuffer();
       // Finalize the last agent response in the history
@@ -1128,40 +1136,13 @@ export class ChatViewProvider
   }
 
   public dispose(): void {
-    if (this.diffManager) {
-      this.diffManager.dispose();
-    }
-    if (this.documentSyncManager) {
-      this.documentSyncManager.dispose();
-    }
+    this.sessionUpdateNotifier.dispose();
+    this.webviewPostNotifier.dispose();
+    this.diffManager.dispose();
+    this.documentSyncManager.dispose();
     this.fileHandler.dispose();
     this.terminalHandler.dispose();
     this.clearToolCallMetadata();
-  }
-
-  /**
-   * Process session updates from the queue in order.
-   * This ensures that messages are rendered in the correct sequence,
-   * even if they arrive rapidly or out of order.
-   */
-  private async processSessionUpdateQueue(): Promise<void> {
-    // Prevent concurrent processing
-    if (this.isProcessingQueue) {
-      return;
-    }
-
-    this.isProcessingQueue = true;
-
-    while (this.sessionUpdateQueue.length > 0) {
-      const update = this.sessionUpdateQueue.shift()!;
-      try {
-        await this.handleSessionUpdate(update);
-      } catch (error) {
-        console.error("[Chat] Error handling session update:", error);
-      }
-    }
-
-    this.isProcessingQueue = false;
   }
 
   private async handleSessionUpdate(
@@ -1878,7 +1859,18 @@ export class ChatViewProvider
   }
 
   private postMessage(message: Record<string, unknown>): void {
-    this.view?.webview.postMessage(message);
+    const webview = this.view?.webview;
+    if (!webview) {
+      return;
+    }
+
+    this.webviewPostNotifier.enqueue(async () => {
+      try {
+        await webview.postMessage(message);
+      } catch (error) {
+        console.warn("[Chat] Failed to post message to webview:", error);
+      }
+    });
   }
 
   private getHtmlContent(webview: vscode.Webview): string {
