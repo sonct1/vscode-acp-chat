@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.13.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.3...v1.13.0) (2026-07-03)
+
+### Features
+
+- add debug logging for ACP session updates and multi-stream block tracking ([62fbab3](https://github.com/pengjiantao/vscode-acp-chat/commit/62fbab34ac6b888093fc1d8e60efc2b16518b473))
+- add max-height and scroll to diff container ([61aa255](https://github.com/pengjiantao/vscode-acp-chat/commit/61aa2552ea9f12fff4821766eb59510272d1ba20))
+
+### Bug Fixes
+
+- ensure npx always uses latest package versions for claude-code and codex agents ([cd598c5](https://github.com/pengjiantao/vscode-acp-chat/commit/cd598c51a874feb6bc3871286b048809fbc8f29d))
+- keep running tool blocks expanded when concurrent tools are spawned ([015677b](https://github.com/pengjiantao/vscode-acp-chat/commit/015677bba0d4e997fcb09577290837d509bcd082))
+- pass workspace cwd to agent process spawn options ([df32ba5](https://github.com/pengjiantao/vscode-acp-chat/commit/df32ba5877b15f30ca292b7dbb1660ea1d0c28e5))
+- serialize async tasks to prevent message ordering races ([67bc17e](https://github.com/pengjiantao/vscode-acp-chat/commit/67bc17e56d2535d7d29e832a9c561d6d942f5ef8))
+- tighten block-text padding and suppress generic 'Other:' tool kind label ([13921b3](https://github.com/pengjiantao/vscode-acp-chat/commit/13921b3c522351e2bb161207aa3e7f7db53d762f))
+- **webview:** add bottom margin to text-to-tool/thought CSS transition ([0dbc4e1](https://github.com/pengjiantao/vscode-acp-chat/commit/0dbc4e1ec6082e65a08d2c95bb5f55aff93b2599))
+
+### Code Refactoring
+
+- consolidate tool call state into single map and simplify CSS ([a903788](https://github.com/pengjiantao/vscode-acp-chat/commit/a903788020752d91c9fb0f3c85e22a3623e55f7e))
+- extract FileHandler and TerminalHandler from ChatViewProvider ([fc6e443](https://github.com/pengjiantao/vscode-acp-chat/commit/fc6e4437c537afba248a2c04d723ccdcef04a89a))
+- simplify terminal output handling and remove codex-acp \_meta streaming ([59becb4](https://github.com/pengjiantao/vscode-acp-chat/commit/59becb49d0471a760e1ce9a623d3e9f1b160c67a))
+
 ### [1.12.3](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.12.2...v1.12.3) (2026-06-29)
 
 ### Code Refactoring
