@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import { ChildProcess } from "child_process";
+import { type SessionUpdate } from "@agentclientprotocol/sdk";
 import { ACPClient, type SpawnFunction } from "../acp/client";
 import { AgentSessionManager, type SessionStore } from "../acp/session-manager";
 import { inMemorySessionStore } from "./mocks/session-store";
@@ -625,14 +626,16 @@ suite("SessionManager", () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
 
       // Get the current session ID
-      const sessionId = (client as any).currentSessionId;
+      const sessionId = (
+        client as unknown as { currentSessionId: string | null }
+      ).currentSessionId;
       assert.ok(sessionId, "Should have a session ID");
 
       // Clear update tracking
-      const updates: Array<{ sessionUpdate: string; content?: any }> = [];
+      const updates: SessionUpdate[] = [];
       client.setOnSessionUpdate((notification) => {
-        const update = (notification as any).update;
-        updates.push(update as any);
+        const update = notification.update;
+        updates.push(update);
       });
 
       // Load the session to trigger history replay
@@ -768,10 +771,13 @@ suite("SessionManager", () => {
       const agentCtx = client.getAgentContext();
       assert.ok(agentCtx, "Agent context should be available");
       const originalRequest = agentCtx.request.bind(agentCtx);
-      let capturedPrompt: any = null;
-      agentCtx.request = async (method: string, params: any) => {
+      let capturedPrompt: Array<{ type: string; text?: string }> | null = null;
+      agentCtx.request = async (
+        method: string,
+        params: { prompt?: Array<{ type: string; text?: string }> }
+      ) => {
         if (method === "session/prompt") {
-          capturedPrompt = params.prompt;
+          capturedPrompt = params.prompt ?? null;
           return { stopReason: "end_turn" };
         }
         return originalRequest(method, params);
@@ -792,10 +798,10 @@ suite("SessionManager", () => {
         );
 
         // First prompt item should be the clean message (no placeholders)
-        assert.strictEqual(capturedPrompt[0].type, "text");
-        assert.ok(!capturedPrompt[0].text.includes("__MENTION_"));
-        assert.ok(capturedPrompt[0].text.includes("file.ts"));
-        assert.ok(capturedPrompt[0].text.includes("selection"));
+        assert.strictEqual(capturedPrompt![0].type, "text");
+        assert.ok(!capturedPrompt![0].text?.includes("__MENTION_"));
+        assert.ok(capturedPrompt![0].text?.includes("file.ts"));
+        assert.ok(capturedPrompt![0].text?.includes("selection"));
       } finally {
         agentCtx.request = originalRequest;
       }
@@ -808,10 +814,13 @@ suite("SessionManager", () => {
       const agentCtx = client.getAgentContext();
       assert.ok(agentCtx, "Agent context should be available");
       const originalRequest = agentCtx.request.bind(agentCtx);
-      let capturedPrompt: any = null;
-      agentCtx.request = async (method: string, params: any) => {
+      let capturedPrompt: Array<{ type: string; text?: string }> | null = null;
+      agentCtx.request = async (
+        method: string,
+        params: { prompt?: Array<{ type: string; text?: string }> }
+      ) => {
         if (method === "session/prompt") {
-          capturedPrompt = params.prompt;
+          capturedPrompt = params.prompt ?? null;
           return { stopReason: "end_turn" };
         }
         return originalRequest(method, params);
@@ -820,7 +829,7 @@ suite("SessionManager", () => {
       try {
         await client.sendMessage("Test __MENTION_99__", [], []);
 
-        assert.strictEqual(capturedPrompt[0].text, "Test __MENTION_99__");
+        assert.strictEqual(capturedPrompt![0].text, "Test __MENTION_99__");
       } finally {
         agentCtx.request = originalRequest;
       }
