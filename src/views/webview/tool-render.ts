@@ -510,7 +510,13 @@ const Renderers: Partial<Record<ToolKind, ToolRenderer>> = {
     renderSummary(info) {
       const path = getIdentifier(info);
       const limit = info.rawInput?.limit;
-      const suffix = limit ? ` (${limit} lines)` : "";
+      const offset = info.rawInput?.offset;
+      let suffix = "";
+      if (typeof limit === "number" && limit > 0) {
+        const startLine = typeof offset === "number" ? offset + 1 : 1;
+        const endLine = startLine + limit - 1;
+        suffix = ` (lines ${startLine}-${endLine})`;
+      }
       const statusIcon =
         info.status === "in_progress"
           ? `<span class="tool-status running"><span class="codicon codicon-loading animate-spin"></span></span>`

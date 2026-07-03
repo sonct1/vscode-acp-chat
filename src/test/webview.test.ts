@@ -260,6 +260,53 @@ suite("Webview", () => {
       assert.ok(html.includes("config.json"));
     });
 
+    test("renders read tool with line range from offset and limit", () => {
+      const html = renderToolSummary({
+        toolCallId: "tool-1",
+        title: "main.ts",
+        kind: "read",
+        status: "completed",
+        rawInput: { path: "main.ts", offset: 100, limit: 100 },
+      });
+      assert.ok(html.includes("(lines 101-200)"));
+      assert.ok(!html.includes("(100 lines)"));
+    });
+
+    test("renders read tool with limit only", () => {
+      const html = renderToolSummary({
+        toolCallId: "tool-1",
+        title: "main.ts",
+        kind: "read",
+        status: "completed",
+        rawInput: { path: "main.ts", limit: 50 },
+      });
+      assert.ok(html.includes("(lines 1-50)"));
+    });
+
+    test("renders read tool without offset or limit", () => {
+      const html = renderToolSummary({
+        toolCallId: "tool-1",
+        title: "main.ts",
+        kind: "read",
+        status: "completed",
+        rawInput: { path: "main.ts" },
+      });
+      assert.ok(html.includes("<strong>Read:</strong>"));
+      assert.ok(!html.includes("lines"));
+    });
+
+    test("renders read tool without line range when limit is 0", () => {
+      const html = renderToolSummary({
+        toolCallId: "tool-1",
+        title: "main.ts",
+        kind: "read",
+        status: "completed",
+        rawInput: { path: "main.ts", limit: 0 },
+      });
+      assert.ok(html.includes("<strong>Read:</strong>"));
+      assert.ok(!html.includes("lines"));
+    });
+
     test("renders search tool with correct label", () => {
       const html = renderToolSummary({
         toolCallId: "tool-1",
