@@ -1800,7 +1800,7 @@ export class WebviewController {
       details.innerHTML = `
         <summary class="tool-summary">
           <span class="tool-status running"><span class="codicon codicon-loading animate-spin"></span></span>
-          <span class="tool-name">Initializing...</span>
+          <span class="tool-summary-content"><span class="tool-name">Initializing...</span></span>
         </summary>
         <div class="tool-details-content"></div>
       `;
@@ -3257,14 +3257,19 @@ export class WebviewController {
 
             const summary = block.element.querySelector("summary");
             if (summary) {
-              const summaryHtml = renderToolSummary({
-                toolCallId: msg.toolCallId,
-                title: msg.name || block.title || "Tool",
-                kind: msg.kind || block.kind,
-                status: "in_progress",
-                rawInput: msg.rawInput,
-              });
-              summary.innerHTML = summaryHtml;
+              const summaryContent = summary.querySelector(
+                ".tool-summary-content"
+              );
+              if (summaryContent) {
+                const summaryHtml = renderToolSummary({
+                  toolCallId: msg.toolCallId,
+                  title: msg.name || block.title || "Tool",
+                  kind: msg.kind || block.kind,
+                  status: "in_progress",
+                  rawInput: msg.rawInput,
+                });
+                summaryContent.innerHTML = summaryHtml;
+              }
             }
           }
           this.scrollToBottom();
@@ -3283,6 +3288,13 @@ export class WebviewController {
               msg.title || block.title || block.toolId || "Tool";
             const summary = block.element.querySelector("summary");
             if (summary) {
+              // Remove spinner on completion
+              summary.querySelector(".tool-status.running")?.remove();
+
+              const summaryContent = summary.querySelector(
+                ".tool-summary-content"
+              );
+              const target = summaryContent || summary;
               const summaryHtml = renderToolSummary({
                 toolCallId: msg.toolCallId,
                 title: finalTitle,
@@ -3292,7 +3304,7 @@ export class WebviewController {
                 rawInput: msg.rawInput,
                 duration: msg.duration,
               });
-              summary.innerHTML = summaryHtml;
+              target.innerHTML = summaryHtml;
             }
 
             // Update tool-item class based on status

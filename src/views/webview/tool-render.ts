@@ -303,13 +303,9 @@ function renderExecuteDetails(info: ToolCallSummary): string {
 
 const BaseRenderer: ToolRenderer = {
   renderSummary(info: ToolCallSummary): string {
-    const { kind, duration, status } = info;
+    const { kind, duration } = info;
     const iconClass = getToolKindIcon(kind);
     const icon = iconClass ? `<span class="${iconClass}"></span>` : "";
-    const statusIcon =
-      status === "in_progress"
-        ? `<span class="tool-status running"><span class="codicon codicon-loading animate-spin"></span></span>`
-        : "";
     const durationStr = duration ? ` | ${formatDuration(duration)}` : "";
     const identifier = getIdentifier(info);
 
@@ -318,7 +314,6 @@ const BaseRenderer: ToolRenderer = {
     const hideKindLabel = kindLabel === "Other";
 
     return `
-      ${statusIcon}
       ${icon ? `<span class="tool-kind-icon">${icon}</span> ` : ""}
       <span class="tool-name">${hideKindLabel ? "" : `<strong>${kindLabel}:</strong> `}${escapeHtml(identifier)}${durationStr}</span>
     `;
@@ -512,15 +507,10 @@ const Renderers: Partial<Record<ToolKind, ToolRenderer>> = {
         const endLine = startLine + limit - 1;
         suffix = ` (lines ${startLine}-${endLine})`;
       }
-      const statusIcon =
-        info.status === "in_progress"
-          ? `<span class="tool-status running"><span class="codicon codicon-loading animate-spin"></span></span>`
-          : "";
       const durationStr = info.duration
         ? ` | ${formatDuration(info.duration)}`
         : "";
       return `
-        ${statusIcon}
         <span class="tool-kind-icon"><span class="codicon codicon-file-text"></span></span>
         <span class="tool-name"><strong>Read:</strong> ${escapeHtml(path)}${suffix}${durationStr}</span>
       `;
@@ -530,15 +520,10 @@ const Renderers: Partial<Record<ToolKind, ToolRenderer>> = {
     ...BaseRenderer,
     renderSummary(info) {
       const query = getIdentifier(info);
-      const statusIcon =
-        info.status === "in_progress"
-          ? `<span class="tool-status running"><span class="codicon codicon-loading animate-spin"></span></span>`
-          : "";
       const durationStr = info.duration
         ? ` | ${formatDuration(info.duration)}`
         : "";
       return `
-        ${statusIcon}
         <span class="tool-kind-icon"><span class="codicon codicon-search"></span></span>
         <span class="tool-name"><strong>Search:</strong> "${escapeHtml(query)}"${durationStr}</span>
       `;

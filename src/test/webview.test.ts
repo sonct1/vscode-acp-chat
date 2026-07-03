@@ -173,20 +173,16 @@ suite("Webview", () => {
   });
 
   suite("renderToolSummary", () => {
-    test("renders running tool with spinner icon", () => {
+    test("renders running tool summary without spinner (spinner managed in DOM)", () => {
       const html = renderToolSummary({
         toolCallId: "tool-1",
         title: "bash",
         kind: "execute",
         status: "in_progress",
       });
-      assert.ok(
-        html.includes(
-          '<span class="codicon codicon-loading animate-spin"></span>'
-        )
-      );
+      // Spinner is now managed separately in the DOM, not in renderToolSummary
+      assert.ok(!html.includes("codicon-loading"));
       assert.ok(html.includes("bash"));
-      assert.ok(html.includes("running"));
     });
 
     test("renders completed tool without status icon", () => {
@@ -3085,8 +3081,9 @@ suite("Webview", () => {
         title: "unknown_tool",
         status: "in_progress",
       });
-      // Should still have status icon but no specific tool-kind-icon
-      assert.ok(html.includes("codicon-loading"));
+      // No specific tool-kind-icon when kind is undefined; spinner is managed in DOM
+      assert.ok(!html.includes("tool-kind-icon"));
+      assert.ok(html.includes("unknown_tool"));
     });
 
     test("renders edit tool with edit icon", () => {

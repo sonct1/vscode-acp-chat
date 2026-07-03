@@ -2118,6 +2118,12 @@ kbd {
   opacity: 0.8;
 }
 
+.tool-summary-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .tool-details-content {
   padding: 8px 12px;
   background: transparent;
