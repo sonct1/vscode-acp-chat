@@ -3294,17 +3294,18 @@ export class WebviewController {
               const summaryContent = summary.querySelector(
                 ".tool-summary-content"
               );
-              const target = summaryContent || summary;
-              const summaryHtml = renderToolSummary({
-                toolCallId: msg.toolCallId,
-                title: finalTitle,
-                kind: msg.kind || block.kind,
-                status: msg.status || "completed",
-                locations: msg.locations,
-                rawInput: msg.rawInput,
-                duration: msg.duration,
-              });
-              target.innerHTML = summaryHtml;
+              if (summaryContent) {
+                const summaryHtml = renderToolSummary({
+                  toolCallId: msg.toolCallId,
+                  title: finalTitle,
+                  kind: msg.kind || block.kind,
+                  status: msg.status || "completed",
+                  locations: msg.locations,
+                  rawInput: msg.rawInput,
+                  duration: msg.duration,
+                });
+                summaryContent.innerHTML = summaryHtml;
+              }
             }
 
             // Update tool-item class based on status
