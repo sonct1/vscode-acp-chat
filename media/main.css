@@ -2177,6 +2177,8 @@ kbd {
   margin: 0;
   padding: 8px 0;
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: 400px;
   line-height: 1.5;
 }
 
