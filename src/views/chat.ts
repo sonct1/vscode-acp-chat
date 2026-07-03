@@ -643,10 +643,17 @@ export class ChatViewProvider
   }
 
   /**
-   * Return whether the current agent supports `loadSession`.
+   * Return whether the current agent supports `session/load`.
    */
   public getSupportsLoadSession(): boolean {
     return this.sessionManager.supportsLoadSession;
+  }
+
+  /**
+   * Return whether the current agent supports `session/list`.
+   */
+  public getSupportsListSessions(): boolean {
+    return this.sessionManager.supportsListSessions;
   }
 
   /**

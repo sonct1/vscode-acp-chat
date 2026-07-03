@@ -87,6 +87,82 @@ suite("SessionManager", () => {
       });
     });
 
+    suite("supportsListSessions", () => {
+      test("should be false before syncCapabilities", () => {
+        assert.strictEqual(manager.supportsListSessions, false);
+      });
+
+      test("should be true after connect with list-capable agent", async () => {
+        await client.connect();
+        manager.syncCapabilities();
+        assert.strictEqual(manager.supportsListSessions, true);
+      });
+
+      test("should be false for agent without list capability", async () => {
+        const disabledSpawn = (
+          _command: string,
+          _args: string[],
+          _options: unknown
+        ): ChildProcess => {
+          return createMockProcess({
+            enableLoadSession: true,
+            enableListSessions: false,
+          }) as unknown as ChildProcess;
+        };
+
+        const disabledClient = new ACPClient({
+          agentConfig: {
+            id: "mock-no-list",
+            name: "Mock No List",
+            command: "mock",
+            args: [],
+          },
+          spawn: disabledSpawn,
+          skipAvailabilityCheck: true,
+        });
+        const disabledManager = new AgentSessionManager(disabledClient);
+
+        await disabledClient.connect();
+        disabledManager.syncCapabilities();
+        assert.strictEqual(disabledManager.supportsListSessions, false);
+
+        disabledClient.dispose();
+      });
+
+      test("should return empty array when list capability is not supported", async () => {
+        const disabledSpawn = (
+          _command: string,
+          _args: string[],
+          _options: unknown
+        ): ChildProcess => {
+          return createMockProcess({
+            enableLoadSession: true,
+            enableListSessions: false,
+          }) as unknown as ChildProcess;
+        };
+
+        const disabledClient = new ACPClient({
+          agentConfig: {
+            id: "mock-no-list",
+            name: "Mock No List",
+            command: "mock",
+            args: [],
+          },
+          spawn: disabledSpawn,
+          skipAvailabilityCheck: true,
+        });
+        const disabledManager = new AgentSessionManager(disabledClient);
+
+        await disabledClient.connect();
+        disabledManager.syncCapabilities();
+
+        const sessions = await disabledManager.listSessions("/test");
+        assert.deepStrictEqual(sessions, []);
+
+        disabledClient.dispose();
+      });
+    });
+
     suite("syncCapabilities", () => {
       test("should throw if not connected", () => {
         // syncCapabilities reads from acpClient.getAgentCapabilities()
@@ -129,7 +205,7 @@ suite("SessionManager", () => {
         assert.strictEqual(sessions[0].cwd, "/test/dir");
       });
 
-      test("should return empty array if agent call fails", async () => {
+      test("should return empty array when not connected", async () => {
         await client.connect();
         manager.syncCapabilities();
 

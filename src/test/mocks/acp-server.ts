@@ -12,6 +12,7 @@ export interface UsageUpdatePayload {
 export interface MockACPServerOptions {
   demoMode?: DemoMode;
   enableLoadSession?: boolean;
+  enableListSessions?: boolean;
   useConfigOptions?: boolean;
   emitUsageUpdate?: UsageUpdatePayload | null;
 }
@@ -28,6 +29,7 @@ export class MockACPServer {
   private sessionCounter = 0;
   private demoMode: DemoMode;
   private enableLoadSession: boolean;
+  private enableListSessions: boolean;
   private useConfigOptions: boolean;
   private emitUsageUpdate: UsageUpdatePayload | null;
 
@@ -40,6 +42,7 @@ export class MockACPServer {
   constructor(options: MockACPServerOptions = {}) {
     this.demoMode = options.demoMode ?? "default";
     this.enableLoadSession = options.enableLoadSession ?? true;
+    this.enableListSessions = options.enableListSessions ?? true;
     this.useConfigOptions = options.useConfigOptions ?? false;
     this.emitUsageUpdate = options.emitUsageUpdate ?? null;
 
@@ -88,9 +91,9 @@ export class MockACPServer {
           protocolVersion: acp.PROTOCOL_VERSION,
           agentCapabilities: {
             loadSession: this.enableLoadSession,
-            sessionCapabilities: {
-              list: {},
-            },
+            sessionCapabilities: this.enableListSessions
+              ? { list: {} }
+              : undefined,
           },
         });
         break;

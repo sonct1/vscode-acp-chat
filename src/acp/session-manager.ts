@@ -11,6 +11,7 @@
 import type {
   LoadSessionResponse,
   ListSessionsResponse,
+  AgentCapabilities,
 } from "@agentclientprotocol/sdk";
 
 /**
@@ -18,7 +19,7 @@ import type {
  * This avoids a circular dependency with the full ACPClient class.
  */
 export interface IACPClient {
-  getAgentCapabilities(): { loadSession?: boolean } | null;
+  getAgentCapabilities(): AgentCapabilities | null;
   isConnected(): boolean;
   loadSession(params: {
     sessionId: string;
@@ -99,6 +100,13 @@ export abstract class SessionManager {
    * called but is expected to fail or fall back.
    */
   abstract get supportsLoadSession(): boolean;
+
+  /**
+   * Whether this manager can list discoverable sessions (agent advertises the
+   * `sessionCapabilities.list` capability). When `false`, `listSessions()` may
+   * still be called but is expected to fail or fall back.
+   */
+  abstract get supportsListSessions(): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,21 +114,25 @@ export abstract class SessionManager {
 // ---------------------------------------------------------------------------
 
 /**
- * Manages sessions via the ACP agent's native `session/load` method.
+ * Manages sessions via the ACP agent's native session methods.
  *
  * Lifecycle:
  *   1. `connect()` is called on the ACPClient (once per agent switch / startup)
- *   2. During `initialize`, the agent reports `agentCapabilities.loadSession`
- *   3. This class reads that flag and gates `listSessions` / `loadSession`
+ *   2. During `initialize`, the agent reports `agentCapabilities`
+ *   3. This class reads `loadSession` and `sessionCapabilities.list` and
+ *      gates `loadSession` / `listSessions` accordingly.
  *
- * If the agent does **not** advertise `loadSession`, `listSessions()` returns
- * `[]` and `supportsLoadSession` is `false` – the UI can hide or disable the
- * "Load History" button accordingly.
+ * If the agent does **not** advertise `loadSession`, `supportsLoadSession` is
+ * `false` and the UI can hide or disable loading of history sessions.
+ * If the agent does **not** advertise `sessionCapabilities.list`,
+ * `supportsListSessions` is `false` and the UI can hide or disable listing
+ * of history sessions.
  */
 export class AgentSessionManager extends SessionManager {
   readonly kind = "agent";
 
   private _supportsLoadSession = false;
+  private _supportsListSessions = false;
   private _initialized = false;
 
   constructor(private readonly acpClient: IACPClient) {
@@ -131,6 +143,7 @@ export class AgentSessionManager extends SessionManager {
   syncCapabilities(): void {
     const caps = this.acpClient.getAgentCapabilities();
     this._supportsLoadSession = caps?.loadSession ?? false;
+    this._supportsListSessions = !!caps?.sessionCapabilities?.list;
     this._initialized = true;
   }
 
@@ -138,17 +151,28 @@ export class AgentSessionManager extends SessionManager {
     return this._supportsLoadSession;
   }
 
+  get supportsListSessions(): boolean {
+    return this._supportsListSessions;
+  }
+
   /**
-   * List sessions from the agent via `session/list` (unstable ACP method).
+   * List sessions from the agent via `session/list`.
    *
-   * If the agent doesn't advertise the `listSessions` capability, or the
-   * call fails, this returns an empty array.
+   * If the agent doesn't advertise the `sessionCapabilities.list` capability,
+   * or the call fails, this returns an empty array.
    */
   async listSessions(cwd: string): Promise<SessionInfo[]> {
     if (!this._initialized) {
       throw new Error(
         "AgentSessionManager not yet synced – call syncCapabilities() first"
       );
+    }
+
+    if (!this._supportsListSessions) {
+      console.warn(
+        "[SessionManager] Current agent does not support the `session/list` capability"
+      );
+      return [];
     }
 
     try {

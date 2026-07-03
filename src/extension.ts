@@ -126,6 +126,13 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
+      if (!chatProvider.getSupportsListSessions()) {
+        vscode.window.showInformationMessage(
+          "The current agent does not support listing history sessions."
+        );
+        return;
+      }
+
       try {
         const sessions = await chatProvider.listSessions();
 

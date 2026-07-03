@@ -825,9 +825,13 @@ export class ACPClient {
   }
 
   /**
-   * List existing sessions via the ACP `session/list` method (unstable).
+   * List existing sessions via the ACP `session/list` method.
    *
-   * @throws If not connected or agent doesn't support `listSessions`.
+   * The caller (e.g. `AgentSessionManager`) is responsible for checking
+   * `agentCapabilities.sessionCapabilities.list` and deciding whether to
+   * gracefully degrade. This low-level method forwards the request as-is.
+   *
+   * @throws If not connected.
    */
   async listSessions(params?: {
     cwd?: string;
