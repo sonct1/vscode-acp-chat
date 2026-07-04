@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.17.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.16.0...v1.17.0) (2026-07-04)
+
+### Features
+
+- **session:** add persistence controls and automatic cleanup settings ([5ffd23c](https://github.com/pengjiantao/vscode-acp-chat/commit/5ffd23cc7f4fdf7b03449f1f4a649d742b2321df))
+
 ## [1.16.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.15.1...v1.16.0) (2026-07-04)
 
 ### Features
