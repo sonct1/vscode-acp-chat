@@ -727,6 +727,41 @@ body {
   opacity: 0.9;
 }
 
+/* File type icons (Material Icons) */
+.file-type-icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+/* File type icon in chips */
+.chip-icon .file-type-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* File type icon in diff header */
+.diff-header .file-type-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: text-bottom;
+}
+
+/* File type icon in diff summary */
+.diff-item-info .file-type-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* File type icon in search results */
+.command-icon .file-type-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .command-chip .chip-prefix {
   font-family: var(--vscode-editor-font-family), monospace;
   opacity: 0.75;

@@ -771,7 +771,7 @@ suite("Webview", () => {
           "Chip name should match"
         );
         assert.ok(
-          mentionChip.querySelector(".codicon-file-media"),
+          mentionChip.querySelector(".file-type-icon"),
           "Image icon should exist"
         );
       });

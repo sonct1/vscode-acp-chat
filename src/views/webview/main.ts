@@ -3,6 +3,7 @@ import { renderToolSummary, renderToolDetails } from "./tool-render";
 import { escapeHtml } from "./html-utils";
 import { computeLineDiff } from "../../utils/diff";
 import { AsyncSerialQueue } from "../../utils/async-queue";
+import { getFileIconHtml, getFolderIconHtml } from "./file-icon";
 
 export interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -273,7 +274,7 @@ export function renderDiff(
   if (path) {
     const filename = path.split("/").pop() || path;
     html += `<div class="diff-header" acp-title="${escapeHtml(path)}" data-file-path="${escapeHtml(path)}">
-    <span class="codicon codicon-file-text"></span>
+    ${getFileIconHtml(filename, 14)}
     <span class="diff-path">${escapeHtml(filename)}</span>
   </div>`;
   }
@@ -2402,16 +2403,16 @@ export class WebviewController {
     i: number
   ): string {
     const isFolder = file.type === "folder";
-    const iconClass = isFolder
-      ? "codicon codicon-folder"
-      : this.getFileIconClass(file.name);
+    const iconHtml = isFolder
+      ? getFolderIconHtml(file.name)
+      : getFileIconHtml(file.name);
 
     // 单行显示：文件名 + 路径
     const displayPath = file.dir ? escapeHtml(file.dir + "/") : "";
 
     return `
       <div class="command-item ${i === this.selectedIndex ? "selected" : ""}" data-index="${i}" role="option" aria-selected="${i === this.selectedIndex}" data-fspath="${escapeHtml(file.fsPath)}">
-        <div class="command-icon ${iconClass}"></div>
+        <div class="command-icon">${iconHtml}</div>
         <div class="command-content">
           <div class="command-name">
             <span class="file-name">${escapeHtml(file.name)}</span>
@@ -2420,46 +2421,6 @@ export class WebviewController {
         </div>
       </div>
     `;
-  }
-
-  private getFileIconClass(fileName: string): string {
-    const extension = fileName.split(".").pop()?.toLowerCase() || "";
-    const iconMap: Record<string, string> = {
-      ts: "codicon codicon-file-code",
-      tsx: "codicon codicon-file-code",
-      js: "codicon codicon-file-code",
-      jsx: "codicon codicon-file-code",
-      json: "codicon codicon-json",
-      md: "codicon codicon-markdown",
-      css: "codicon codicon-file-code",
-      html: "codicon codicon-file-code",
-      png: "codicon codicon-file-media",
-      jpg: "codicon codicon-file-media",
-      jpeg: "codicon codicon-file-media",
-      gif: "codicon codicon-file-media",
-      svg: "codicon codicon-file-media",
-    };
-    return iconMap[extension] || "codicon codicon-file";
-  }
-
-  private getFileIcon(fileName: string): string {
-    const extension = fileName.split(".").pop()?.toLowerCase() || "";
-    const iconMap: Record<string, string> = {
-      ts: "codicon codicon-file-code",
-      tsx: "codicon codicon-file-code",
-      js: "codicon codicon-file-code",
-      jsx: "codicon codicon-file-code",
-      json: "codicon codicon-json",
-      md: "codicon codicon-markdown",
-      css: "codicon codicon-file-code",
-      html: "codicon codicon-file-code",
-      png: "codicon codicon-file-media",
-      jpg: "codicon codicon-file-media",
-      jpeg: "codicon codicon-file-media",
-      gif: "codicon codicon-file-media",
-      svg: "codicon codicon-file-media",
-    };
-    return iconMap[extension] || "codicon codicon-file";
   }
 
   private scrollSelectedIntoView(): void {
@@ -2596,13 +2557,13 @@ export class WebviewController {
     const typeConfigs: Record<
       string,
       {
-        icon: string;
+        iconHtml: string;
         onClick?: (e: MouseEvent) => void;
         onHover?: (e: MouseEvent) => void;
       }
     > = {
       file: {
-        icon: "codicon codicon-file-text",
+        iconHtml: getFileIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -2615,7 +2576,7 @@ export class WebviewController {
         },
       },
       folder: {
-        icon: "codicon codicon-folder",
+        iconHtml: getFolderIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -2624,7 +2585,7 @@ export class WebviewController {
         },
       },
       selection: {
-        icon: "codicon codicon-file-text",
+        iconHtml: getFileIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -2637,10 +2598,10 @@ export class WebviewController {
         },
       },
       terminal: {
-        icon: "codicon codicon-terminal",
+        iconHtml: `<span class="codicon codicon-terminal"></span>`,
       },
       image: {
-        icon: "codicon codicon-file-media",
+        iconHtml: getFileIconHtml(filename),
         onHover: (e) => {
           if (mention.dataUrl) {
             if (!readonly) this.hoveredImageChip = chip;
@@ -2652,7 +2613,7 @@ export class WebviewController {
 
     const config = typeConfigs[mentionType] || typeConfigs.file;
 
-    let innerHTML = `<span class="chip-icon ${config.icon}"></span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
+    let innerHTML = `<span class="chip-icon">${config.iconHtml}</span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
 
     if (!readonly) {
       innerHTML += `<div class="chip-delete" acp-title="Remove attachment"><span class="codicon codicon-close"></span></div>`;
@@ -3105,7 +3066,7 @@ export class WebviewController {
         html += `
           <div class="diff-summary-item">
             <div class="diff-item-info" acp-title="${escapeHtml(change.path)}">
-      <span class="codicon codicon-file-text"></span>
+      ${getFileIconHtml(filename, 14)}
               <span class="diff-item-path">
                 <span style="font-weight: bold;">${escapeHtml(filename)}</span>
                 ${dirpath ? `<span style="color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-left: 4px;">${escapeHtml(dirpath)}</span>` : ""}
