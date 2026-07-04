@@ -15,7 +15,6 @@ import type {
 
 interface ManagedTerminal {
   id: string;
-  terminal?: vscode.Terminal;
   proc: ReturnType<typeof spawn> | null;
   output: string;
   outputByteLimit: number | null;
@@ -52,80 +51,50 @@ export class TerminalHandler {
       exitResolve,
     };
 
-    const writeEmitter = new vscode.EventEmitter<string>();
-    const closeEmitter = new vscode.EventEmitter<number | void>();
+    const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const cwd =
+      params.cwd && params.cwd.trim() !== ""
+        ? params.cwd
+        : workspaceCwd ||
+          process.env.HOME ||
+          process.env.USERPROFILE ||
+          process.cwd();
 
-    const pty: vscode.Pseudoterminal = {
-      onDidWrite: writeEmitter.event,
-      onDidClose: closeEmitter.event,
-      open: () => {
-        const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const cwd =
-          params.cwd && params.cwd.trim() !== ""
-            ? params.cwd
-            : workspaceCwd ||
-              process.env.HOME ||
-              process.env.USERPROFILE ||
-              process.cwd();
-
-        const proc = spawn(params.command, params.args || [], {
-          cwd,
-          env: {
-            ...process.env,
-            ...(params.env?.reduce(
-              (acc, e) => ({ ...acc, [e.name]: e.value }),
-              {}
-            ) || {}),
-          },
-          shell: true,
-        });
-
-        managedTerminal.proc = proc;
-
-        proc.stdout?.on("data", (data: Buffer) => {
-          const text = data.toString();
-          writeEmitter.fire(text.replace(/\n/g, "\r\n"));
-          this.appendTerminalOutput(managedTerminal, text);
-        });
-
-        proc.stderr?.on("data", (data: Buffer) => {
-          const text = data.toString();
-          writeEmitter.fire(text.replace(/\n/g, "\r\n"));
-          this.appendTerminalOutput(managedTerminal, text);
-        });
-
-        proc.on("close", (code: number | null, signal: string | null) => {
-          managedTerminal.exitCode = code;
-          managedTerminal.signal = signal;
-          managedTerminal.exitResolve();
-          closeEmitter.fire(code ?? 0);
-        });
-
-        proc.on("error", (err: Error) => {
-          writeEmitter.fire(`\r\nError: ${err.message}\r\n`);
-          managedTerminal.exitCode = 1;
-          managedTerminal.exitResolve();
-          closeEmitter.fire(1);
-        });
+    const proc = spawn(params.command, params.args || [], {
+      cwd,
+      env: {
+        ...process.env,
+        ...(params.env?.reduce(
+          (acc, e) => ({ ...acc, [e.name]: e.value }),
+          {}
+        ) || {}),
       },
-      close: () => {
-        if (managedTerminal.proc && !managedTerminal.proc.killed) {
-          try {
-            managedTerminal.proc.kill();
-          } catch {}
-        }
-      },
-    };
-
-    const terminal = vscode.window.createTerminal({
-      name: `ACP: ${params.command}`,
-      pty,
+      shell: true,
     });
 
-    managedTerminal.terminal = terminal;
-    this.terminals.set(terminalId, managedTerminal);
+    managedTerminal.proc = proc;
 
-    terminal.show(true);
+    proc.stdout?.on("data", (data: Buffer) => {
+      this.appendTerminalOutput(managedTerminal, data.toString());
+    });
+
+    proc.stderr?.on("data", (data: Buffer) => {
+      this.appendTerminalOutput(managedTerminal, data.toString());
+    });
+
+    proc.on("close", (code: number | null, signal: string | null) => {
+      managedTerminal.exitCode = code;
+      managedTerminal.signal = signal;
+      managedTerminal.exitResolve();
+    });
+
+    proc.on("error", (err: Error) => {
+      this.appendTerminalOutput(managedTerminal, `Error: ${err.message}\n`);
+      managedTerminal.exitCode = 1;
+      managedTerminal.exitResolve();
+    });
+
+    this.terminals.set(terminalId, managedTerminal);
 
     return { terminalId };
   }
@@ -178,7 +147,6 @@ export class TerminalHandler {
     }
 
     this.killTerminalProcess(terminal);
-    terminal.terminal?.dispose();
     return {};
   }
 
@@ -191,7 +159,6 @@ export class TerminalHandler {
     }
 
     this.killTerminalProcess(terminal);
-    terminal.terminal?.dispose();
     this.terminals.delete(params.terminalId);
     return {};
   }
@@ -199,9 +166,6 @@ export class TerminalHandler {
   dispose(): void {
     for (const terminal of this.terminals.values()) {
       this.killTerminalProcess(terminal);
-      try {
-        terminal.terminal?.dispose();
-      } catch {}
     }
     this.terminals.clear();
   }
