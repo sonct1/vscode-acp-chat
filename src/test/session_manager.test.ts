@@ -219,87 +219,27 @@ suite("SessionManager", () => {
         await noListClient.connect();
         noListManager.syncCapabilities();
 
-        await noListManager.recordNewSession(
-          "session-1",
-          "/test",
-          "First chat"
-        );
-        await noListManager.recordNewSession(
-          "session-2",
-          "/other",
-          "Other chat"
-        );
-        await noListManager.recordNewSession("session-3", "/test");
-
-        const sessions = await noListManager.listSessions("/test");
-        assert.strictEqual(sessions.length, 2);
-        const sessionIds = sessions.map((s) => s.sessionId);
-        assert.ok(sessionIds.includes("session-1"));
-        assert.ok(sessionIds.includes("session-3"));
-        assert.ok(!sessionIds.includes("session-2"));
-        assert.strictEqual(
-          sessions.find((s) => s.sessionId === "session-1")?.title,
-          "First chat"
-        );
-
-        noListClient.dispose();
-      });
-
-      test("recordNewSession should update existing record instead of duplicating", async () => {
-        const { client: noListClient, manager: noListManager } =
-          createNoListManager();
-        await noListClient.connect();
-        noListManager.syncCapabilities();
-
-        await noListManager.recordNewSession("session-1", "/test", "Initial");
-        await noListManager.recordNewSession("session-1", "/test", "Renamed");
+        // Create two sessions in different working directories
+        await noListManager.newSession("/test");
+        await noListManager.newSession("/other");
 
         const sessions = await noListManager.listSessions("/test");
         assert.strictEqual(sessions.length, 1);
-        assert.strictEqual(sessions[0].title, "Renamed");
+        assert.strictEqual(sessions[0].cwd, "/test");
 
         noListClient.dispose();
       });
 
-      test("onSessionInfoUpdate should update title and updatedAt", async () => {
+      test("newSession should record session in local cache", async () => {
         const { client: noListClient, manager: noListManager } =
           createNoListManager();
         await noListClient.connect();
         noListManager.syncCapabilities();
 
-        await noListManager.recordNewSession("session-1", "/test", "Initial");
-        const before = (await noListManager.listSessions("/test"))[0];
-
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        await noListManager.onSessionInfoUpdate(
-          { title: "Updated title", updatedAt: new Date().toISOString() },
-          "session-1"
-        );
-
-        const after = (await noListManager.listSessions("/test"))[0];
-        assert.strictEqual(after.title, "Updated title");
-        assert.ok(
-          new Date(after.updatedAt).getTime() >=
-            new Date(before.updatedAt).getTime()
-        );
-
-        noListClient.dispose();
-      });
-
-      test("should ignore session_info_update for unknown session", async () => {
-        const { client: noListClient, manager: noListManager } =
-          createNoListManager();
-        await noListClient.connect();
-        noListManager.syncCapabilities();
-
-        await noListManager.recordNewSession("session-1", "/test", "Initial");
-        await noListManager.onSessionInfoUpdate(
-          { title: "Updated title" },
-          "unknown-session"
-        );
-
+        const response = await noListManager.newSession("/test");
         const sessions = await noListManager.listSessions("/test");
-        assert.strictEqual(sessions[0].title, "Initial");
+        assert.strictEqual(sessions.length, 1);
+        assert.strictEqual(sessions[0].sessionId, response.sessionId);
 
         noListClient.dispose();
       });
@@ -364,16 +304,16 @@ suite("SessionManager", () => {
         await noListClientB.connect();
         managerB.syncCapabilities();
 
-        await managerA.recordNewSession("agent-a-session", "/test");
-        await managerB.recordNewSession("agent-b-session", "/test");
+        const responseA = await managerA.newSession("/test");
+        const responseB = await managerB.newSession("/test");
 
         const sessionsA = await managerA.listSessions("/test");
         assert.strictEqual(sessionsA.length, 1);
-        assert.strictEqual(sessionsA[0].sessionId, "agent-a-session");
+        assert.strictEqual(sessionsA[0].sessionId, responseA.sessionId);
 
         const sessionsB = await managerB.listSessions("/test");
         assert.strictEqual(sessionsB.length, 1);
-        assert.strictEqual(sessionsB[0].sessionId, "agent-b-session");
+        assert.strictEqual(sessionsB[0].sessionId, responseB.sessionId);
 
         noListClientA.dispose();
         noListClientB.dispose();
@@ -990,12 +930,12 @@ suite("SessionManager", () => {
       await disabledClient.connect();
       disabledManager.syncCapabilities();
 
-      await disabledManager.recordNewSession("test-session-1", "/test");
+      const response = await disabledManager.newSession("/test");
       const before = await localStore.read();
       assert.strictEqual(before.length, 1);
 
       await assert.rejects(
-        () => disabledManager.deleteSession("test-session-1"),
+        () => disabledManager.deleteSession(response.sessionId),
         /does not support the `session\/delete` capability/
       );
 
@@ -1010,16 +950,13 @@ suite("SessionManager", () => {
       await client.connect();
       manager.syncCapabilities();
 
-      // Create a session via the agent
-      await client.newSession("/test/dir");
-
-      // Record it locally
-      await manager.recordNewSession("mock-session-1", "/test/dir");
+      // Create a session via the manager (records locally)
+      const response = await manager.newSession("/test/dir");
       const before = await store.read();
       assert.strictEqual(before.length, 1);
 
       // Delete should call agent and remove from local store
-      await manager.deleteSession("mock-session-1");
+      await manager.deleteSession(response.sessionId);
       const after = await store.read();
       assert.strictEqual(after.length, 0);
     });

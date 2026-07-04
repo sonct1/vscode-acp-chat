@@ -60,8 +60,9 @@ class DelayedMockWebview extends MockWebview {
 }
 
 function createHistoryLoadClient() {
+  const sessionUpdateListeners: Array<(update: any) => void | Promise<void>> =
+    [];
   const client = {
-    sessionUpdateHandler: (_update: any) => {},
     setAgent: () => {},
     getAgentId: () => "test-agent",
     getAgentName: () => "Test Agent",
@@ -85,8 +86,11 @@ function createHistoryLoadClient() {
     clearLastUsageUpdate: () => {},
     setOnStateChange: () => () => {},
     setOnSessionUpdate: (cb: any) => {
-      client.sessionUpdateHandler = cb;
-      return () => {};
+      sessionUpdateListeners.push(cb);
+      return () => {
+        const idx = sessionUpdateListeners.indexOf(cb);
+        if (idx >= 0) sessionUpdateListeners.splice(idx, 1);
+      };
     },
     setOnStderr: () => () => {},
     setOnReadTextFile: () => {},
@@ -102,25 +106,29 @@ function createHistoryLoadClient() {
     newSession: async () => {},
     listSessions: async () => ({ sessions: [] }),
     loadSession: async () => {
-      client.sessionUpdateHandler({
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "History answer." },
-        },
-      });
-      client.sessionUpdateHandler({
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "tool-late-complete",
-          status: "completed",
-          kind: "write",
-          title: "Write generated file",
-          rawInput: {
-            path: "/tmp/vscode-acp-history-restoration-missing-file.txt",
-            content: "generated content",
+      for (const cb of sessionUpdateListeners) {
+        await cb({
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "History answer." },
           },
-        },
-      });
+        });
+      }
+      for (const cb of sessionUpdateListeners) {
+        await cb({
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tool-late-complete",
+            status: "completed",
+            kind: "write",
+            title: "Write generated file",
+            rawInput: {
+              path: "/tmp/vscode-acp-history-restoration-missing-file.txt",
+              content: "generated content",
+            },
+          },
+        });
+      }
     },
     dispose: () => {},
   };

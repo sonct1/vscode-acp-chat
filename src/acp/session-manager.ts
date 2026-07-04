@@ -12,31 +12,12 @@
 
 import * as vscode from "vscode";
 import type {
-  LoadSessionResponse,
+  NewSessionResponse,
   ListSessionsResponse,
-  DeleteSessionResponse,
-  AgentCapabilities,
+  SessionNotification,
   SessionInfoUpdate,
 } from "@agentclientprotocol/sdk";
-
-/**
- * Minimal interface for an ACP client, used by AgentSessionManager.
- * This avoids a circular dependency with the full ACPClient class.
- */
-export interface IACPClient {
-  getAgentId(): string;
-  getAgentCapabilities(): AgentCapabilities | null;
-  isConnected(): boolean;
-  loadSession(params: {
-    sessionId: string;
-    cwd: string;
-  }): Promise<LoadSessionResponse>;
-  listSessions(params?: {
-    cwd?: string;
-    cursor?: string;
-  }): Promise<ListSessionsResponse>;
-  deleteSession(params: { sessionId: string }): Promise<DeleteSessionResponse>;
-}
+import { ACPClient } from "./client";
 
 // ---------------------------------------------------------------------------
 // Common types
@@ -210,22 +191,13 @@ export abstract class SessionManager {
   ): Promise<LoadSessionResult>;
 
   /**
-   * Record a newly created session so it can be listed later, even when the
-   * agent does not support `session/list`.
+   * Create a new session via the agent and record it in the local cache.
+   *
+   * This is the single entry-point for session creation. The manager
+   * delegates to the ACP client and then persists the session locally so it
+   * can be listed later even when the agent does not support `session/list`.
    */
-  abstract recordNewSession(
-    sessionId: string,
-    cwd: string,
-    title?: string
-  ): Promise<void>;
-
-  /**
-   * Apply a `session_info_update` notification to the local session cache.
-   */
-  abstract onSessionInfoUpdate(
-    update: SessionInfoUpdate,
-    sessionId: string
-  ): Promise<void>;
+  abstract newSession(workingDirectory: string): Promise<NewSessionResponse>;
 
   /**
    * Whether this manager can actually load sessions (agent advertises the
@@ -288,7 +260,7 @@ export class AgentSessionManager extends SessionManager {
   private readonly _stores = new Map<string, SessionStore>();
 
   constructor(
-    private readonly acpClient: IACPClient,
+    private readonly acpClient: ACPClient,
     private readonly storeFactory: SessionStoreFactory
   ) {
     super();
@@ -304,6 +276,8 @@ export class AgentSessionManager extends SessionManager {
     return store;
   }
 
+  private _unsubscribeSessionUpdate: (() => void) | null = null;
+
   /** Call after `acpClient.connect()` to read the agent capabilities. */
   syncCapabilities(): void {
     const caps = this.acpClient.getAgentCapabilities();
@@ -311,6 +285,22 @@ export class AgentSessionManager extends SessionManager {
     this._supportsListSessions = !!caps?.sessionCapabilities?.list;
     this._supportsDeleteSession = !!caps?.sessionCapabilities?.delete;
     this._initialized = true;
+
+    this._unsubscribeSessionUpdate?.();
+    this._unsubscribeSessionUpdate = this.acpClient.setOnSessionUpdate(
+      async (notification: SessionNotification) => {
+        if (notification.update.sessionUpdate === "session_info_update") {
+          const sessionId =
+            notification.sessionId ?? this.acpClient.getCurrentSessionId();
+          if (sessionId) {
+            await this.applySessionInfoUpdate(
+              notification.update as SessionInfoUpdate,
+              sessionId
+            );
+          }
+        }
+      }
+    );
   }
 
   get supportsLoadSession(): boolean {
@@ -326,13 +316,18 @@ export class AgentSessionManager extends SessionManager {
   }
 
   /**
-   * Record a newly created session in the local cache.
-   *
-   * This allows the session to be listed later even when the current agent
-   * does not support the `session/list` capability. The caller should
-   * invoke this immediately after a successful `session/new` response.
+   * Create a new session via the agent and record it in the local cache.
    */
-  async recordNewSession(
+  async newSession(workingDirectory: string): Promise<NewSessionResponse> {
+    const response = await this.acpClient.newSession(workingDirectory);
+    await this.recordSession(response.sessionId, workingDirectory);
+    return response;
+  }
+
+  /**
+   * Record a session in the local cache.
+   */
+  private async recordSession(
     sessionId: string,
     cwd: string,
     title?: string
@@ -361,10 +356,8 @@ export class AgentSessionManager extends SessionManager {
 
   /**
    * Apply a `session_info_update` notification to the local cache.
-   *
-   * Updates the title and/or `updatedAt` timestamp for the given sessionId.
    */
-  async onSessionInfoUpdate(
+  private async applySessionInfoUpdate(
     update: SessionInfoUpdate,
     sessionId: string
   ): Promise<void> {

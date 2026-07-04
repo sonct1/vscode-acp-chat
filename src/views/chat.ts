@@ -20,7 +20,6 @@ import {
   type RequestPermissionResponse,
   type ToolCall,
   type ToolCallUpdate,
-  type SessionInfoUpdate,
 } from "@agentclientprotocol/sdk";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
@@ -1322,14 +1321,6 @@ export class ChatViewProvider
         cost,
       });
       this.sendContextUsage();
-    } else if (update.sessionUpdate === "session_info_update") {
-      const currentSessionId = this.acpClient.getCurrentSessionId();
-      if (currentSessionId) {
-        await this.sessionManager.onSessionInfoUpdate(
-          update as SessionInfoUpdate,
-          currentSessionId
-        );
-      }
     }
   }
 
@@ -1451,13 +1442,9 @@ export class ChatViewProvider
       }
 
       if (!this.hasSession) {
-        const newSession = await this.acpClient.newSession(workingDir);
+        await this.sessionManager.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
-        await this.sessionManager.recordNewSession(
-          newSession.sessionId,
-          workingDir
-        );
       }
 
       this.stderrBuffer = "";
@@ -1596,13 +1583,9 @@ export class ChatViewProvider
       this.sessionManager.syncCapabilities();
       this.documentSyncManager.syncCapabilities();
       if (!this.hasSession) {
-        const newSession = await this.acpClient.newSession(workingDir);
+        await this.sessionManager.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
-        await this.sessionManager.recordNewSession(
-          newSession.sessionId,
-          workingDir
-        );
       }
     } catch (error) {
       this.postMessage({
@@ -1640,13 +1623,9 @@ export class ChatViewProvider
     try {
       if (this.acpClient.isConnected()) {
         const workingDir = getWorkspaceRoot();
-        const newSession = await this.acpClient.newSession(workingDir);
+        await this.sessionManager.newSession(workingDir);
         this.hasSession = true;
         this.sendSessionMetadata();
-        await this.sessionManager.recordNewSession(
-          newSession.sessionId,
-          workingDir
-        );
       }
     } catch (error) {
       console.error("[Chat] Failed to create new session:", error);
