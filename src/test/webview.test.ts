@@ -2945,6 +2945,27 @@ suite("Webview", () => {
       assert.ok(fontFamily.includes("--vscode-editor-font-family"));
       assert.ok(fontFamily.includes("monospace"));
     });
+
+    test("keeps input chips vertically aligned with text", () => {
+      const css = fs.readFileSync(
+        path.resolve(process.cwd(), "media", "main.css"),
+        "utf8"
+      );
+      const dom = new JSDOM(
+        `<!DOCTYPE html><style>${css}</style><div id="input">hello <span class="mention-chip">file.ts</span> <span class="command-chip">/build</span></div>`
+      );
+      const chips = dom.window.document.querySelectorAll(
+        ".mention-chip, .command-chip"
+      );
+      assert.strictEqual(chips.length, 2);
+
+      chips.forEach((chip) => {
+        const style = dom.window.getComputedStyle(chip);
+        assert.strictEqual(style.lineHeight, "1.2");
+        assert.strictEqual(style.verticalAlign, "middle");
+        assert.strictEqual(style.top, "0px");
+      });
+    });
   });
 
   suite("getToolKindIcon", () => {

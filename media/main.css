@@ -719,6 +719,13 @@ body {
   top: 0;
 }
 
+#input .mention-chip,
+#input .command-chip {
+  line-height: 1.2;
+  vertical-align: middle;
+  top: 0;
+}
+
 .mention-chip .chip-icon {
   width: 1em;
   height: 1em;
