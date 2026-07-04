@@ -136,26 +136,135 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
+        const supportsDelete = chatProvider.getSupportsDeleteSession();
+
         const items = sessions.map((s) => ({
           label: s.title,
           description: s.sessionId,
           detail: `${vscode.workspace.asRelativePath(s.cwd)} · ${new Date(s.updatedAt).toLocaleString()}`,
           sessionId: s.sessionId,
+          buttons: supportsDelete
+            ? [
+                {
+                  iconPath: new vscode.ThemeIcon("trash"),
+                  tooltip: "Delete this session",
+                },
+              ]
+            : [],
         }));
 
-        const selected = await vscode.window.showQuickPick(items, {
-          placeHolder: "Select a conversation to load",
-          title: "VSCode ACP: Load History",
+        const quickPick = vscode.window.createQuickPick();
+        quickPick.items = items;
+        quickPick.placeholder = "Select a conversation to load";
+        quickPick.title = "VSCode ACP: Load History";
+
+        quickPick.onDidAccept(async () => {
+          const selected = quickPick.selectedItems[0];
+          if (selected && chatProvider) {
+            quickPick.dispose();
+            await chatProvider.loadHistorySession(
+              (selected as (typeof items)[0]).sessionId
+            );
+          }
         });
 
-        if (selected) {
-          await chatProvider.loadHistorySession(selected.sessionId);
-        }
+        quickPick.onDidTriggerItemButton(async (e) => {
+          const item = e.item as (typeof items)[0];
+          const confirmed = await vscode.window.showWarningMessage(
+            `Delete session "${item.label}"?`,
+            { modal: true },
+            "Delete"
+          );
+          if (confirmed === "Delete" && chatProvider) {
+            try {
+              await chatProvider.deleteHistorySession(item.sessionId);
+              quickPick.items = quickPick.items.filter(
+                (qi) => (qi as (typeof items)[0]).sessionId !== item.sessionId
+              );
+              if (quickPick.items.length === 0) {
+                quickPick.dispose();
+                vscode.window.showInformationMessage(
+                  "No more history sessions available."
+                );
+              }
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              vscode.window.showErrorMessage(
+                `Failed to delete session: ${message}`
+              );
+            }
+          }
+        });
+
+        quickPick.onDidHide(() => quickPick.dispose());
+
+        quickPick.show();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(`Failed to load history: ${message}`);
       }
     })
+  );
+
+  // Delete a chat session from history
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "vscode-acp-chat.deleteHistorySession",
+      async () => {
+        if (!chatProvider) return;
+
+        if (!chatProvider.getSupportsDeleteSession()) {
+          vscode.window.showInformationMessage(
+            "The current agent does not support deleting history sessions."
+          );
+          return;
+        }
+
+        try {
+          const sessions = await chatProvider.listSessions();
+
+          if (sessions.length === 0) {
+            vscode.window.showInformationMessage(
+              "No history sessions available to delete."
+            );
+            return;
+          }
+
+          const items = sessions.map((s) => ({
+            label: s.title,
+            description: s.sessionId,
+            detail: `${vscode.workspace.asRelativePath(s.cwd)} · ${new Date(s.updatedAt).toLocaleString()}`,
+            sessionId: s.sessionId,
+          }));
+
+          const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: "Select a conversation to delete",
+            title: "VSCode ACP: Delete History Session",
+          });
+
+          if (selected) {
+            const confirmed = await vscode.window.showWarningMessage(
+              `Delete session "${selected.label}"?`,
+              { modal: true },
+              "Delete"
+            );
+            if (confirmed === "Delete") {
+              await chatProvider.deleteHistorySession(selected.sessionId);
+              vscode.window.showInformationMessage(
+                `Session "${selected.label}" deleted.`
+              );
+            }
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(
+            `Failed to delete session: ${message}`
+          );
+        }
+      }
+    )
   );
 
   // Switch to a different AI agent

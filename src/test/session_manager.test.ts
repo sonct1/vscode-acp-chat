@@ -878,4 +878,150 @@ suite("SessionManager", () => {
       assert.ok(Array.isArray(response.sessions));
     });
   });
+
+  suite("deleteSession", () => {
+    let client: ACPClient;
+    let manager: AgentSessionManager;
+    let store: SessionStore;
+    let mockSpawn: SpawnFunction;
+
+    setup(() => {
+      store = inMemorySessionStore();
+      mockSpawn = (
+        _command: string,
+        _args: string[],
+        _options: unknown
+      ): ChildProcess => {
+        return createMockProcess({
+          enableLoadSession: true,
+          enableListSessions: true,
+          enableDeleteSession: true,
+        }) as unknown as ChildProcess;
+      };
+
+      client = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: mockSpawn,
+        skipAvailabilityCheck: true,
+      });
+      manager = new AgentSessionManager(client, () => store);
+    });
+
+    teardown(() => {
+      client.dispose();
+    });
+
+    test("should be false before syncCapabilities", () => {
+      assert.strictEqual(manager.supportsDeleteSession, false);
+    });
+
+    test("should be true after connect with delete-capable agent", async () => {
+      await client.connect();
+      manager.syncCapabilities();
+      assert.strictEqual(manager.supportsDeleteSession, true);
+    });
+
+    test("should be false for agent without delete capability", async () => {
+      const disabledSpawn = (
+        _command: string,
+        _args: string[],
+        _options: unknown
+      ): ChildProcess => {
+        return createMockProcess({
+          enableLoadSession: true,
+          enableDeleteSession: false,
+        }) as unknown as ChildProcess;
+      };
+
+      const disabledClient = new ACPClient({
+        agentConfig: {
+          id: "mock-no-delete",
+          name: "Mock No Delete",
+          command: "mock",
+          args: [],
+        },
+        spawn: disabledSpawn,
+        skipAvailabilityCheck: true,
+      });
+      const disabledManager = new AgentSessionManager(disabledClient, () =>
+        inMemorySessionStore()
+      );
+
+      await disabledClient.connect();
+      disabledManager.syncCapabilities();
+      assert.strictEqual(disabledManager.supportsDeleteSession, false);
+
+      disabledClient.dispose();
+    });
+
+    test("should throw when agent does not support delete", async () => {
+      const disabledSpawn = (
+        _command: string,
+        _args: string[],
+        _options: unknown
+      ): ChildProcess => {
+        return createMockProcess({
+          enableLoadSession: true,
+          enableDeleteSession: false,
+        }) as unknown as ChildProcess;
+      };
+
+      const disabledClient = new ACPClient({
+        agentConfig: {
+          id: "mock-no-delete",
+          name: "Mock No Delete",
+          command: "mock",
+          args: [],
+        },
+        spawn: disabledSpawn,
+        skipAvailabilityCheck: true,
+      });
+      const localStore = inMemorySessionStore();
+      const disabledManager = new AgentSessionManager(
+        disabledClient,
+        () => localStore
+      );
+
+      await disabledClient.connect();
+      disabledManager.syncCapabilities();
+
+      await disabledManager.recordNewSession("test-session-1", "/test");
+      const before = await localStore.read();
+      assert.strictEqual(before.length, 1);
+
+      await assert.rejects(
+        () => disabledManager.deleteSession("test-session-1"),
+        /does not support the `session\/delete` capability/
+      );
+
+      // Session should remain in local store
+      const after = await localStore.read();
+      assert.strictEqual(after.length, 1);
+
+      disabledClient.dispose();
+    });
+
+    test("should delete session via agent and remove from local store", async () => {
+      await client.connect();
+      manager.syncCapabilities();
+
+      // Create a session via the agent
+      await client.newSession("/test/dir");
+
+      // Record it locally
+      await manager.recordNewSession("mock-session-1", "/test/dir");
+      const before = await store.read();
+      assert.strictEqual(before.length, 1);
+
+      // Delete should call agent and remove from local store
+      await manager.deleteSession("mock-session-1");
+      const after = await store.read();
+      assert.strictEqual(after.length, 0);
+    });
+  });
 });

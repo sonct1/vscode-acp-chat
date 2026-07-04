@@ -79,6 +79,12 @@
         "icon": "$(history)"
       },
       {
+        "command": "vscode-acp-chat.deleteHistorySession",
+        "title": "Delete History Session",
+        "category": "ACP",
+        "icon": "$(trash)"
+      },
+      {
         "command": "vscode-acp-chat.selectAgent",
         "title": "Select Agent",
         "category": "ACP",
@@ -236,6 +242,10 @@
         },
         {
           "command": "vscode-acp-chat.loadHistory",
+          "when": "true"
+        },
+        {
+          "command": "vscode-acp-chat.deleteHistorySession",
           "when": "true"
         }
       ]

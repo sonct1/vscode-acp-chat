@@ -33,6 +33,8 @@ import {
   type AgentCapabilities,
   type ListSessionsRequest,
   type ListSessionsResponse,
+  type DeleteSessionRequest,
+  type DeleteSessionResponse,
   type McpServer,
   type McpCapabilities,
   type DidOpenDocumentNotification,
@@ -847,6 +849,33 @@ export class ACPClient {
     };
 
     return this.agentCtx.request(acp.methods.agent.session.list, request);
+  }
+
+  /**
+   * Delete an existing session via the ACP `session/delete` method.
+   *
+   * Only available if the agent advertises `sessionCapabilities.delete`.
+   *
+   * @throws If not connected or agent doesn't support `session/delete`.
+   */
+  async deleteSession(params: {
+    sessionId: string;
+  }): Promise<DeleteSessionResponse> {
+    if (!this.agentCtx) {
+      throw new Error("Not connected");
+    }
+
+    if (!this.agentCapabilities?.sessionCapabilities?.delete) {
+      throw new Error(
+        `Agent "${this.agentConfig.name}" does not support the "session/delete" capability`
+      );
+    }
+
+    const request: DeleteSessionRequest = {
+      sessionId: params.sessionId,
+    };
+
+    return this.agentCtx.request(acp.methods.agent.session.delete, request);
   }
 
   async handleRequestPermission(

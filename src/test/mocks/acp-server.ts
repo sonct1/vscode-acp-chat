@@ -13,6 +13,7 @@ export interface MockACPServerOptions {
   demoMode?: DemoMode;
   enableLoadSession?: boolean;
   enableListSessions?: boolean;
+  enableDeleteSession?: boolean;
   useConfigOptions?: boolean;
   emitUsageUpdate?: UsageUpdatePayload | null;
 }
@@ -30,6 +31,7 @@ export class MockACPServer {
   private demoMode: DemoMode;
   private enableLoadSession: boolean;
   private enableListSessions: boolean;
+  private enableDeleteSession: boolean;
   private useConfigOptions: boolean;
   private emitUsageUpdate: UsageUpdatePayload | null;
 
@@ -43,6 +45,7 @@ export class MockACPServer {
     this.demoMode = options.demoMode ?? "default";
     this.enableLoadSession = options.enableLoadSession ?? true;
     this.enableListSessions = options.enableListSessions ?? true;
+    this.enableDeleteSession = options.enableDeleteSession ?? false;
     this.useConfigOptions = options.useConfigOptions ?? false;
     this.emitUsageUpdate = options.emitUsageUpdate ?? null;
 
@@ -91,9 +94,10 @@ export class MockACPServer {
           protocolVersion: acp.PROTOCOL_VERSION,
           agentCapabilities: {
             loadSession: this.enableLoadSession,
-            sessionCapabilities: this.enableListSessions
-              ? { list: {} }
-              : undefined,
+            sessionCapabilities: {
+              ...(this.enableListSessions ? { list: {} } : {}),
+              ...(this.enableDeleteSession ? { delete: {} } : {}),
+            },
           },
         });
         break;
@@ -118,6 +122,9 @@ export class MockACPServer {
         break;
       case "session/list":
         this.handleListSessions(request.id);
+        break;
+      case "session/delete":
+        this.handleDeleteSession(request.id, request.params);
         break;
       default:
         this.sendError(request.id, -32601, `Unknown method: ${request.method}`);
@@ -498,6 +505,26 @@ export class MockACPServer {
       sessions: sessionsList,
       nextCursor: null,
     });
+  }
+
+  private handleDeleteSession(
+    id: number,
+    params?: Record<string, unknown>
+  ): void {
+    const sessionId = params?.sessionId as string | undefined;
+
+    if (!sessionId) {
+      this.sendError(id, -32602, "Missing sessionId");
+      return;
+    }
+
+    if (!this.sessions.has(sessionId)) {
+      this.sendError(id, -32000, "Session not found");
+      return;
+    }
+
+    this.sessions.delete(sessionId);
+    this.sendResponse(id, {});
   }
 
   private handleSetConfigOption(

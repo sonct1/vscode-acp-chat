@@ -667,6 +667,21 @@ export class ChatViewProvider
   }
 
   /**
+   * Return whether the current agent supports `session/delete`.
+   */
+  public getSupportsDeleteSession(): boolean {
+    return this.sessionManager.supportsDeleteSession;
+  }
+
+  /**
+   * Delete a history session. Removes it from the agent (if supported) and
+   * the local cache.
+   */
+  public async deleteHistorySession(sessionId: string): Promise<void> {
+    await this.sessionManager.deleteSession(sessionId);
+  }
+
+  /**
    * Load a history session. Clears current chat, then loads via ACP.
    * The agent will stream the full conversation history back.
    */

@@ -14,6 +14,7 @@ import * as vscode from "vscode";
 import type {
   LoadSessionResponse,
   ListSessionsResponse,
+  DeleteSessionResponse,
   AgentCapabilities,
   SessionInfoUpdate,
 } from "@agentclientprotocol/sdk";
@@ -34,6 +35,7 @@ export interface IACPClient {
     cwd?: string;
     cursor?: string;
   }): Promise<ListSessionsResponse>;
+  deleteSession(params: { sessionId: string }): Promise<DeleteSessionResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,8 @@ export interface SessionStore {
   readOne(sessionId: string): Promise<StoredSessionRecord | undefined>;
   /** Write or update a single session. */
   writeOne(session: StoredSessionRecord): Promise<void>;
+  /** Delete a single session by ID. */
+  deleteOne(sessionId: string): Promise<void>;
 }
 
 /**
@@ -156,6 +160,15 @@ export function globalStateSessionStore(
       cache.set(session.sessionId, session);
       scheduleFlush(session.sessionId);
     },
+
+    async deleteOne(sessionId: string): Promise<void> {
+      ensureLoaded();
+      cache.delete(sessionId);
+      const existing = pendingWrites.get(sessionId);
+      if (existing) clearTimeout(existing);
+      pendingWrites.delete(sessionId);
+      globalState.update(`${prefix}.${sessionId}`, undefined);
+    },
   };
 }
 
@@ -227,6 +240,23 @@ export abstract class SessionManager {
    * still be called but is expected to fall back to locally stored records.
    */
   abstract get supportsListSessions(): boolean;
+
+  /**
+   * Whether this manager can delete sessions (agent advertises the
+   * `sessionCapabilities.delete` capability). When `false`, `deleteSession()`
+   * should still remove the session from the local cache but cannot ask the
+   * agent to delete it server-side.
+   */
+  abstract get supportsDeleteSession(): boolean;
+
+  /**
+   * Delete an existing session.
+   *
+   * If the agent advertises `sessionCapabilities.delete`, the request is
+   * forwarded to the agent via `session/delete`. The session is also removed
+   * from the local cache regardless.
+   */
+  abstract deleteSession(sessionId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +283,7 @@ export class AgentSessionManager extends SessionManager {
 
   private _supportsLoadSession = false;
   private _supportsListSessions = false;
+  private _supportsDeleteSession = false;
   private _initialized = false;
   private readonly _stores = new Map<string, SessionStore>();
 
@@ -278,6 +309,7 @@ export class AgentSessionManager extends SessionManager {
     const caps = this.acpClient.getAgentCapabilities();
     this._supportsLoadSession = caps?.loadSession ?? false;
     this._supportsListSessions = !!caps?.sessionCapabilities?.list;
+    this._supportsDeleteSession = !!caps?.sessionCapabilities?.delete;
     this._initialized = true;
   }
 
@@ -287,6 +319,10 @@ export class AgentSessionManager extends SessionManager {
 
   get supportsListSessions(): boolean {
     return this._supportsListSessions;
+  }
+
+  get supportsDeleteSession(): boolean {
+    return this._supportsDeleteSession;
   }
 
   /**
@@ -409,6 +445,26 @@ export class AgentSessionManager extends SessionManager {
       sessionId,
       supportedByAgent: true,
     };
+  }
+
+  /**
+   * Delete an existing session via the ACP `session/delete` method.
+   *
+   * @throws If the agent doesn't support `sessionCapabilities.delete`.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    if (!this._supportsDeleteSession) {
+      throw new Error(
+        "Current agent does not support the `session/delete` capability"
+      );
+    }
+
+    // Delete server-side first; if the agent call succeeds but the local
+    // store write fails, re-listing from the agent would reconcile.
+    await this.acpClient.deleteSession({ sessionId });
+
+    const store = this.getStore();
+    await store.deleteOne(sessionId);
   }
 
   /**

@@ -16,5 +16,8 @@ export function inMemorySessionStore(): SessionStore {
     async writeOne(session: StoredSessionRecord) {
       sessions.set(session.sessionId, session);
     },
+    async deleteOne(sessionId: string) {
+      sessions.delete(sessionId);
+    },
   };
 }
