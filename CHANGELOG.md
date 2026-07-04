@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.16.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.15.1...v1.16.0) (2026-07-04)
+
+### Features
+
+- add session delete button and functionality ([7396e41](https://github.com/pengjiantao/vscode-acp-chat/commit/7396e411c2b550e1a6114731ec12da05febbfcdd))
+
+### Bug Fixes
+
+- **session-manager:** ensure cold-start cache load regardless of call order ([9591dea](https://github.com/pengjiantao/vscode-acp-chat/commit/9591deaea680ce978b78b2ab260580ab42c6ce75))
+
+### Code Refactoring
+
+- consolidate session creation and info update into SessionManager ([48c0d0d](https://github.com/pengjiantao/vscode-acp-chat/commit/48c0d0d38e0c78e90b3704a5b3c4168fe2e6780e))
+- **terminal:** remove VSCode terminal panel, spawn processes directly ([a94a7f9](https://github.com/pengjiantao/vscode-acp-chat/commit/a94a7f9c4579afd43bec9b431f0dd066eeb78da7))
+
 ### [1.15.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.15.0...v1.15.1) (2026-07-03)
 
 ### Bug Fixes
