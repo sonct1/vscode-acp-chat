@@ -108,6 +108,7 @@ export function globalStateSessionStore(
   const cache = new Map<string, StoredSessionRecord>();
   const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
   const WRITE_DEBOUNCE_MS = 1000;
+  let loaded = false;
 
   function scheduleFlush(sessionId: string): void {
     const existing = pendingWrites.get(sessionId);
@@ -124,22 +125,24 @@ export function globalStateSessionStore(
     );
   }
 
+  function ensureLoaded(): void {
+    if (loaded) return;
+    loaded = true;
+    const keys = globalState.keys().filter((k) => k.startsWith(`${prefix}.`));
+    for (const key of keys) {
+      const record = globalState.get<StoredSessionRecord>(key);
+      if (record) cache.set(record.sessionId, record);
+    }
+  }
+
   return {
     async read(): Promise<StoredSessionRecord[]> {
-      if (cache.size === 0) {
-        // Cold start: scan keys with prefix
-        const keys = globalState
-          .keys()
-          .filter((k) => k.startsWith(`${prefix}.`));
-        for (const key of keys) {
-          const record = globalState.get<StoredSessionRecord>(key);
-          if (record) cache.set(record.sessionId, record);
-        }
-      }
+      ensureLoaded();
       return Array.from(cache.values());
     },
 
     async readOne(sessionId: string): Promise<StoredSessionRecord | undefined> {
+      ensureLoaded();
       let record = cache.get(sessionId);
       if (!record) {
         record = globalState.get<StoredSessionRecord>(`${prefix}.${sessionId}`);
@@ -149,6 +152,7 @@ export function globalStateSessionStore(
     },
 
     async writeOne(session: StoredSessionRecord): Promise<void> {
+      ensureLoaded();
       cache.set(session.sessionId, session);
       scheduleFlush(session.sessionId);
     },
