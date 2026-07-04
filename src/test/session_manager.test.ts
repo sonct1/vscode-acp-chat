@@ -2,8 +2,13 @@ import * as assert from "assert";
 import { ChildProcess } from "child_process";
 import { type SessionUpdate } from "@agentclientprotocol/sdk";
 import { ACPClient, type SpawnFunction } from "../acp/client";
-import { AgentSessionManager, type SessionStore } from "../acp/session-manager";
-import { inMemorySessionStore } from "./mocks/session-store";
+import {
+  AgentSessionManager,
+  globalStateSessionStore,
+  inMemorySessionStore,
+  type SessionStore,
+  type StoredSessionRecord,
+} from "../acp/session-manager";
 import { createMockProcess } from "./mocks/acp-server";
 
 suite("SessionManager", () => {
@@ -960,5 +965,144 @@ suite("SessionManager", () => {
       const after = await store.read();
       assert.strictEqual(after.length, 0);
     });
+  });
+});
+
+suite("globalStateSessionStore cleanup", () => {
+  function createMockMemento(): import("vscode").Memento {
+    const data = new Map<string, unknown>();
+    return {
+      keys: () => Array.from(data.keys()),
+      get: <T>(key: string) => data.get(key) as T | undefined,
+      update: (key: string, value: unknown) => {
+        if (value === undefined) {
+          data.delete(key);
+        } else {
+          data.set(key, value);
+        }
+        return Promise.resolve();
+      },
+    } as unknown as import("vscode").Memento;
+  }
+
+  function makeRecord(
+    sessionId: string,
+    updatedAt: string
+  ): StoredSessionRecord {
+    return {
+      sessionId,
+      title: `Session ${sessionId}`,
+      cwd: "/test",
+      createdAt: updatedAt,
+      updatedAt,
+    };
+  }
+
+  const PREFIX = "test.sessions";
+
+  test("should remove sessions older than retentionDays", async () => {
+    const memento = createMockMemento();
+    const recent = new Date().toISOString();
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Pre-populate memento with one recent and one old session
+    await memento.update(`${PREFIX}.recent`, makeRecord("recent", recent));
+    await memento.update(`${PREFIX}.old`, makeRecord("old", old));
+
+    const store = globalStateSessionStore(memento, PREFIX, {
+      retentionDays: 30,
+      maxSessions: 300,
+    });
+
+    // First read triggers ensureLoaded → cleanup
+    const sessions = await store.read();
+    assert.strictEqual(sessions.length, 1);
+    assert.strictEqual(sessions[0].sessionId, "recent");
+
+    // Old session should be gone from memento too
+    assert.strictEqual(memento.get(`${PREFIX}.old`), undefined);
+  });
+
+  test("should keep sessions within retentionDays", async () => {
+    const memento = createMockMemento();
+    const recent = new Date().toISOString();
+    const alsoRecent = new Date(
+      Date.now() - 5 * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    await memento.update(`${PREFIX}.a`, makeRecord("a", recent));
+    await memento.update(`${PREFIX}.b`, makeRecord("b", alsoRecent));
+
+    const store = globalStateSessionStore(memento, PREFIX, {
+      retentionDays: 30,
+      maxSessions: 300,
+    });
+
+    const sessions = await store.read();
+    assert.strictEqual(sessions.length, 2);
+  });
+
+  test("should remove excess sessions beyond maxSessions (keeps newest)", async () => {
+    const memento = createMockMemento();
+
+    // Create 5 sessions at different times
+    for (let i = 0; i < 5; i++) {
+      const ts = new Date(Date.now() - i * 60 * 60 * 1000).toISOString();
+      await memento.update(`${PREFIX}.s${i}`, makeRecord(`s${i}`, ts));
+    }
+
+    const store = globalStateSessionStore(memento, PREFIX, {
+      retentionDays: 30,
+      maxSessions: 3,
+    });
+
+    const sessions = await store.read();
+    assert.strictEqual(sessions.length, 3);
+
+    // The 3 newest by updatedAt should be s0, s1, s2
+    const sorted = sessions.sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+    assert.deepStrictEqual(
+      sorted.map((s) => s.sessionId),
+      ["s0", "s1", "s2"]
+    );
+  });
+
+  test("expired removal runs before maxSessions cap", async () => {
+    const memento = createMockMemento();
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const recent = new Date().toISOString();
+
+    // 2 old + 2 recent = 4 total; maxSessions=3
+    await memento.update(`${PREFIX}.old1`, makeRecord("old1", old));
+    await memento.update(`${PREFIX}.old2`, makeRecord("old2", old));
+    await memento.update(`${PREFIX}.new1`, makeRecord("new1", recent));
+    const slightlyOld = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+    await memento.update(`${PREFIX}.new2`, makeRecord("new2", slightlyOld));
+
+    const store = globalStateSessionStore(memento, PREFIX, {
+      retentionDays: 30,
+      maxSessions: 3,
+    });
+
+    const sessions = await store.read();
+    // 2 old removed → 2 remaining, under cap of 3
+    assert.strictEqual(sessions.length, 2);
+    const ids = sessions.map((s) => s.sessionId).sort();
+    assert.deepStrictEqual(ids, ["new1", "new2"]);
+  });
+
+  test("no cleanup when no options provided", async () => {
+    const memento = createMockMemento();
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+
+    await memento.update(`${PREFIX}.old`, makeRecord("old", old));
+
+    const store = globalStateSessionStore(memento, PREFIX);
+
+    const sessions = await store.read();
+    assert.strictEqual(sessions.length, 1);
   });
 });

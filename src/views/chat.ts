@@ -9,6 +9,7 @@ import { TerminalHandler } from "../acp/terminal-handler";
 import {
   AgentSessionManager,
   globalStateSessionStore,
+  inMemorySessionStore,
   type SessionInfo,
 } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
@@ -207,12 +208,25 @@ export class ChatViewProvider
     this.diffManager = new DiffManager();
     this.fileHandler = new FileHandler(this.diffManager);
     this.terminalHandler = new TerminalHandler();
-    this.sessionManager = new AgentSessionManager(acpClient, (agentId) =>
-      globalStateSessionStore(
+    // Choose session store based on user preference:
+    //   - enablePersistentSessions=false → in-memory store, sessions lost on restart
+    //   - enablePersistentSessions=true  → globalState-backed store with automatic
+    //     cleanup of sessions older than `sessionRetentionDays` and enforcement of
+    //     a per-agent `maxSessionsPerAgent` cap (runs once on first load)
+    this.sessionManager = new AgentSessionManager(acpClient, (agentId) => {
+      const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+      const persistent = config.get<boolean>("enablePersistentSessions", true);
+      if (!persistent) {
+        return inMemorySessionStore();
+      }
+      const retentionDays = config.get<number>("sessionRetentionDays", 30);
+      const maxSessions = config.get<number>("maxSessionsPerAgent", 300);
+      return globalStateSessionStore(
         globalState,
-        `vscode-acp-chat.localSessions.v1.${agentId}`
-      )
-    );
+        `vscode-acp-chat.localSessions.v1.${agentId}`,
+        { retentionDays, maxSessions }
+      );
+    });
     this.documentSyncManager = new DocumentSyncManager(acpClient);
 
     vscode.workspace.registerTextDocumentContentProvider(

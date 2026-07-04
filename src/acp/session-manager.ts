@@ -56,6 +56,14 @@ export interface LoadSessionResult {
   supportedByAgent: boolean;
 }
 
+/** Options controlling automatic session cleanup. */
+export interface SessionCleanupOptions {
+  /** Remove sessions whose `updatedAt` is older than this many days. */
+  retentionDays: number;
+  /** Maximum number of sessions to keep per agent (keeps newest). */
+  maxSessions: number;
+}
+
 /** Pluggable storage for local session records. */
 export interface SessionStore {
   /** Read all sessions from the store. */
@@ -81,6 +89,28 @@ export type SessionStoreFactory = (agentId: string) => SessionStore;
 // ---------------------------------------------------------------------------
 
 /**
+ * In-memory `SessionStore`. Data is lost when the extension host exits.
+ * Useful when `enablePersistentSessions` is `false`.
+ */
+export function inMemorySessionStore(): SessionStore {
+  const sessions = new Map<string, StoredSessionRecord>();
+  return {
+    async read() {
+      return Array.from(sessions.values());
+    },
+    async readOne(sessionId: string) {
+      return sessions.get(sessionId);
+    },
+    async writeOne(session: StoredSessionRecord) {
+      sessions.set(session.sessionId, session);
+    },
+    async deleteOne(sessionId: string) {
+      sessions.delete(sessionId);
+    },
+  };
+}
+
+/**
  * Create a `SessionStore` backed by VS Code's `globalState` Memento.
  *
  * Each session is stored under a separate key (`<prefix>.<sessionId>`) with an
@@ -88,7 +118,8 @@ export type SessionStoreFactory = (agentId: string) => SessionStore;
  */
 export function globalStateSessionStore(
   globalState: vscode.Memento,
-  prefix: string
+  prefix: string,
+  cleanupOptions?: SessionCleanupOptions
 ): SessionStore {
   const cache = new Map<string, StoredSessionRecord>();
   const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
@@ -110,6 +141,33 @@ export function globalStateSessionStore(
     );
   }
 
+  async function cleanup(options: SessionCleanupOptions): Promise<void> {
+    const now = Date.now();
+    const cutoffMs = options.retentionDays * 24 * 60 * 60 * 1000;
+    let sessions = Array.from(cache.values());
+
+    // 1. Remove sessions older than retentionDays
+    for (const s of sessions) {
+      if (now - new Date(s.updatedAt).getTime() > cutoffMs) {
+        cache.delete(s.sessionId);
+        globalState.update(`${prefix}.${s.sessionId}`, undefined);
+      }
+    }
+
+    // 2. Re-read after expired removal, then enforce maxSessions limit (keep newest)
+    sessions = Array.from(cache.values());
+    if (sessions.length > options.maxSessions) {
+      sessions.sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+      for (const s of sessions.slice(options.maxSessions)) {
+        cache.delete(s.sessionId);
+        globalState.update(`${prefix}.${s.sessionId}`, undefined);
+      }
+    }
+  }
+
   function ensureLoaded(): void {
     if (loaded) return;
     loaded = true;
@@ -117,6 +175,11 @@ export function globalStateSessionStore(
     for (const key of keys) {
       const record = globalState.get<StoredSessionRecord>(key);
       if (record) cache.set(record.sessionId, record);
+    }
+    if (cleanupOptions) {
+      cleanup(cleanupOptions).catch((err) =>
+        console.warn("[SessionStore] Cleanup failed:", err)
+      );
     }
   }
 

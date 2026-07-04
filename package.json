@@ -146,6 +146,23 @@
           "default": false,
           "description": "Enable debug logging for raw ACP session update events."
         },
+        "vscode-acp-chat.enablePersistentSessions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Persist session history across VS Code restarts. When disabled, sessions are only remembered until the extension is closed."
+        },
+        "vscode-acp-chat.sessionRetentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Automatically remove persisted sessions older than this many days."
+        },
+        "vscode-acp-chat.maxSessionsPerAgent": {
+          "type": "number",
+          "default": 300,
+          "minimum": 1,
+          "description": "Maximum number of persisted sessions to keep per agent. Oldest sessions are removed first."
+        },
         "vscode-acp-chat.customAgents": {
           "type": "array",
           "default": [],
