@@ -2613,24 +2613,7 @@ export class WebviewController {
 
     const config = typeConfigs[mentionType] || typeConfigs.file;
 
-    let innerHTML = `<span class="chip-icon">${config.iconHtml}</span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
-
-    if (!readonly) {
-      innerHTML += `<div class="chip-delete" acp-title="Remove attachment"><span class="codicon codicon-close"></span></div>`;
-    }
-
-    chip.innerHTML = innerHTML;
-
-    if (!readonly) {
-      chip.querySelector(".chip-delete")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.hoveredImageChip = null;
-        this.hideImagePreview();
-        chip.remove();
-        this.saveState();
-        this.updateInputState();
-      });
-    }
+    chip.innerHTML = `<span class="chip-icon">${config.iconHtml}</span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
 
     if (config.onClick) {
       chip.addEventListener("click", config.onClick);
@@ -2672,20 +2655,6 @@ export class WebviewController {
     chip.innerHTML = `<span class="chip-prefix">/</span><span class="chip-label">${escapeHtml(
       displayLabel
     )}</span>`;
-
-    if (!readonly) {
-      const deleteBtn = this.doc.createElement("div");
-      deleteBtn.className = "chip-delete";
-      deleteBtn.setAttribute("acp-title", "Remove command");
-      deleteBtn.innerHTML = `<span class="codicon codicon-close icon-dismiss"></span>`;
-      deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        chip.remove();
-        this.saveState();
-        this.updateInputState();
-      });
-      chip.appendChild(deleteBtn);
-    }
 
     return chip;
   }

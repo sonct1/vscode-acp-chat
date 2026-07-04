@@ -687,10 +687,11 @@ body {
   align-items: center;
   gap: 4px;
   background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.12));
-  color: inherit;
+  color: var(--vscode-textLink-foreground);
   padding: 1px 6px;
   border-radius: 4px;
   font-size: inherit;
+  font-weight: 500;
   margin: 0 2px;
   vertical-align: baseline;
   cursor: pointer;
@@ -712,7 +713,7 @@ body {
 .mention-chip.readonly,
 .command-chip.readonly {
   padding: 1px 8px;
-  color: var(--vscode-foreground);
+  color: var(--vscode-textLink-foreground);
   font-size: 12px;
   vertical-align: middle;
   top: 0;
@@ -765,35 +766,6 @@ body {
 .command-chip .chip-prefix {
   font-family: var(--vscode-editor-font-family), monospace;
   opacity: 0.75;
-}
-
-.mention-chip .chip-delete,
-.command-chip .chip-delete {
-  margin-left: 2px;
-  opacity: 0.6;
-  cursor: pointer;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: background 0.1s;
-}
-
-.mention-chip .chip-delete:hover,
-.command-chip .chip-delete:hover {
-  opacity: 1;
-  background: var(
-    --vscode-toolbar-activeBackground,
-    rgba(255, 255, 255, 0.2)
-  ) !important;
-}
-
-.mention-chip .chip-delete .icon-dismiss,
-.command-chip .chip-delete .icon-dismiss {
-  width: 14px;
-  height: 14px;
 }
 
 .icon-button {
