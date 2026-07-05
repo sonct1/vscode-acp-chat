@@ -235,7 +235,7 @@ body {
 /* Code Block Wrapper with Copy Button */
 .code-block-wrapper {
   position: relative;
-  margin: 12px 0;
+  margin: 8px 0;
 }
 
 .code-block-wrapper pre {
@@ -2144,8 +2144,10 @@ kbd {
 }
 
 .tool-details-content {
-  padding: 8px 12px;
+  padding: 0 16px;
+  margin: 8px 0 0 11px;
   background: transparent;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .block {
@@ -2488,7 +2490,6 @@ kbd {
 /* 详细信息面板 */
 .tool-details-panel {
   padding: 8px 0;
-  border-top: 1px solid var(--vscode-widget-border);
 }
 
 .detail-section {
