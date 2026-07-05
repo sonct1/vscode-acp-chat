@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.1...v1.18.2) (2026-07-05)
+
+### Bug Fixes
+
+- terminate terminal process trees ([c46dba9](https://github.com/pengjiantao/vscode-acp-chat/commit/c46dba906cebf4b829b0e279c96c3194a046c801))
+
 ### [1.18.1](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.0...v1.18.1) (2026-07-05)
 
 ## [1.18.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.17.0...v1.18.0) (2026-07-05)
