@@ -2141,6 +2141,8 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .tool-details-content {

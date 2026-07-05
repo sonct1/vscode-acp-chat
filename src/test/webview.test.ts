@@ -199,7 +199,7 @@ suite("Webview", () => {
       assert.ok(html.includes("path/to/file"));
     });
 
-    test("renders failed tool without status icon", () => {
+    test("renders failed tool summary without status icon", () => {
       const html = renderToolSummary({
         toolCallId: "tool-1",
         title: "write_file",

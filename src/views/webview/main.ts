@@ -3236,6 +3236,15 @@ export class WebviewController {
                 });
                 summaryContent.innerHTML = summaryHtml;
               }
+
+              summary.querySelector(".tool-status.failed")?.remove();
+              if (msg.status === "failed") {
+                const failIcon = this.doc.createElement("span");
+                failIcon.className = "tool-status failed";
+                failIcon.innerHTML =
+                  '<span class="codicon codicon-close"></span>';
+                summary.appendChild(failIcon);
+              }
             }
 
             // Update tool-item class based on status
