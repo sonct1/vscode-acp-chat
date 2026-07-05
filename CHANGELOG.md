@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.3](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.2...v1.18.3) (2026-07-05)
+
+### Bug Fixes
+
+- unify thinking and edit tool icon colors with other tools ([de818e3](https://github.com/pengjiantao/vscode-acp-chat/commit/de818e3da71acd6a19df643dd63261f772899d0b))
+
+### Code Refactoring
+
+- replace inline highlight.js theme with theme-aware CSS variables ([b18b50a](https://github.com/pengjiantao/vscode-acp-chat/commit/b18b50a2c212797926d86e71f8e217c63c9a8463))
+
 ### [1.18.2](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.1...v1.18.2) (2026-07-05)
 
 ### Bug Fixes
