@@ -1,8 +1,45 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { TerminalHandler } from "../acp/terminal-handler";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(
+  condition: () => boolean,
+  timeoutMs: number
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function fileSize(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 const SID = "test-session";
@@ -197,6 +234,61 @@ suite("TerminalHandler", () => {
         terminalId,
       });
       assert.notStrictEqual(result.exitCode, 0);
+    });
+
+    test("should kill child processes spawned by the terminal command", async function () {
+      if (process.platform === "win32") {
+        this.skip();
+      }
+
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "vscode-acp-terminal-")
+      );
+      const childPidFile = path.join(tmpDir, "child.pid");
+      const heartbeatFile = path.join(tmpDir, "heartbeat");
+      let childPid: number | undefined;
+
+      try {
+        const childScript = [
+          `const fs = require("fs");`,
+          `const heartbeatFile = ${JSON.stringify(heartbeatFile)};`,
+          `setInterval(() => fs.appendFileSync(heartbeatFile, "."), 50);`,
+        ].join("");
+        const parentScript = [
+          `const cp = require("child_process");`,
+          `const fs = require("fs");`,
+          `const child = cp.spawn(process.execPath, ["-e", ${JSON.stringify(
+            childScript
+          )}], { stdio: "ignore" });`,
+          `fs.writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));`,
+          `setInterval(() => {}, 1000);`,
+        ].join("");
+        const command = `${shellQuote(process.execPath)} -e ${shellQuote(
+          parentScript
+        )}`;
+        const { terminalId } = await handler.handleCreateTerminal({
+          sessionId: SID,
+          command,
+        });
+
+        await waitFor(
+          () => fs.existsSync(childPidFile) && fileSize(heartbeatFile) > 0,
+          2000
+        );
+        childPid = Number(fs.readFileSync(childPidFile, "utf8"));
+
+        await handler.handleKillTerminalCommand({ sessionId: SID, terminalId });
+        await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
+
+        const sizeAfterKill = fileSize(heartbeatFile);
+        await delay(300);
+        assert.strictEqual(fileSize(heartbeatFile), sizeAfterKill);
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
 
     test("should throw for unknown terminalId", async () => {

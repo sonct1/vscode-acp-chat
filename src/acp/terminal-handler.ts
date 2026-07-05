@@ -13,14 +13,19 @@ import type {
   ReleaseTerminalResponse,
 } from "@agentclientprotocol/sdk";
 
+const FORCE_KILL_DELAY_MS = 1000;
+
 interface ManagedTerminal {
   id: string;
   proc: ReturnType<typeof spawn> | null;
   output: string;
   outputByteLimit: number | null;
   truncated: boolean;
+  // Keep completion separate from exitCode because signal termination reports a null code.
+  hasExited: boolean;
   exitCode: number | null;
   signal: string | null;
+  forceKillTimer: NodeJS.Timeout | null;
   exitPromise: Promise<void>;
   exitResolve: () => void;
 }
@@ -45,8 +50,10 @@ export class TerminalHandler {
       output: "",
       outputByteLimit: params.outputByteLimit ?? null,
       truncated: false,
+      hasExited: false,
       exitCode: null,
       signal: null,
+      forceKillTimer: null,
       exitPromise,
       exitResolve,
     };
@@ -70,6 +77,10 @@ export class TerminalHandler {
         ) || {}),
       },
       shell: true,
+      // On POSIX this creates a process group, so shell-wrapped commands and
+      // their children can be terminated together via a negative PID.
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
 
     managedTerminal.proc = proc;
@@ -83,14 +94,18 @@ export class TerminalHandler {
     });
 
     proc.on("close", (code: number | null, signal: string | null) => {
+      managedTerminal.hasExited = true;
       managedTerminal.exitCode = code;
       managedTerminal.signal = signal;
+      this.clearForceKillTimer(managedTerminal);
       managedTerminal.exitResolve();
     });
 
     proc.on("error", (err: Error) => {
       this.appendTerminalOutput(managedTerminal, `Error: ${err.message}\n`);
+      managedTerminal.hasExited = true;
       managedTerminal.exitCode = 1;
+      this.clearForceKillTimer(managedTerminal);
       managedTerminal.exitResolve();
     });
 
@@ -107,13 +122,12 @@ export class TerminalHandler {
       throw new Error(`Terminal not found: ${params.terminalId}`);
     }
 
-    const exitStatus =
-      terminal.exitCode !== null
-        ? {
-            exitCode: terminal.exitCode,
-            ...(terminal.signal !== null && { signal: terminal.signal }),
-          }
-        : null;
+    const exitStatus = terminal.hasExited
+      ? {
+          exitCode: terminal.exitCode,
+          ...(terminal.signal !== null && { signal: terminal.signal }),
+        }
+      : null;
 
     return {
       output: terminal.output,
@@ -184,10 +198,77 @@ export class TerminalHandler {
   }
 
   private killTerminalProcess(terminal: ManagedTerminal): void {
-    if (terminal.proc && !terminal.proc.killed) {
+    if (terminal.hasExited || !terminal.proc?.pid) {
+      return;
+    }
+
+    // Ask the process tree to exit cleanly first, then escalate if close never fires.
+    this.sendSignalToTerminalProcess(terminal.proc, "SIGTERM");
+
+    if (terminal.forceKillTimer === null) {
+      terminal.forceKillTimer = setTimeout(() => {
+        terminal.forceKillTimer = null;
+        if (!terminal.hasExited && terminal.proc?.pid) {
+          this.sendSignalToTerminalProcess(terminal.proc, "SIGKILL");
+        }
+      }, FORCE_KILL_DELAY_MS);
+      terminal.forceKillTimer.unref?.();
+    }
+  }
+
+  private sendSignalToTerminalProcess(
+    proc: ReturnType<typeof spawn>,
+    signal: NodeJS.Signals
+  ): void {
+    const pid = proc.pid;
+    if (pid === undefined) {
+      return;
+    }
+
+    if (process.platform === "win32") {
+      if (signal === "SIGKILL") {
+        this.killWindowsProcessTree(pid);
+        return;
+      }
       try {
-        terminal.proc.kill();
+        proc.kill(signal);
       } catch {}
+      return;
+    }
+
+    // Negative PID targets the whole detached process group on POSIX.
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      try {
+        proc.kill(signal);
+      } catch {}
+    }
+  }
+
+  private killWindowsProcessTree(pid: number): void {
+    try {
+      // taskkill /t is the Windows equivalent of killing the terminal process tree.
+      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      });
+    } catch {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+  }
+
+  private clearForceKillTimer(terminal: ManagedTerminal): void {
+    if (terminal.forceKillTimer !== null) {
+      clearTimeout(terminal.forceKillTimer);
+      terminal.forceKillTimer = null;
     }
   }
 }
