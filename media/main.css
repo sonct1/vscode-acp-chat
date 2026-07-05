@@ -1189,7 +1189,7 @@ body {
 
 /* Lightbulb icon (for AI thought) */
 .codicon-lightbulb {
-  color: var(--vscode-editorLightBulbAi-foreground);
+  color: var(--vscode-icon-foreground);
 }
 
 /* Document icon */
@@ -1209,7 +1209,7 @@ body {
 
 /* Edit icon */
 .codicon-edit {
-  color: var(--vscode-textLink-foreground);
+  color: var(--vscode-icon-foreground);
 }
 
 /* Sync icon */
