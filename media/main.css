@@ -2497,9 +2497,10 @@ kbd {
 
 .detail-label {
   font-weight: 600;
-  color: var(--vscode-foreground);
+  color: var(--vscode-descriptionForeground);
   margin-right: 8px;
-  font-size: 12px;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family);
   opacity: 0.9;
 }
 

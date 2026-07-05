@@ -320,42 +320,8 @@ const BaseRenderer: ToolRenderer = {
   },
 
   renderDetails(info: ToolCallSummary): string {
-    const { kind, locations, rawInput, rawOutput, content, terminalOutput } =
-      info;
+    const { rawInput, rawOutput, content, terminalOutput } = info;
     let html = '<div class="tool-details-panel">';
-
-    // Type
-    html += `<div class="detail-section"><span class="detail-label">Type:</span> ${kind || "unknown"}</div>`;
-
-    // Locations
-    if (locations && locations.length > 0) {
-      html +=
-        '<div class="detail-section"><span class="detail-label">Path:</span>';
-      for (const loc of locations) {
-        html += `<div class="detail-path">${escapeHtml(loc.path)}${loc.line ? `:${loc.line}` : ""}</div>`;
-      }
-      html += "</div>";
-    } else {
-      const p =
-        rawInput?.path ||
-        rawInput?.file ||
-        rawInput?.filePath ||
-        rawInput?.file_path ||
-        rawInput?.uri ||
-        rawInput?.filename ||
-        rawInput?.target ||
-        rawInput?.target_file ||
-        rawInput?.destination ||
-        rawInput?.source;
-      if (typeof p === "string") {
-        html += `<div class="detail-section"><span class="detail-label">Path:</span> ${escapeHtml(p)}</div>`;
-      }
-    }
-
-    // Intent
-    if (rawInput?.description) {
-      html += `<div class="detail-section"><span class="detail-label">Intent:</span> ${escapeHtml(String(rawInput.description))}</div>`;
-    }
 
     // Input Parameters
     if (rawInput) {
