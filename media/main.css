@@ -690,6 +690,7 @@ body {
   color: var(--vscode-textLink-foreground);
   padding: 1px 6px;
   border-radius: 4px;
+  font-family: var(--vscode-editor-font-family), monospace;
   font-size: inherit;
   font-weight: 500;
   margin: 0 2px;
@@ -702,6 +703,10 @@ body {
     border-color 0.1s;
   position: relative;
   top: 1px;
+}
+
+.command-chip {
+  gap: 0;
 }
 
 .mention-chip:hover,
