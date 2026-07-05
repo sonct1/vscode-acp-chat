@@ -232,6 +232,13 @@ body {
   font-size: 0.9em;
 }
 
+.message.assistant .code-block-wrapper code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.9em;
+}
+
 /* Code Block Wrapper with Copy Button */
 .code-block-wrapper {
   position: relative;

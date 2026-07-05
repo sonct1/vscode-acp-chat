@@ -3,7 +3,8 @@
  * Uses VS Code CSS variables for consistent theming
  */
 
-:root {
+:root,
+body.vscode-light {
   --container-padding: 12px;
   --input-padding-vertical: 8px;
   --input-padding-horizontal: 12px;
@@ -22,6 +23,91 @@
     --vscode-scrollbarSlider-activeBackground,
     rgba(191, 191, 191, 0.4)
   );
+  --acp-hljs-foreground: var(--vscode-editor-foreground, #24292f);
+  --acp-hljs-keyword: #cf222e;
+  --acp-hljs-title: #8250df;
+  --acp-hljs-literal: #0550ae;
+  --acp-hljs-string: #0a3069;
+  --acp-hljs-built-in: #953800;
+  --acp-hljs-comment: #6e7781;
+  --acp-hljs-name: #116329;
+  --acp-hljs-section: #0550ae;
+  --acp-hljs-bullet: #3b2300;
+  --acp-hljs-addition-foreground: #116329;
+  --acp-hljs-addition-background: rgba(46, 160, 67, 0.15);
+  --acp-hljs-deletion-foreground: #82071e;
+  --acp-hljs-deletion-background: rgba(248, 81, 73, 0.12);
+}
+
+body.vscode-dark {
+  --acp-hljs-foreground: var(--vscode-editor-foreground, #c9d1d9);
+  --acp-hljs-keyword: #ff7b72;
+  --acp-hljs-title: #d2a8ff;
+  --acp-hljs-literal: #79c0ff;
+  --acp-hljs-string: #a5d6ff;
+  --acp-hljs-built-in: #ffa657;
+  --acp-hljs-comment: #8b949e;
+  --acp-hljs-name: #7ee787;
+  --acp-hljs-section: #1f6feb;
+  --acp-hljs-bullet: #f2cc60;
+  --acp-hljs-addition-foreground: #aff5b4;
+  --acp-hljs-addition-background: #033a16;
+  --acp-hljs-deletion-foreground: #ffdcd7;
+  --acp-hljs-deletion-background: #67060c;
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --acp-hljs-foreground: var(
+    --vscode-editor-foreground,
+    var(--vscode-foreground)
+  );
+  --acp-hljs-keyword: var(
+    --vscode-symbolIcon-keywordForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-title: var(
+    --vscode-symbolIcon-functionForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-literal: var(
+    --vscode-symbolIcon-numberForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-string: var(
+    --vscode-symbolIcon-stringForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-built-in: var(
+    --vscode-symbolIcon-constructorForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-comment: var(
+    --vscode-descriptionForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-name: var(
+    --vscode-symbolIcon-classForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-section: var(
+    --vscode-textLink-foreground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-bullet: var(
+    --vscode-symbolIcon-enumeratorMemberForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-addition-foreground: var(
+    --vscode-gitDecoration-addedResourceForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-addition-background: transparent;
+  --acp-hljs-deletion-foreground: var(
+    --vscode-gitDecoration-deletedResourceForeground,
+    var(--acp-hljs-foreground)
+  );
+  --acp-hljs-deletion-background: transparent;
 }
 
 body {
@@ -111,6 +197,101 @@ pre code {
   padding: 0;
   font-size: 0.85em;
   line-height: 1.4;
+}
+
+/* Highlight.js syntax tokens follow the VS Code theme class on the webview body. */
+.hljs {
+  display: block;
+  overflow-x: auto;
+  color: var(--acp-hljs-foreground);
+  background: var(--vscode-textCodeBlock-background, transparent);
+}
+
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+  color: var(--acp-hljs-keyword);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+  color: var(--acp-hljs-title);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-variable {
+  color: var(--acp-hljs-literal);
+}
+
+.hljs-meta .hljs-string,
+.hljs-regexp,
+.hljs-string {
+  color: var(--acp-hljs-string);
+}
+
+.hljs-built_in,
+.hljs-symbol {
+  color: var(--acp-hljs-built-in);
+}
+
+.hljs-code,
+.hljs-comment,
+.hljs-formula {
+  color: var(--acp-hljs-comment);
+}
+
+.hljs-name,
+.hljs-quote,
+.hljs-selector-pseudo,
+.hljs-selector-tag {
+  color: var(--acp-hljs-name);
+}
+
+.hljs-subst {
+  color: var(--acp-hljs-foreground);
+}
+
+.hljs-section {
+  color: var(--acp-hljs-section);
+  font-weight: bold;
+}
+
+.hljs-bullet {
+  color: var(--acp-hljs-bullet);
+}
+
+.hljs-emphasis {
+  color: var(--acp-hljs-foreground);
+  font-style: italic;
+}
+
+.hljs-strong {
+  color: var(--acp-hljs-foreground);
+  font-weight: bold;
+}
+
+.hljs-addition {
+  color: var(--acp-hljs-addition-foreground);
+  background-color: var(--acp-hljs-addition-background);
+}
+
+.hljs-deletion {
+  color: var(--acp-hljs-deletion-foreground);
+  background-color: var(--acp-hljs-deletion-background);
 }
 
 /* Buttons */

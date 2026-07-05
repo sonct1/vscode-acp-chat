@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
+import * as fs from "fs";
 import * as vscode from "vscode";
 import * as path from "path";
 import { ChatViewProvider } from "../views/chat";
@@ -178,6 +179,59 @@ suite("ChatViewProvider", () => {
   teardown(() => {
     memento.clear();
     acpClient.resetCallCounts();
+  });
+
+  suite("Webview Theme Styles", () => {
+    test("loads highlight styles from stylesheet instead of fixed dark inline theme", () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const html = (provider as any).getHtmlContent({
+        asWebviewUri: (uri: vscode.Uri) => uri,
+        cspSource: "vscode-resource:",
+      });
+
+      assert.ok(
+        !html.includes("Highlight.js GitHub Dark Theme"),
+        "webview HTML should not inline a fixed dark highlight.js theme"
+      );
+      assert.ok(
+        !html.includes("#0d1117"),
+        "webview HTML should not force a dark code block background"
+      );
+      assert.ok(
+        !html.includes("#c9d1d9"),
+        "webview HTML should not force dark-theme foreground colors"
+      );
+    });
+
+    test("defines VS Code light and dark palettes for markdown code blocks", () => {
+      const cssPath = path.resolve(__dirname, "../../media/vscode.css");
+      const css = fs.readFileSync(cssPath, "utf8");
+
+      assert.ok(
+        css.includes("body.vscode-light"),
+        "highlight styles should include a light theme selector"
+      );
+      assert.ok(
+        css.includes("body.vscode-dark"),
+        "highlight styles should include a dark theme selector"
+      );
+      assert.ok(
+        css.includes("--acp-hljs-foreground"),
+        "highlight styles should expose theme-aware syntax variables"
+      );
+      assert.ok(
+        css.includes("var(--vscode-textCodeBlock-background"),
+        "highlight background should derive from VS Code code block colors"
+      );
+      assert.ok(
+        css.includes(".hljs"),
+        "highlight.js token classes should be styled by the shared stylesheet"
+      );
+    });
   });
 
   suite("Mode/Model Persistence with Validation", () => {
