@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.18.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.17.0...v1.18.0) (2026-07-05)
+
+### Features
+
+- replace codicon file icons with Material Design icons ([df9bece](https://github.com/pengjiantao/vscode-acp-chat/commit/df9becec43695ca47e69642ea0a4e0ac49a8a10f))
+- show red cross icon on failed tool summary ([679ef8e](https://github.com/pengjiantao/vscode-acp-chat/commit/679ef8eb761e296d1544ad39ff7df0f7e7dd81dd))
+
+### Bug Fixes
+
+- align input chips with text ([4474c21](https://github.com/pengjiantao/vscode-acp-chat/commit/4474c215e13a5f68180e9094e98e2846f742ec2b))
+
+### Code Refactoring
+
+- **tool-details:** remove Type/Path/Intent fields, restyle labels ([40a694f](https://github.com/pengjiantao/vscode-acp-chat/commit/40a694f8e5628ce67003e17ecb14d5f37c7afcb8))
+
 ## [1.17.0](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.16.0...v1.17.0) (2026-07-04)
 
 ### Features
