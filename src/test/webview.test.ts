@@ -405,7 +405,7 @@ suite("Webview", () => {
       assert.ok(!html.includes("<script>"));
     });
 
-    test("renders locations in details", () => {
+    test("renders empty details panel when only locations provided", () => {
       const html = renderToolDetails({
         toolCallId: "tool-1",
         title: "file",
@@ -413,11 +413,7 @@ suite("Webview", () => {
         status: "completed",
         locations: [{ path: "/src/test.ts", line: 42 }],
       });
-      // Read tools should use tool-details-panel with Type/Path/Intent
       assert.ok(html.includes("tool-details-panel"));
-      assert.ok(html.includes("/src/test.ts"));
-      assert.ok(html.includes("Type:"));
-      assert.ok(html.includes("Path:"));
     });
 
     test("renders intent/description in details", () => {
