@@ -7,10 +7,9 @@ import {
   getElements,
   WebviewController,
   initWebview,
-  renderDiff,
-  type VsCodeApi,
-  type WebviewElements,
 } from "../views/webview/main";
+import { renderDiff } from "../views/webview/widget/diff-render";
+import type { VsCodeApi, WebviewElements } from "../views/webview/types";
 import { ansiToHtml, hasAnsiCodes } from "../views/webview/ansi-render";
 import { escapeHtml } from "../views/webview/html-utils";
 import {

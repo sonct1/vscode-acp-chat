@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
-import { Mention } from "../views/webview/main";
+import type { Mention } from "../views/webview/types";
 
 /**
  * Since it's hard to mock the full WebviewController in a simple Node test

@@ -1,6 +1,7 @@
-import { ToolKind, ToolCallSummary, renderDiff } from "./main";
 import { hasAnsiCodes, ansiToHtml } from "./ansi-render";
 import { escapeHtml } from "./html-utils";
+import { renderDiff } from "./widget/diff-render";
+import type { ToolKind, ToolCallSummary } from "./types";
 
 export interface ToolRenderer {
   renderSummary(info: ToolCallSummary): string;
