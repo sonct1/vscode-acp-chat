@@ -586,12 +586,20 @@ suite("Webview", () => {
     });
 
     function installAnimationFrameQueue() {
-      const frames: FrameRequestCallback[] = [];
+      let nextFrameId = 1;
+      const frames: Array<{ id: number; callback: FrameRequestCallback }> = [];
       (window as any).requestAnimationFrame = (
         callback: FrameRequestCallback
       ) => {
-        frames.push(callback);
-        return frames.length;
+        const id = nextFrameId++;
+        frames.push({ id, callback });
+        return id;
+      };
+      (window as any).cancelAnimationFrame = (id: number) => {
+        const index = frames.findIndex((frame) => frame.id === id);
+        if (index >= 0) {
+          frames.splice(index, 1);
+        }
       };
 
       return {
@@ -599,7 +607,14 @@ suite("Webview", () => {
         runNextFrame: () => {
           const frame = frames.shift();
           assert.ok(frame, "expected a queued animation frame");
-          frame(Date.now());
+          frame.callback(Date.now());
+        },
+        runAllFrames: () => {
+          while (frames.length > 0) {
+            const frame = frames.shift();
+            assert.ok(frame, "expected a queued animation frame");
+            frame.callback(Date.now());
+          }
         },
       };
     }
@@ -1392,8 +1407,9 @@ suite("Webview", () => {
         );
       });
 
-      test("coalesces automatic bottom scrolling into a single animation frame", () => {
-        const { frames, runNextFrame } = installAnimationFrameQueue();
+      test("coalesces automatic bottom scrolling before settling over frames", () => {
+        const { frames, runNextFrame, runAllFrames } =
+          installAnimationFrameQueue();
         Object.defineProperty(elements.messagesEl, "scrollHeight", {
           configurable: true,
           value: 600,
@@ -1409,9 +1425,8 @@ suite("Webview", () => {
         runNextFrame();
 
         assert.strictEqual(elements.messagesEl.scrollTop, 600);
-        assert.strictEqual(frames.length, 1);
 
-        runNextFrame();
+        runAllFrames();
 
         assert.ok(elements.messagesEl.dataset.paintBump);
       });
@@ -1435,6 +1450,226 @@ suite("Webview", () => {
         runNextFrame();
 
         assert.strictEqual(elements.messagesEl.dataset.paintBump, "1");
+      });
+
+      test("keeps bottom pin when content growth fires scroll before the next frame", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "Large output" });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 2400);
+      });
+
+      test("does not auto-scroll after the user wheels up from the bottom", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        elements.messagesEl.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        );
+        scrollTop = 500;
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "More output" });
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 500);
+      });
+
+      test("does not auto-scroll after a pointer drag scrolls away from the bottom", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        elements.messagesEl.dispatchEvent(
+          new window.Event("pointerdown", { bubbles: true })
+        );
+        scrollTop = 500;
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        window.dispatchEvent(new window.Event("pointerup"));
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "More output" });
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 500);
+      });
+
+      test("does not auto-scroll after a touch gesture scrolls away from the bottom", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        elements.messagesEl.dispatchEvent(
+          new window.Event("touchstart", { bubbles: true })
+        );
+        elements.messagesEl.dispatchEvent(
+          new window.Event("touchmove", { bubbles: true })
+        );
+        scrollTop = 500;
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        window.dispatchEvent(new window.Event("touchend"));
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "More output" });
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 500);
+      });
+
+      test("re-enables auto-scroll when a user message is added", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        elements.messagesEl.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        );
+        scrollTop = 500;
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+
+        scrollHeight = 2400;
+        controller.addMessage("Next question", "user");
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 2400);
+      });
+
+      test("ignores wheel intent from nested scrollable message content", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+        const nestedOutput = document.createElement("pre");
+        nestedOutput.className = "tool-output";
+        elements.messagesEl.appendChild(nestedOutput);
+
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        nestedOutput.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        );
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "More output" });
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        runAllFrames();
+
+        assert.strictEqual(scrollTop, 2400);
       });
 
       test("handles streamEnd with HTML", () => {

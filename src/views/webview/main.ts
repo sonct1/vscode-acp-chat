@@ -13,6 +13,11 @@ export interface VsCodeApi {
 
 declare function acquireVsCodeApi(): VsCodeApi;
 
+const BOTTOM_THRESHOLD_PX = 100;
+const AUTO_SCROLL_SETTLE_FRAMES = 3;
+
+type UserScrollDirection = "none" | "up" | "down" | "unknown";
+
 export type ToolKind =
   | "read"
   | "edit"
@@ -702,8 +707,13 @@ export class WebviewController {
   private isAutoScrollEnabled = true;
   private pendingBottomScrollFrame: number | null = null;
   private pendingBottomScrollForce = false;
+  private bottomScrollSettleFrames = 0;
   private pendingPaintFrame: number | null = null;
   private paintBump = false;
+  private userScrollIntent = false;
+  private pointerScrollActive = false;
+  private touchScrollActive = false;
+  private userScrollDirection: UserScrollDirection = "none";
   // Serializes messages from the extension host so they are processed
   // one-at-a-time in arrival order, preventing DOM update races when
   // multiple messages arrive in quick succession.
@@ -1475,7 +1485,49 @@ export class WebviewController {
       }
     });
 
+    messagesEl.addEventListener("wheel", (e) => {
+      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
+      const direction = e.deltaY < 0 ? "up" : e.deltaY > 0 ? "down" : "unknown";
+      this.markUserScrollIntent(direction);
+    });
+
+    messagesEl.addEventListener("pointerdown", (e) => {
+      // Treat scrollbar/container drags as scroll intent, but not clicks inside message content.
+      if (
+        e.target !== messagesEl ||
+        !this.isEventFromMessagesScrollContainer(e.target)
+      ) {
+        return;
+      }
+      this.pointerScrollActive = true;
+      this.markUserScrollIntent("unknown");
+    });
+
+    messagesEl.addEventListener("touchstart", (e) => {
+      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
+      this.touchScrollActive = true;
+    });
+
+    messagesEl.addEventListener("touchmove", (e) => {
+      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
+      this.touchScrollActive = true;
+      this.markUserScrollIntent("unknown");
+    });
+
     messagesEl.addEventListener("keydown", (e) => {
+      if (this.isEventFromMessagesScrollContainer(e.target)) {
+        if (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home") {
+          this.markUserScrollIntent("up");
+        } else if (
+          e.key === "ArrowDown" ||
+          e.key === "PageDown" ||
+          e.key === "End" ||
+          e.key === " "
+        ) {
+          this.markUserScrollIntent("down");
+        }
+      }
+
       const messages = Array.from(messagesEl.querySelectorAll(".message"));
       const currentIndex = messages.indexOf(this.doc.activeElement as Element);
 
@@ -1494,15 +1546,12 @@ export class WebviewController {
       }
     });
 
-    messagesEl.addEventListener("scroll", () => {
-      const isNearBottom =
-        messagesEl.scrollHeight -
-          messagesEl.scrollTop -
-          messagesEl.clientHeight <
-        100;
-      this.isAutoScrollEnabled = isNearBottom;
-      this.scheduleMessagesPaintInvalidation();
-    });
+    messagesEl.addEventListener("scroll", () => this.handleMessagesScroll());
+
+    this.win.addEventListener("pointerup", () => this.clearPointerScroll());
+    this.win.addEventListener("pointercancel", () => this.clearPointerScroll());
+    this.win.addEventListener("touchend", () => this.clearTouchScroll());
+    this.win.addEventListener("touchcancel", () => this.clearTouchScroll());
 
     this.win.addEventListener("message", (e: MessageEvent<ExtensionMessage>) =>
       this.enqueueExtensionMessage(e.data)
@@ -1554,9 +1603,96 @@ export class WebviewController {
     this.elements.imagePreviewPopover.style.display = "none";
   }
 
+  private isNearMessagesBottom(): boolean {
+    const { messagesEl } = this.elements;
+    return (
+      messagesEl.scrollHeight -
+        messagesEl.scrollTop -
+        messagesEl.clientHeight <=
+      BOTTOM_THRESHOLD_PX
+    );
+  }
+
+  private isEventFromMessagesScrollContainer(
+    target: EventTarget | null
+  ): boolean {
+    const { messagesEl } = this.elements;
+    if (target === messagesEl) {
+      return true;
+    }
+    if (!target || typeof (target as Element).closest !== "function") {
+      return false;
+    }
+
+    const targetEl = target as Element;
+    if (!messagesEl.contains(targetEl)) {
+      return false;
+    }
+
+    return !targetEl.closest(
+      ".diff-content, .tool-output, .diff-summary-list, .detail-input"
+    );
+  }
+
+  private markUserScrollIntent(direction: UserScrollDirection): void {
+    this.userScrollIntent = true;
+    this.userScrollDirection = direction;
+  }
+
+  private clearDiscreteScrollIntent(): void {
+    if (this.pointerScrollActive || this.touchScrollActive) {
+      return;
+    }
+    this.userScrollIntent = false;
+    this.userScrollDirection = "none";
+  }
+
+  private clearPointerScroll(): void {
+    this.pointerScrollActive = false;
+    this.clearDiscreteScrollIntent();
+  }
+
+  private clearTouchScroll(): void {
+    this.touchScrollActive = false;
+    this.clearDiscreteScrollIntent();
+  }
+
+  private enableAutoScroll(): void {
+    this.isAutoScrollEnabled = true;
+  }
+
+  private disableAutoScroll(): void {
+    this.isAutoScrollEnabled = false;
+    this.cancelPendingBottomScroll();
+  }
+
+  private handleMessagesScroll(): void {
+    const hasUserIntent =
+      this.userScrollIntent ||
+      this.pointerScrollActive ||
+      this.touchScrollActive;
+
+    if (hasUserIntent) {
+      const isNearBottom = this.isNearMessagesBottom();
+      const direction = this.userScrollDirection;
+
+      if (isNearBottom) {
+        this.enableAutoScroll();
+      } else if (this.pointerScrollActive || this.touchScrollActive) {
+        this.disableAutoScroll();
+      } else if (direction === "up" || direction === "unknown") {
+        this.disableAutoScroll();
+      }
+
+      this.clearDiscreteScrollIntent();
+    }
+
+    this.scheduleMessagesPaintInvalidation();
+  }
+
   private scrollToBottom(force = false): void {
     if (force) {
-      this.isAutoScrollEnabled = true;
+      this.enableAutoScroll();
     }
 
     if (!force && !this.isAutoScrollEnabled) {
@@ -1565,6 +1701,14 @@ export class WebviewController {
     }
 
     this.pendingBottomScrollForce = this.pendingBottomScrollForce || force;
+    this.bottomScrollSettleFrames = Math.max(
+      this.bottomScrollSettleFrames,
+      AUTO_SCROLL_SETTLE_FRAMES
+    );
+    this.scheduleBottomScrollFrame();
+  }
+
+  private scheduleBottomScrollFrame(): void {
     if (this.pendingBottomScrollFrame !== null) {
       return;
     }
@@ -1576,11 +1720,19 @@ export class WebviewController {
       this.pendingBottomScrollForce = false;
 
       if (!shouldScroll) {
+        this.bottomScrollSettleFrames = 0;
         this.scheduleMessagesPaintInvalidation();
         return;
       }
 
       this.performScrollToBottom();
+      this.bottomScrollSettleFrames = Math.max(
+        0,
+        this.bottomScrollSettleFrames - 1
+      );
+      if (this.bottomScrollSettleFrames > 0 && this.isAutoScrollEnabled) {
+        this.scheduleBottomScrollFrame();
+      }
     });
   }
 
@@ -1593,6 +1745,15 @@ export class WebviewController {
     messagesEl.style.scrollBehavior = previousScrollBehavior;
     this.isAutoScrollEnabled = true;
     this.scheduleMessagesPaintInvalidation();
+  }
+
+  private cancelPendingBottomScroll(): void {
+    if (this.pendingBottomScrollFrame !== null) {
+      this.cancelFrame(this.pendingBottomScrollFrame);
+      this.pendingBottomScrollFrame = null;
+    }
+    this.pendingBottomScrollForce = false;
+    this.bottomScrollSettleFrames = 0;
   }
 
   private scheduleMessagesPaintInvalidation(): void {
@@ -1613,6 +1774,14 @@ export class WebviewController {
       return this.win.requestAnimationFrame(callback);
     }
     return this.win.setTimeout(() => callback(Date.now()), 0);
+  }
+
+  private cancelFrame(frame: number): void {
+    if (typeof this.win.cancelAnimationFrame === "function") {
+      this.win.cancelAnimationFrame(frame);
+      return;
+    }
+    this.win.clearTimeout(frame);
   }
 
   public addMessage(
@@ -2220,6 +2389,8 @@ export class WebviewController {
 
     text = text.trim();
     if (!text && images.length === 0) return;
+
+    this.scrollToBottom(true);
 
     this.vscode.postMessage({
       type: "sendMessage",
@@ -2856,11 +3027,13 @@ export class WebviewController {
 
     // Scroll to Top Button
     const topBtn = createBtn("arrow-up", "Scroll to top", () => {
+      this.disableAutoScroll();
       this.elements.messagesEl.scrollTo({ top: 0, behavior: "smooth" });
     });
 
     // Scroll to Recent User Input Button
     const userBtn = createBtn("reply", "Scroll to user question", () => {
+      this.disableAutoScroll();
       const allMessages = Array.from(
         this.elements.messagesEl.querySelectorAll(".message")
       );
