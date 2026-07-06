@@ -1,13 +1,15 @@
 import { marked } from "./marked-config";
 import { renderToolSummary, renderToolDetails } from "./tool-render";
 import { escapeHtml } from "./html-utils";
-import { computeLineDiff } from "../../utils/diff";
 import { AsyncSerialQueue } from "../../utils/async-queue";
 import { getFileIconHtml, getFolderIconHtml } from "./file-icon";
 import { Dropdown } from "./widget/dropdown";
 import { TooltipManager } from "./widget/tooltip";
 import { showConfirmDialog } from "./widget/confirm-dialog";
 import { updateContextUsageRing } from "./widget/context-usage";
+import { PermissionDialog } from "./widget/permission-dialog";
+import { DiffSummary } from "./widget/diff-summary";
+import { PlanView } from "./widget/plan-view";
 import type {
   VsCodeApi,
   Tool,
@@ -83,9 +85,6 @@ export class WebviewController {
   private activeBlock: Block | null = null;
   private blocks: Block[] = [];
   private toolBlockById: Map<string, Block> = new Map();
-  private planEl: HTMLElement | null = null;
-  private planEntries: PlanEntry[] = [];
-  private isPlanExpanded = false;
   private isConnected = false;
   private availableCommands: AvailableCommand[] = [];
   private fileResults: Array<{
@@ -106,14 +105,9 @@ export class WebviewController {
   private hoveredImageChip: HTMLElement | null = null;
   private starredModels = new Set<string>();
   private lastModelsMsg: ExtensionMessage["models"] = null;
-  private diffChanges: Array<{
-    path: string;
-    relativePath: string;
-    oldText: string | null;
-    newText: string;
-    status: string;
-  }> = [];
-  private diffSummaryExpanded = false;
+  private permissionDialog: PermissionDialog;
+  private diffSummary: DiffSummary;
+  private planView: PlanView;
   private isAutoScrollEnabled = true;
   private pendingBottomScrollFrame: number | null = null;
   private pendingBottomScrollForce = false;
@@ -157,6 +151,26 @@ export class WebviewController {
         });
       }
     );
+
+    this.permissionDialog = new PermissionDialog({
+      doc: this.doc,
+      vscode: this.vscode,
+      getIsGenerating: () => this.isGenerating,
+      setGenerating: (v) => this.setGenerating(v),
+      scrollToBottom: () => this.scrollToBottom(),
+      findToolBlock: (id) =>
+        this.blocks.find((b) => b.type === "tool" && b.toolId === id),
+    });
+
+    this.diffSummary = new DiffSummary({
+      container: this.elements.diffSummaryContainer,
+      vscode: this.vscode,
+      onSaveState: () => this.saveState(),
+    });
+
+    this.planView = new PlanView({
+      container: this.elements.planContainer,
+    });
 
     this.restoreState();
     this.setupEventListeners();
@@ -276,226 +290,6 @@ export class WebviewController {
     });
   }
 
-  private showPermissionDialog(
-    requestId: string,
-    toolCall: { kind?: string; title?: string; description?: string },
-    options: Array<{ optionId: string; kind: string; name: string }>,
-    toolCallId?: string
-  ): void {
-    const wasGenerating = this.isGenerating;
-    // Always block input while waiting for permission
-    this.setGenerating(true);
-
-    if (options.length === 0) {
-      options.push({
-        optionId: "cancel",
-        kind: "reject_once",
-        name: "Cancel (No options provided)",
-      });
-    }
-
-    // Try to find the tool block to embed the permission UI
-    let targetContainer: HTMLElement | null = null;
-    if (toolCallId) {
-      const block = this.blocks.find(
-        (b) => b.type === "tool" && b.toolId === toolCallId
-      );
-      if (block) {
-        targetContainer = block.contentEl;
-      }
-    }
-
-    if (targetContainer) {
-      this.renderEmbeddedPermission(
-        targetContainer,
-        requestId,
-        toolCall,
-        options,
-        wasGenerating
-      );
-    } else {
-      this.renderPermissionOverlay(requestId, toolCall, options, wasGenerating);
-    }
-  }
-
-  private handlePermissionOptionClick(
-    requestId: string,
-    option: { optionId: string; kind: string },
-    cleanup: () => void,
-    wasGenerating: boolean
-  ): void {
-    const isReject = option.kind.startsWith("reject");
-    const outcome = isReject
-      ? { outcome: "cancelled" as const }
-      : { outcome: "selected" as const, optionId: option.optionId };
-
-    this.vscode.postMessage({
-      type: "permissionResponse",
-      requestId,
-      outcome,
-    });
-
-    cleanup();
-    this.setGenerating(wasGenerating);
-  }
-
-  private renderEmbeddedPermission(
-    container: HTMLElement,
-    requestId: string,
-    toolCall: { kind?: string; title?: string; description?: string },
-    options: Array<{ optionId: string; kind: string; name: string }>,
-    wasGenerating: boolean
-  ): void {
-    const wrapper = this.doc.createElement("div");
-    wrapper.className = "embedded-permission";
-
-    const header = this.doc.createElement("div");
-    header.className = "embedded-permission-header";
-    header.innerHTML = `<span class="permission-icon codicon codicon-lock"></span> <span>Permission Required</span>`;
-
-    const body = this.doc.createElement("div");
-    body.className = "embedded-permission-body";
-
-    if (toolCall.description) {
-      const desc = this.doc.createElement("div");
-      desc.className = "permission-tool-desc";
-      desc.style.marginBottom = "8px";
-      desc.textContent = toolCall.description;
-      body.appendChild(desc);
-    }
-
-    const optionsContainer = this.doc.createElement("div");
-    optionsContainer.className = "embedded-permission-options";
-
-    options.forEach((opt) => {
-      const btn = this.doc.createElement("button");
-      const isAllow = !opt.kind.startsWith("reject");
-      const isAlways = opt.kind.endsWith("always");
-
-      btn.className = `embedded-permission-option ${
-        isAllow
-          ? "embedded-permission-option-allow"
-          : "embedded-permission-option-reject"
-      } ${isAlways ? "embedded-permission-option-always" : ""}`;
-
-      const icon = this.doc.createElement("span");
-      icon.className = "embedded-permission-option-icon";
-      icon.innerHTML = isAllow
-        ? `<div class="codicon codicon-check"></div>`
-        : `<div class="codicon codicon-close"></div>`;
-
-      const text = this.doc.createElement("span");
-      const label = this.getOptionLabel(opt.kind);
-      text.textContent = `${label}: ${opt.name}`;
-
-      btn.appendChild(icon);
-      btn.appendChild(text);
-
-      btn.addEventListener("click", () => {
-        this.handlePermissionOptionClick(
-          requestId,
-          opt,
-          () => wrapper.remove(),
-          wasGenerating
-        );
-      });
-
-      optionsContainer.appendChild(btn);
-    });
-
-    body.appendChild(optionsContainer);
-    wrapper.appendChild(header);
-    wrapper.appendChild(body);
-
-    container.appendChild(wrapper);
-    this.scrollToBottom();
-  }
-
-  private renderPermissionOverlay(
-    requestId: string,
-    toolCall: { kind?: string; title?: string; description?: string },
-    options: Array<{ optionId: string; kind: string; name: string }>,
-    wasGenerating: boolean
-  ): void {
-    const overlay = this.doc.createElement("div");
-    overlay.className = "permission-dialog-overlay";
-
-    const dialog = this.doc.createElement("div");
-    dialog.className = "permission-dialog";
-
-    const header = this.doc.createElement("div");
-    header.className = "permission-dialog-header";
-    header.innerHTML = `
-      <span class="permission-icon codicon codicon-lock"></span>
-      <span>Permission Required</span>
-    `;
-
-    const body = this.doc.createElement("div");
-    body.className = "permission-dialog-body";
-
-    const info = this.doc.createElement("div");
-    info.className = "permission-tool-info";
-
-    const kind = this.doc.createElement("div");
-    kind.className = "permission-tool-kind";
-    kind.textContent = toolCall.kind || "Unknown";
-
-    const title = this.doc.createElement("div");
-    title.className = "permission-tool-title";
-    title.textContent = toolCall.title || "Tool Call";
-
-    info.appendChild(kind);
-    info.appendChild(title);
-
-    if (toolCall.description) {
-      const desc = this.doc.createElement("div");
-      desc.className = "permission-tool-desc";
-      desc.textContent = toolCall.description;
-      info.appendChild(desc);
-    }
-
-    const optionsContainer = this.doc.createElement("div");
-    optionsContainer.className = "permission-options";
-
-    options.forEach((opt) => {
-      const btn = this.doc.createElement("button");
-      btn.className = `permission-option-btn permission-option-${opt.kind}`;
-
-      const label = this.getOptionLabel(opt.kind);
-      btn.textContent = `${label}: ${opt.name}`;
-
-      btn.addEventListener("click", () => {
-        this.handlePermissionOptionClick(
-          requestId,
-          opt,
-          () => overlay.remove(),
-          wasGenerating
-        );
-      });
-
-      optionsContainer.appendChild(btn);
-    });
-
-    body.appendChild(info);
-    body.appendChild(optionsContainer);
-
-    dialog.appendChild(header);
-    dialog.appendChild(body);
-    overlay.appendChild(dialog);
-
-    this.doc.body.appendChild(overlay);
-  }
-
-  private getOptionLabel(kind: string): string {
-    const labels: Record<string, string> = {
-      allow_once: "Allow Once",
-      allow_always: "Always Allow",
-      reject_once: "Reject Once",
-      reject_always: "Always Reject",
-    };
-    return labels[kind] || kind;
-  }
-
   private showConfirmDialog(actionLabel: string): Promise<boolean> {
     return showConfirmDialog(this.doc, actionLabel);
   }
@@ -573,6 +367,9 @@ export class WebviewController {
           c.replaceWith(newChip);
         });
       }
+      if (previousState.diffChanges) {
+        this.diffSummary.setChanges(previousState.diffChanges);
+      }
     }
   }
 
@@ -580,7 +377,7 @@ export class WebviewController {
     this.vscode.setState<WebviewState>({
       isConnected: this.isConnected,
       inputValue: this.elements.inputEl.innerHTML || "",
-      diffChanges: this.diffChanges,
+      diffChanges: this.diffSummary.getChanges(),
     });
   }
 
@@ -1448,151 +1245,11 @@ export class WebviewController {
   }
 
   showPlan(entries: PlanEntry[]): void {
-    if (entries.length === 0) {
-      this.hidePlan();
-      return;
-    }
-
-    this.planEntries = entries;
-
-    if (!this.planEl) {
-      this.planEl = this.doc.createElement("div");
-      this.planEl.className = "agent-plan-sticky";
-      this.planEl.setAttribute("role", "status");
-      this.planEl.setAttribute("aria-live", "polite");
-      this.planEl.setAttribute("aria-label", "Agent execution plan");
-      this.elements.planContainer.appendChild(this.planEl);
-    }
-
-    const completedCount = entries.filter(
-      (e) => e.status === "completed"
-    ).length;
-    const totalCount = entries.length;
-    const inProgressCount = entries.filter(
-      (e) => e.status === "in_progress"
-    ).length;
-
-    // Get the label text based on current state
-    const planLabel = this.getPlanLabel(
-      completedCount,
-      totalCount,
-      inProgressCount
-    );
-
-    this.planEl.innerHTML = `
-      <div class="plan-header" role="button" tabindex="0" aria-expanded="${this.isPlanExpanded}">
-        <span class="plan-toggle-icon ${this.isPlanExpanded ? "expanded" : "collapsed"}"></span>
-        <span class="plan-title">${planLabel}</span>
-        <span class="plan-counter">${completedCount}/${totalCount}</span>
-        <div class="plan-mini-progress-bar">
-          <div class="plan-mini-progress-fill" style="width: ${(completedCount / totalCount) * 100}%"></div>
-        </div>
-      </div>
-      <div class="plan-entries ${this.isPlanExpanded ? "" : "collapsed"}">
-        ${entries
-          .map(
-            (entry) => `
-          <div class="plan-entry plan-entry-${entry.status} plan-priority-${entry.priority}">
-            <span class="plan-status-icon">${this.getPlanStatusHtml(entry.status)}</span>
-            <span class="plan-content">${escapeHtml(entry.content)}</span>
-          </div>
-        `
-          )
-          .join("")}
-      </div>
-    `;
-
-    // Add click handler for toggle - always re-bind since innerHTML recreates elements
-    const headerEl = this.planEl.querySelector(".plan-header");
-    if (headerEl) {
-      // Use onclick to avoid duplicate bindings
-      (headerEl as HTMLElement).onclick = () => this.togglePlan();
-
-      headerEl.addEventListener("keydown", (e: Event) => {
-        const keyboardEvent = e as KeyboardEvent;
-        if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
-          e.preventDefault();
-          this.togglePlan();
-        }
-      });
-    }
-  }
-
-  private getPlanLabel(
-    completedCount: number,
-    totalCount: number,
-    inProgressCount: number
-  ): string {
-    if (this.isPlanExpanded) {
-      return "Plan";
-    }
-
-    // When collapsed, show "Plan(Current): xxxx" format
-    if (inProgressCount > 0) {
-      const currentEntry = this.planEntries.find(
-        (e) => e.status === "in_progress"
-      );
-      if (currentEntry) {
-        // Truncate long content
-        const content =
-          currentEntry.content.length > 50
-            ? currentEntry.content.substring(0, 50) + "..."
-            : currentEntry.content;
-        return `Plan(Current): ${content}`;
-      }
-    }
-
-    // If no in-progress, show the last completed item or first pending
-    if (completedCount > 0) {
-      const lastCompleted = [...this.planEntries]
-        .reverse()
-        .find((e) => e.status === "completed");
-      if (lastCompleted) {
-        const content =
-          lastCompleted.content.length > 50
-            ? lastCompleted.content.substring(0, 50) + "..."
-            : lastCompleted.content;
-        return `Plan(Current): ${content}`;
-      }
-    }
-
-    // Default: show first pending item
-    const firstPending = this.planEntries.find((e) => e.status === "pending");
-    if (firstPending) {
-      const content =
-        firstPending.content.length > 50
-          ? firstPending.content.substring(0, 50) + "..."
-          : firstPending.content;
-      return `Plan(Current): ${content}`;
-    }
-
-    return "Plan(Current)";
-  }
-
-  private togglePlan(): void {
-    this.isPlanExpanded = !this.isPlanExpanded;
-    this.showPlan(this.planEntries);
-  }
-
-  private getPlanStatusHtml(status: string): string {
-    switch (status) {
-      case "completed":
-        return '<span class="codicon codicon-check"></span>';
-      case "in_progress":
-        return '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
-      case "pending":
-      default:
-        return '<span class="codicon codicon-circle-large"></span>';
-    }
+    this.planView.show(entries);
   }
 
   hidePlan(): void {
-    if (this.planEl) {
-      this.planEl.remove();
-      this.planEl = null;
-    }
-    this.planEntries = [];
-    this.isPlanExpanded = false;
+    this.planView.hide();
   }
 
   private send(): void {
@@ -2345,145 +2002,6 @@ export class WebviewController {
     });
   }
 
-  private renderDiffSummary(): void {
-    const { diffSummaryContainer } = this.elements;
-    if (this.diffChanges.length === 0) {
-      diffSummaryContainer.style.display = "none";
-      diffSummaryContainer.innerHTML = "";
-      return;
-    }
-
-    diffSummaryContainer.style.display = "block";
-
-    // Calculate total stats
-    let totalAdded = 0;
-    let totalRemoved = 0;
-    this.diffChanges.forEach((change) => {
-      const diff = computeLineDiff(change.oldText, change.newText);
-      totalAdded += diff.filter((l) => l.type === "add").length;
-      totalRemoved += diff.filter((l) => l.type === "remove").length;
-    });
-
-    let html = `
-      <div class="diff-summary-header">
-        <div class="diff-summary-info">
-          <span class="codicon codicon-sync"></span>
-          <span class="diff-summary-title">${this.diffChanges.length} files modified</span>
-          <span class="diff-stat-added">+${totalAdded}</span>
-          <span class="diff-stat-removed">-${totalRemoved}</span>
-        </div>
-        <div class="diff-summary-actions">
-          <button class="diff-action-btn accept-all" acp-title="Accept All Changes">
-            <span class="codicon codicon-check"></span>
-          </button>
-          <button class="diff-action-btn rollback-all" acp-title="Discard All Changes">
-            <span class="codicon codicon-discard"></span>
-          </button>
-          <button class="diff-action-btn toggle-expand ${this.diffSummaryExpanded ? "expanded" : ""}" acp-title="${this.diffSummaryExpanded ? "Collapse" : "Expand"}">
-            <span class="codicon codicon-chevron-down"></span>
-          </button>
-        </div>
-      </div>
-    `;
-
-    if (this.diffSummaryExpanded) {
-      html += `<div class="diff-summary-list">`;
-      this.diffChanges.forEach((change) => {
-        const diff = computeLineDiff(change.oldText, change.newText);
-        const added = diff.filter((l) => l.type === "add").length;
-        const removed = diff.filter((l) => l.type === "remove").length;
-
-        const parts = change.relativePath.split(/[/\\]/);
-        const filename = parts.pop() || change.relativePath;
-        const dirpath = parts.length > 0 ? parts.join("/") + "/" : "";
-
-        html += `
-          <div class="diff-summary-item">
-            <div class="diff-item-info" acp-title="${escapeHtml(change.path)}">
-      ${getFileIconHtml(filename, 14)}
-              <span class="diff-item-path">
-                <span style="font-weight: bold;">${escapeHtml(filename)}</span>
-                ${dirpath ? `<span style="color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-left: 4px;">${escapeHtml(dirpath)}</span>` : ""}
-              </span>
-              <span class="diff-stat-added">+${added}</span>
-              <span class="diff-stat-removed">-${removed}</span>
-            </div>
-            <div class="diff-item-actions">
-              <button class="diff-item-btn review" data-path="${escapeHtml(change.path)}" acp-title="Review Diff">
-                <span class="codicon codicon-diff"></span>
-              </button>
-              <button class="diff-item-btn accept" data-path="${escapeHtml(change.path)}" acp-title="Accept Change">
-                <span class="codicon codicon-check"></span>
-              </button>
-              <button class="diff-item-btn rollback" data-path="${escapeHtml(change.path)}" acp-title="Discard Change">
-                <span class="codicon codicon-discard"></span>
-              </button>
-            </div>
-          </div>
-        `;
-      });
-      html += `</div>`;
-    }
-
-    diffSummaryContainer.innerHTML = html;
-
-    // Add event listeners
-    const toggleBtn = diffSummaryContainer.querySelector(".toggle-expand");
-    toggleBtn?.addEventListener("click", () => {
-      this.diffSummaryExpanded = !this.diffSummaryExpanded;
-      this.renderDiffSummary();
-    });
-
-    const acceptAllBtn = diffSummaryContainer.querySelector(".accept-all");
-    acceptAllBtn?.addEventListener("click", () => {
-      this.vscode.postMessage({ type: "acceptAllDiffs" });
-      this.diffChanges = [];
-      this.renderDiffSummary();
-      this.saveState();
-    });
-
-    const rollbackAllBtn = diffSummaryContainer.querySelector(".rollback-all");
-    rollbackAllBtn?.addEventListener("click", () => {
-      this.vscode.postMessage({ type: "rollbackAllDiffs" });
-      this.diffChanges = [];
-      this.renderDiffSummary();
-      this.saveState();
-    });
-
-    diffSummaryContainer
-      .querySelectorAll(".diff-item-btn.review")
-      .forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const path = (btn as HTMLElement).dataset.path;
-          this.vscode.postMessage({ type: "reviewDiff", path });
-        });
-      });
-
-    diffSummaryContainer
-      .querySelectorAll(".diff-item-btn.accept")
-      .forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const path = (btn as HTMLElement).dataset.path;
-          this.vscode.postMessage({ type: "acceptDiff", path });
-          this.diffChanges = this.diffChanges.filter((c) => c.path !== path);
-          this.renderDiffSummary();
-          this.saveState();
-        });
-      });
-
-    diffSummaryContainer
-      .querySelectorAll(".diff-item-btn.rollback")
-      .forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const path = (btn as HTMLElement).dataset.path;
-          this.vscode.postMessage({ type: "rollbackDiff", path });
-          this.diffChanges = this.diffChanges.filter((c) => c.path !== path);
-          this.renderDiffSummary();
-          this.saveState();
-        });
-      });
-  }
-
   async handleMessage(msg: ExtensionMessage): Promise<void> {
     switch (msg.type) {
       case "fileSearchResults":
@@ -2660,17 +2178,15 @@ export class WebviewController {
         if (msg.agentName) {
           this.updatePlaceholder(msg.agentName);
         }
-        this.diffChanges = [];
-        this.renderDiffSummary();
+        this.diffSummary.clear();
       // fallthrough
       case "chatCleared":
         this.elements.messagesEl.innerHTML = "";
         this.currentAssistantMessage = null;
         this.resetRenderedBlockTracking();
         this.hideAutocomplete();
-        this.hidePlan();
-        this.diffChanges = [];
-        this.renderDiffSummary();
+        this.planView.hide();
+        this.diffSummary.clear();
         this.updateViewState();
         break;
       case "triggerNewChat":
@@ -2749,16 +2265,15 @@ export class WebviewController {
         break;
       case "plan":
         if (msg.plan && msg.plan.entries) {
-          this.showPlan(msg.plan.entries);
+          this.planView.show(msg.plan.entries);
         }
         break;
       case "planComplete":
-        this.hidePlan();
+        this.planView.hide();
         break;
       case "diffSummary":
         if (msg.changes) {
-          this.diffChanges = msg.changes;
-          this.renderDiffSummary();
+          this.diffSummary.setChanges(msg.changes);
           this.saveState();
         }
         break;
@@ -2767,7 +2282,7 @@ export class WebviewController {
         break;
       case "permissionRequest":
         if (msg.requestId && msg.toolCall && msg.options) {
-          this.showPermissionDialog(
+          this.permissionDialog.show(
             msg.requestId,
             msg.toolCall,
             msg.options,
