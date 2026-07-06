@@ -332,5 +332,10 @@
     "*.{json,md,css,html}": [
       "prettier --write"
     ]
+  },
+  "allowScripts": {
+    "@vscode/vsce-sign@2.0.9": true,
+    "esbuild@0.25.12": true,
+    "keytar@7.9.0": true
   }
 }
