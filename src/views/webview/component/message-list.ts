@@ -84,6 +84,11 @@ export class MessageListComponent implements MessageHandler {
       ],
       this
     );
+
+    // Scroll to bottom when a user message is sent.
+    ctx.eventBus.on("messageSent", () => {
+      this.scrollToBottom(true);
+    });
   }
 
   // -------------------------------------------------------------------

@@ -12,6 +12,7 @@ import { ChipRendererComponent } from "./component/chip-renderer";
 import { createWebviewRoot } from "./component/webview-root";
 import { MessageRouter, type MessageHandler } from "./message-router";
 import { StatePersistenceService } from "./state-persistence";
+import { EventBus } from "./event-bus";
 import { AsyncSerialQueue } from "../../utils/async-queue";
 import type { WebviewContext } from "./context";
 import type {
@@ -19,6 +20,7 @@ import type {
   Mention,
   ExtensionMessage,
   WebviewElements,
+  WebviewEventMap,
 } from "./types";
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -60,12 +62,15 @@ export class WebviewController implements MessageHandler {
     this.messageRouter = new MessageRouter();
     this.stateService = new StatePersistenceService(vscode);
 
+    const eventBus = new EventBus<WebviewEventMap>();
+
     this.ctx = {
       vscode,
       doc,
       win,
       stateService: this.stateService,
       messageRouter: this.messageRouter,
+      eventBus,
       escapeHtml,
       renderMarkdown: (content: string) => marked.parse(content) as string,
       getFileIconHtml,
@@ -325,7 +330,7 @@ export class WebviewController implements MessageHandler {
   private setupEventListeners(): void {
     const { sendBtn, stopBtn, inputEl, commandAutocomplete } = this.elements;
 
-    sendBtn.addEventListener("click", () => this.send());
+    sendBtn.addEventListener("click", () => this.inputPanel.send());
     stopBtn.addEventListener("click", () => {
       this.ctx.vscode.postMessage({ type: "stop" });
     });
@@ -355,10 +360,10 @@ export class WebviewController implements MessageHandler {
       if (
         e.key === "Enter" &&
         !e.shiftKey &&
-        !this.messageList.getIsGenerating()
+        !this.inputPanel.getIsGenerating()
       ) {
         e.preventDefault();
-        this.send();
+        this.inputPanel.send();
       } else if (e.key === "Escape") {
         e.preventDefault();
         this.inputPanel.clearInput();
@@ -450,31 +455,6 @@ export class WebviewController implements MessageHandler {
     );
   }
 
-  // -------------------------------------------------------------------
-  // Send
-  // -------------------------------------------------------------------
-
-  private send(): void {
-    if (this.messageList.getIsGenerating()) return;
-
-    const msg = this.inputPanel.collectMessage();
-    if (!msg) return;
-
-    this.messageList.scrollToBottom(true);
-
-    this.ctx.vscode.postMessage({
-      type: "sendMessage",
-      text: msg.text,
-      images: msg.images,
-      mentions: msg.mentions,
-    });
-
-    this.inputPanel.clearInput();
-    this.inputPanel.autocomplete.hide();
-    this.saveState();
-    this.inputPanel.updateInputState();
-  }
-
   private resetChatState(): void {
     this.messageList.clear();
     this.inputPanel.autocomplete.hide();
@@ -511,6 +491,7 @@ export function getElements(doc: Document): WebviewElements {
     win: (doc.defaultView ?? globalThis) as unknown as Window,
     stateService: new StatePersistenceService(mockVscode),
     messageRouter: router,
+    eventBus: new EventBus<WebviewEventMap>(),
     escapeHtml,
     renderMarkdown: (c: string) => marked.parse(c) as string,
     getFileIconHtml,

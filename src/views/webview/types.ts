@@ -234,6 +234,22 @@ export interface ExtensionMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Internal webview events (EventBus)
+// ---------------------------------------------------------------------------
+
+/**
+ * Map of intra-webview event names to their payload types.
+ *
+ * Extend this interface when adding new events to the {@link EventBus}.
+ * The payload type is inferred automatically at every `emit()` / `on()` call
+ * site, giving full compile-time safety.
+ */
+export interface WebviewEventMap {
+  /** Fired after a user message has been posted to the extension host. */
+  messageSent: { text: string; images: string[]; mentions: Mention[] };
+}
+
+// ---------------------------------------------------------------------------
 // Dropdown
 // ---------------------------------------------------------------------------
 

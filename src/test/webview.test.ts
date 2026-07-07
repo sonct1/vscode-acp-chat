@@ -22,6 +22,7 @@ import {
   getToolKindIcon,
 } from "../views/webview/tool-render";
 import { computeLineDiff } from "../utils/diff";
+import { EventBus } from "../views/webview/event-bus";
 
 function createMockVsCodeApi(): VsCodeApi & {
   _getMessages: () => unknown[];
@@ -172,6 +173,80 @@ suite("Webview", () => {
 
     test("preserves normal text", () => {
       assert.strictEqual(escapeHtml("Hello World"), "Hello World");
+    });
+  });
+
+  suite("EventBus", () => {
+    test("on/emit invokes handler with correct payload", () => {
+      const bus = new EventBus<{ test: string }>();
+      let received = "";
+      bus.on("test", (payload) => {
+        received = payload;
+      });
+      bus.emit("test", "hello");
+      assert.strictEqual(received, "hello");
+    });
+
+    test("emit with no listeners does not throw", () => {
+      const bus = new EventBus<{ test: string }>();
+      assert.doesNotThrow(() => bus.emit("test", "hello"));
+    });
+
+    test("multiple handlers are all invoked", () => {
+      const bus = new EventBus<{ test: number }>();
+      const calls: number[] = [];
+      bus.on("test", (v) => calls.push(v));
+      bus.on("test", (v) => calls.push(v + 1));
+      bus.emit("test", 10);
+      assert.deepStrictEqual(calls, [10, 11]);
+    });
+
+    test("off removes a specific handler", () => {
+      const bus = new EventBus<{ test: string }>();
+      const calls: string[] = [];
+      const handler1 = (v: string) => calls.push("h1:" + v);
+      const handler2 = (v: string) => calls.push("h2:" + v);
+      bus.on("test", handler1);
+      bus.on("test", handler2);
+      bus.off("test", handler1);
+      bus.emit("test", "x");
+      assert.deepStrictEqual(calls, ["h2:x"]);
+    });
+
+    test("off for unregistered handler is a no-op", () => {
+      const bus = new EventBus<{ test: string }>();
+      assert.doesNotThrow(() => bus.off("test", () => {}));
+    });
+
+    test("same handler is only added once (Set)", () => {
+      const bus = new EventBus<{ test: number }>();
+      let count = 0;
+      const handler = () => {
+        count++;
+      };
+      bus.on("test", handler);
+      bus.on("test", handler);
+      bus.emit("test", 0);
+      assert.strictEqual(count, 1);
+    });
+
+    test("different events are independent", () => {
+      const bus = new EventBus<{ a: string; b: string }>();
+      const calls: string[] = [];
+      bus.on("a", (v) => calls.push("a:" + v));
+      bus.on("b", (v) => calls.push("b:" + v));
+      bus.emit("a", "1");
+      assert.deepStrictEqual(calls, ["a:1"]);
+    });
+
+    test("handlers are invoked synchronously in registration order", () => {
+      const bus = new EventBus<{ test: number }>();
+      const order: number[] = [];
+      bus.on("test", () => order.push(1));
+      bus.on("test", () => order.push(2));
+      bus.on("test", () => order.push(3));
+      bus.emit("test", 0);
+      assert.deepStrictEqual(order, [1, 2, 3]);
     });
   });
 

@@ -1,4 +1,5 @@
-import type { VsCodeApi } from "./types";
+import type { VsCodeApi, WebviewEventMap } from "./types";
+import type { EventBus } from "./event-bus";
 import type { MessageRouter } from "./message-router";
 import type { StatePersistenceService } from "./state-persistence";
 
@@ -16,6 +17,7 @@ export interface WebviewContext {
   readonly win: Window;
   readonly stateService: StatePersistenceService;
   readonly messageRouter: MessageRouter;
+  readonly eventBus: EventBus<WebviewEventMap>;
 
   // Convenience wrappers so components do not need their own utility imports.
   escapeHtml(str: string): string;

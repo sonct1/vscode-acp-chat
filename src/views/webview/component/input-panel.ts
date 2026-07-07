@@ -202,6 +202,33 @@ export class InputPanelComponent implements MessageHandler {
     this.elements.stopBtn.style.display = isGenerating ? "flex" : "none";
   }
 
+  getIsGenerating(): boolean {
+    return this.isGenerating;
+  }
+
+  send(): void {
+    if (this.isGenerating) return;
+
+    const msg = this.collectMessage();
+    if (!msg) return;
+
+    this.ctx.vscode.postMessage({
+      type: "sendMessage",
+      text: msg.text,
+      images: msg.images,
+      mentions: msg.mentions,
+    });
+
+    this.clearInput();
+    this.updateInputState();
+
+    this.ctx.eventBus.emit("messageSent", {
+      text: msg.text,
+      images: msg.images,
+      mentions: msg.mentions,
+    });
+  }
+
   clearInput(): void {
     this.elements.inputEl.innerHTML = "";
     this.adjustHeight();
