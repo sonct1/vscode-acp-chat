@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.4](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.3...v1.18.4) (2026-07-07)
+
+### Bug Fixes
+
+- **webview:** respect user scroll intent ([727df07](https://github.com/pengjiantao/vscode-acp-chat/commit/727df0757aa1d9602211cf363d738df0cc96b874))
+
+### Code Refactoring
+
+- **webview:** extract PermissionDialog, DiffSummary, PlanView widgets from main.ts ([94d0e57](https://github.com/pengjiantao/vscode-acp-chat/commit/94d0e57733f3bb1c7e9b78ff34f08ce8ca41f4fb))
+- **webview:** extract types and first-priority widgets from main.ts ([52f5b3c](https://github.com/pengjiantao/vscode-acp-chat/commit/52f5b3c64c465e5facc6bc98924a89aff1e9d497))
+
 ### [1.18.3](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.2...v1.18.3) (2026-07-05)
 
 ### Bug Fixes
