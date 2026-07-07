@@ -1,6 +1,9 @@
-import type { InputPanelElements, Mention } from "../types";
+import type { InputPanelElements, Mention, ExtensionMessage } from "../types";
+import type { WebviewContext } from "../context";
+import type { MessageHandler } from "../message-router";
+import { ChipRendererComponent } from "./chip-renderer";
+import { AutocompleteComponent } from "./autocomplete";
 import { getRequiredElement } from "../widget/dom";
-import { SessionToolbarComponent } from "./session-toolbar";
 
 type PasteEventLike = {
   clipboardData?: {
@@ -11,49 +14,91 @@ type PasteEventLike = {
 };
 
 /**
- * Owns the rich input surface and nearby controls. Autocomplete state remains
- * in the controller for now because it coordinates extension file search
- * requests with command/mention chip insertion.
+ * Owns the rich input surface, nearby controls, and autocomplete.
+ *
+ * Implements {@link MessageHandler} to self-register for `addMention`
+ * messages. Owns an {@link AutocompleteComponent} which independently
+ * registers for `fileSearchResults`.
  */
-export class InputPanelComponent {
-  readonly toolbar: SessionToolbarComponent;
+export class InputPanelComponent implements MessageHandler {
   readonly elements: InputPanelElements;
-  private doc: Document;
-  private win?: Window;
+  readonly chipRenderer: ChipRendererComponent;
+  readonly autocomplete: AutocompleteComponent;
+
+  private isGenerating = false;
+
+  /** Callback to insert a mention chip into the input element. */
+  onInsertMentionChip?: (mention: Mention) => void;
 
   constructor(
-    doc: Document,
+    private ctx: WebviewContext,
     options?: {
       elements?: InputPanelElements;
-      win?: Window;
+      chipRenderer?: ChipRendererComponent;
     }
   ) {
-    this.doc = doc;
-    this.win = options?.win;
-    this.toolbar = new SessionToolbarComponent(doc, {
-      elements: options?.elements?.toolbar,
-    });
+    this.chipRenderer = options?.chipRenderer ?? new ChipRendererComponent(ctx);
+
     this.elements = options?.elements ?? {
-      inputEl: getRequiredElement(doc, "input"),
-      commandAutocomplete: getRequiredElement(doc, "command-autocomplete"),
+      inputEl: getRequiredElement(ctx.doc, "input"),
+      commandAutocomplete: getRequiredElement(ctx.doc, "command-autocomplete"),
       attachImageBtn: getRequiredElement<HTMLButtonElement>(
-        doc,
+        ctx.doc,
         "attach-image"
       ),
-      imagePreviewPopover: getRequiredElement(doc, "image-preview-popover"),
-      sendBtn: getRequiredElement<HTMLButtonElement>(doc, "send"),
-      stopBtn: getRequiredElement<HTMLButtonElement>(doc, "stop"),
-      toolbar: this.toolbar.elements,
+      imagePreviewPopover: getRequiredElement(ctx.doc, "image-preview-popover"),
+      sendBtn: getRequiredElement<HTMLButtonElement>(ctx.doc, "send"),
+      stopBtn: getRequiredElement<HTMLButtonElement>(ctx.doc, "stop"),
+      toolbar: {
+        modeDropdown: getRequiredElement(ctx.doc, "mode-dropdown"),
+        modelDropdown: getRequiredElement(ctx.doc, "model-dropdown"),
+        configOptionsContainer: getRequiredElement(
+          ctx.doc,
+          "config-options-container"
+        ),
+        contextUsageRing: getRequiredElement<HTMLDivElement>(
+          ctx.doc,
+          "context-usage-ring"
+        ),
+      },
     };
+
+    this.autocomplete = new AutocompleteComponent(
+      ctx,
+      {
+        inputEl: this.elements.inputEl,
+        commandAutocomplete: this.elements.commandAutocomplete,
+      },
+      this.chipRenderer
+    );
+
+    // Register for addMention messages.
+    ctx.messageRouter.register("addMention", this);
   }
 
-  attachWindow(win: Window): void {
-    this.win = win;
+  // -------------------------------------------------------------------
+  // MessageHandler
+  // -------------------------------------------------------------------
+
+  handleMessage(msg: ExtensionMessage): boolean | void {
+    if (msg.type === "addMention" && msg.mention) {
+      this.insertMentionChip(msg.mention);
+      return;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------
+
+  /** Set the available commands (forwarded to autocomplete). */
+  setAvailableCommands(commands: import("../types").AvailableCommand[]): void {
+    this.autocomplete.setAvailableCommands(commands);
   }
 
   setupAttachImageButton(onFile: (file: File) => void): void {
     this.elements.attachImageBtn.addEventListener("click", () => {
-      const input = this.doc.createElement("input");
+      const input = this.ctx.doc.createElement("input");
       input.type = "file";
       input.accept = "image/*";
       input.multiple = true;
@@ -66,31 +111,25 @@ export class InputPanelComponent {
     });
   }
 
-  updateInputState(
-    isGenerating: boolean,
-    hoveredImageChip: HTMLElement | null
-  ): HTMLElement | null {
+  updateInputState(): void {
     const text = this.elements.inputEl.textContent?.trim() || "";
     const hasMentions =
       this.elements.inputEl.querySelectorAll(".mention-chip").length > 0;
-    let nextHoveredImageChip = hoveredImageChip;
 
-    if (
-      nextHoveredImageChip &&
-      !this.elements.inputEl.contains(nextHoveredImageChip)
-    ) {
-      nextHoveredImageChip = null;
-      this.hideImagePreview();
+    let hoveredImageChip = this.chipRenderer.getHoveredImageChip();
+    if (hoveredImageChip && !this.elements.inputEl.contains(hoveredImageChip)) {
+      hoveredImageChip = null;
+      this.chipRenderer.clearHoveredImageChip();
+      this.chipRenderer.hideImagePreview();
     }
 
-    // Preserve the CSS :empty placeholder behavior after chips/text are
-    // removed; contenteditable often leaves inert markup behind.
+    // Preserve the CSS :empty placeholder behavior
     if (!text && !hasMentions && this.elements.inputEl.innerHTML !== "") {
       this.elements.inputEl.innerHTML = "";
     }
 
-    this.elements.sendBtn.disabled = (!text && !hasMentions) || isGenerating;
-    return nextHoveredImageChip;
+    this.elements.sendBtn.disabled =
+      (!text && !hasMentions) || this.isGenerating;
   }
 
   setPlaceholder(agentName: string): void {
@@ -102,7 +141,7 @@ export class InputPanelComponent {
     const { inputEl } = this.elements;
     const scrollTop = inputEl.scrollTop;
     inputEl.style.height = "auto";
-    const maxHeight = (this.win?.innerHeight ?? window.innerHeight) / 3;
+    const maxHeight = (this.ctx.win?.innerHeight ?? window.innerHeight) / 3;
     const scrollHeight = inputEl.scrollHeight;
     const newHeight = Math.max(52, Math.min(scrollHeight, maxHeight));
     inputEl.style.height = newHeight + "px";
@@ -124,18 +163,14 @@ export class InputPanelComponent {
       }
     }
 
-    // Always paste plain text into the rich editor. This avoids layout drift
-    // from foreign HTML and prevents script/style markup from entering state.
     event.preventDefault();
     const plainText = event.clipboardData?.getData("text/plain") ?? "";
-    const selection = this.win?.getSelection();
-    if (!selection || selection.rangeCount === 0) {
-      return false;
-    }
+    const selection = this.ctx.win?.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
 
     const range = selection.getRangeAt(0);
     range.deleteContents();
-    const textNode = this.doc.createTextNode(plainText);
+    const textNode = this.ctx.doc.createTextNode(plainText);
     range.insertNode(textNode);
     range.setStart(textNode, textNode.length);
     range.setEnd(textNode, textNode.length);
@@ -162,6 +197,7 @@ export class InputPanelComponent {
   }
 
   setGenerating(isGenerating: boolean): void {
+    this.isGenerating = isGenerating;
     this.elements.sendBtn.style.display = isGenerating ? "none" : "flex";
     this.elements.stopBtn.style.display = isGenerating ? "flex" : "none";
   }
@@ -170,7 +206,10 @@ export class InputPanelComponent {
     this.elements.inputEl.innerHTML = "";
     this.adjustHeight();
     this.focus();
-    this.hideImagePreview();
+    this.autocomplete.hide();
+    // Hide image preview
+    const popover = this.ctx.doc.getElementById("image-preview-popover");
+    if (popover) popover.style.display = "none";
   }
 
   setTextAndFocus(text: string): void {
@@ -178,10 +217,8 @@ export class InputPanelComponent {
     this.adjustHeight();
     this.focus();
 
-    // Action buttons copy prior assistant output back into the editor; place
-    // the caret at the end so Enter sends the restored text immediately.
-    const range = this.doc.createRange();
-    const selection = this.win?.getSelection();
+    const range = this.ctx.doc.createRange();
+    const selection = this.ctx.win?.getSelection();
     range.selectNodeContents(this.elements.inputEl);
     range.collapse(false);
     selection?.removeAllRanges();
@@ -192,26 +229,213 @@ export class InputPanelComponent {
     this.elements.inputEl.focus();
   }
 
-  showImagePreview(base64: string, event: MouseEvent): void {
-    const { imagePreviewPopover } = this.elements;
-    const img = imagePreviewPopover.querySelector("img")!;
-    img.src = base64;
-    imagePreviewPopover.style.display = "block";
+  /**
+   * Insert a mention chip at the current cursor position (or autocomplete
+   * trigger position if autocomplete is active).
+   */
+  insertMentionChip(mention: Mention): void {
+    const { win, doc } = this.ctx;
+    const selection = win.getSelection();
+    if (!selection) return;
 
-    const innerWidth = this.win?.innerWidth ?? window.innerWidth;
-    const x = Math.min(
-      event.clientX + 10,
-      innerWidth - imagePreviewPopover.offsetWidth - 20
-    );
-    const y = Math.max(
-      20,
-      event.clientY - imagePreviewPopover.offsetHeight - 10
-    );
-    imagePreviewPopover.style.left = x + "px";
-    imagePreviewPopover.style.top = y + "px";
+    let range: Range;
+    if (this.autocomplete.isActive() && selection.rangeCount > 0) {
+      range = selection.getRangeAt(0);
+      const triggerPos = this.autocomplete.getTriggerPos();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const startNode = range.startContainer instanceof (win as any).Node;
+      const useMockFallback = !startNode;
+      if (!useMockFallback) {
+        const { node, offset } = this.getNodeAtOffset(
+          this.elements.inputEl,
+          triggerPos
+        );
+        range.setStart(node, offset);
+      } else {
+        range.setStart(range.startContainer, triggerPos);
+      }
+      range.deleteContents();
+    } else {
+      this.elements.inputEl.focus();
+      const currentSelection = win.getSelection();
+      if (!currentSelection || currentSelection.rangeCount === 0) {
+        range = doc.createRange();
+        range.selectNodeContents(this.elements.inputEl);
+        range.collapse(false);
+      } else {
+        range = currentSelection.getRangeAt(0);
+      }
+    }
+
+    const chip = this.chipRenderer.renderMentionChip(mention, false);
+    range.insertNode(chip);
+
+    const space = doc.createTextNode(" ");
+    range.setStartAfter(chip);
+    range.insertNode(space);
+
+    const selectionAfter = win.getSelection();
+    if (selectionAfter) {
+      const newRange = doc.createRange();
+      newRange.setStart(space, space.length);
+      newRange.collapse(true);
+      if (typeof selectionAfter.removeAllRanges === "function") {
+        selectionAfter.removeAllRanges();
+        selectionAfter.addRange(newRange);
+      } else if (typeof selectionAfter.collapseToEnd === "function") {
+        selectionAfter.collapseToEnd();
+      }
+    }
+
+    this.elements.inputEl.focus();
+    this.adjustHeight();
+    this.updateInputState();
   }
 
-  hideImagePreview(): void {
-    this.elements.imagePreviewPopover.style.display = "none";
+  /**
+   * Insert a command chip at the current cursor position.
+   */
+  insertCommandChip(command: string, description?: string): void {
+    const { win, doc } = this.ctx;
+    const selection = win.getSelection();
+    if (!selection) return;
+
+    let range: Range;
+    if (this.autocomplete.isActive() && selection.rangeCount > 0) {
+      range = selection.getRangeAt(0);
+      const triggerPos = this.autocomplete.getTriggerPos();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const startNode = range.startContainer instanceof (win as any).Node;
+      const useMockFallback = !startNode;
+      if (!useMockFallback) {
+        const { node, offset } = this.getNodeAtOffset(
+          this.elements.inputEl,
+          triggerPos
+        );
+        range.setStart(node, offset);
+      } else {
+        range.setStart(range.startContainer, triggerPos);
+      }
+      range.deleteContents();
+    } else {
+      this.elements.inputEl.focus();
+      const currentSelection = win.getSelection();
+      if (!currentSelection || currentSelection.rangeCount === 0) {
+        range = doc.createRange();
+        range.selectNodeContents(this.elements.inputEl);
+        range.collapse(false);
+      } else {
+        range = currentSelection.getRangeAt(0);
+      }
+    }
+
+    const chip = this.chipRenderer.renderCommandChip(
+      command,
+      description,
+      false
+    );
+    range.insertNode(chip);
+
+    const space = doc.createTextNode(" ");
+    range.setStartAfter(chip);
+    range.insertNode(space);
+
+    const selectionAfter = win.getSelection();
+    if (selectionAfter) {
+      const newRange = doc.createRange();
+      newRange.setStart(space, space.length);
+      newRange.collapse(true);
+      if (typeof selectionAfter.removeAllRanges === "function") {
+        selectionAfter.removeAllRanges();
+        selectionAfter.addRange(newRange);
+      } else if (typeof selectionAfter.collapseToEnd === "function") {
+        selectionAfter.collapseToEnd();
+      }
+    }
+
+    this.elements.inputEl.focus();
+    this.updateInputState();
+  }
+
+  // -------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------
+
+  private getNodeAtOffset(
+    parent: Node,
+    offset: number
+  ): { node: Node; offset: number } {
+    const walker = this.ctx.doc.createTreeWalker(parent, NodeFilter.SHOW_TEXT);
+    let currentOffset = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const length = node.textContent?.length || 0;
+      if (currentOffset + length >= offset) {
+        return { node, offset: offset - currentOffset };
+      }
+      currentOffset += length;
+    }
+    return { node: parent, offset: 0 };
+  }
+
+  /**
+   * Parse the input element DOM and return structured message data.
+   * Extracts mentions, images, commands, and text from the contenteditable
+   * input surface.
+   */
+  collectMessage(): {
+    text: string;
+    images: string[];
+    mentions: Mention[];
+  } | null {
+    const inputEl = this.elements.inputEl;
+    const mentions: Mention[] = [];
+    const images: string[] = [];
+    let text = "";
+
+    inputEl.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        if (el.classList.contains("mention-chip")) {
+          const type = el.dataset.type as Mention["type"];
+          const dataUrl = el.dataset.dataUrl;
+
+          const mention: Mention = {
+            name: el.dataset.name || "",
+            path: el.dataset.path,
+            type,
+            content: el.dataset.content,
+            dataUrl,
+            range: el.dataset.range
+              ? {
+                  startLine: parseInt(el.dataset.range.split("-")[0], 10),
+                  endLine: parseInt(el.dataset.range.split("-")[1], 10),
+                }
+              : undefined,
+          };
+
+          if (type === "image" && dataUrl) {
+            images.push(dataUrl);
+          }
+
+          const idx = mentions.length;
+          mentions.push(mention);
+          text += `__MENTION_${idx}__`;
+        } else if (el.classList.contains("command-chip")) {
+          text += el.dataset.command || "";
+        } else if (el.tagName === "BR") {
+          text += "\n";
+        } else {
+          text += el.textContent;
+        }
+      }
+    });
+
+    text = text.trim();
+    if (!text && images.length === 0) return null;
+
+    return { text, images, mentions };
   }
 }

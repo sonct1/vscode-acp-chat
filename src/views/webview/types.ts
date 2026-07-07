@@ -89,23 +89,6 @@ export interface ToolCallSummary {
 /** Discriminator for the three kinds of streaming blocks. */
 export type BlockType = "text" | "thought" | "tool";
 
-/**
- * Internal bookkeeping object for a block that is being streamed into the
- * current assistant message.  Tracks the DOM element, accumulated content,
- * and optional tool metadata.
- */
-export interface Block {
-  type: BlockType;
-  element: HTMLElement;
-  contentEl: HTMLElement;
-  content: string;
-  key: string;
-  toolId?: string;
-  kind?: ToolKind;
-  title?: string;
-  status?: string;
-}
-
 // ---------------------------------------------------------------------------
 // Webview persisted state
 // ---------------------------------------------------------------------------

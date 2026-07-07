@@ -1,51 +1,29 @@
+import type { WebviewContext } from "../context";
+import { BlockManager } from "../block/block-manager";
+
 /**
  * Permission dialog widget.
  *
  * Displays a permission request UI either embedded inside a tool block or
- * as a modal overlay.  The user can allow/reject the action once or always.
- */
-
-import type { VsCodeApi, Block } from "../types";
-
-/** Configuration accepted by the {@link PermissionDialog} constructor. */
-export interface PermissionDialogOptions {
-  doc: Document;
-  vscode: VsCodeApi;
-  getIsGenerating: () => boolean;
-  setGenerating: (value: boolean) => void;
-  scrollToBottom: () => void;
-  findToolBlock: (toolCallId: string) => Block | undefined;
-}
-
-/**
- * Manages permission request dialogs in the webview.
+ * as a modal overlay. The user can allow/reject the action once or always.
  *
- * Supports two rendering modes:
- * - **Embedded**: injected into an existing tool block's content area.
- * - **Overlay**: a full-screen modal dialog when no tool block is found.
+ * Refactored to accept a {@link WebviewContext} instead of individual
+ * dependencies.
  */
 export class PermissionDialog {
-  private doc: Document;
-  private vscode: VsCodeApi;
-  private getIsGenerating: () => boolean;
-  private setGenerating: (value: boolean) => void;
-  private scrollToBottom: () => void;
-  private findToolBlock: (toolCallId: string) => Block | undefined;
-
-  constructor(options: PermissionDialogOptions) {
-    this.doc = options.doc;
-    this.vscode = options.vscode;
-    this.getIsGenerating = options.getIsGenerating;
-    this.setGenerating = options.setGenerating;
-    this.scrollToBottom = options.scrollToBottom;
-    this.findToolBlock = options.findToolBlock;
-  }
+  constructor(
+    private ctx: WebviewContext,
+    private getBlockManager: () => BlockManager,
+    private getIsGenerating: () => boolean,
+    private setGenerating: (value: boolean) => void,
+    private scrollToBottom: () => void
+  ) {}
 
   /**
    * Show a permission dialog for the given request.
    *
    * If `toolCallId` matches an existing tool block, the permission UI is
-   * embedded inside that block.  Otherwise a modal overlay is shown.
+   * embedded inside that block. Otherwise a modal overlay is shown.
    */
   show(
     requestId: string,
@@ -54,7 +32,6 @@ export class PermissionDialog {
     toolCallId?: string
   ): void {
     const wasGenerating = this.getIsGenerating();
-    // Always block input while waiting for permission
     this.setGenerating(true);
 
     if (options.length === 0) {
@@ -65,10 +42,9 @@ export class PermissionDialog {
       });
     }
 
-    // Try to find the tool block to embed the permission UI
     let targetContainer: HTMLElement | null = null;
     if (toolCallId) {
-      const block = this.findToolBlock(toolCallId);
+      const block = this.getBlockManager().getToolBlock(toolCallId);
       if (block) {
         targetContainer = block.contentEl;
       }
@@ -98,7 +74,7 @@ export class PermissionDialog {
       ? { outcome: "cancelled" as const }
       : { outcome: "selected" as const, optionId: option.optionId };
 
-    this.vscode.postMessage({
+    this.ctx.vscode.postMessage({
       type: "permissionResponse",
       requestId,
       outcome,
@@ -115,29 +91,30 @@ export class PermissionDialog {
     options: Array<{ optionId: string; kind: string; name: string }>,
     wasGenerating: boolean
   ): void {
-    const wrapper = this.doc.createElement("div");
+    const { doc } = this.ctx;
+    const wrapper = doc.createElement("div");
     wrapper.className = "embedded-permission";
 
-    const header = this.doc.createElement("div");
+    const header = doc.createElement("div");
     header.className = "embedded-permission-header";
     header.innerHTML = `<span class="permission-icon codicon codicon-lock"></span> <span>Permission Required</span>`;
 
-    const body = this.doc.createElement("div");
+    const body = doc.createElement("div");
     body.className = "embedded-permission-body";
 
     if (toolCall.description) {
-      const desc = this.doc.createElement("div");
+      const desc = doc.createElement("div");
       desc.className = "permission-tool-desc";
       desc.style.marginBottom = "8px";
       desc.textContent = toolCall.description;
       body.appendChild(desc);
     }
 
-    const optionsContainer = this.doc.createElement("div");
+    const optionsContainer = doc.createElement("div");
     optionsContainer.className = "embedded-permission-options";
 
     options.forEach((opt) => {
-      const btn = this.doc.createElement("button");
+      const btn = doc.createElement("button");
       const isAllow = !opt.kind.startsWith("reject");
       const isAlways = opt.kind.endsWith("always");
 
@@ -147,13 +124,13 @@ export class PermissionDialog {
           : "embedded-permission-option-reject"
       } ${isAlways ? "embedded-permission-option-always" : ""}`;
 
-      const icon = this.doc.createElement("span");
+      const icon = doc.createElement("span");
       icon.className = "embedded-permission-option-icon";
       icon.innerHTML = isAllow
-        ? `<div class="codicon codicon-check"></div>`
-        : `<div class="codicon codicon-close"></div>`;
+        ? '<div class="codicon codicon-check"></div>'
+        : '<div class="codicon codicon-close"></div>';
 
-      const text = this.doc.createElement("span");
+      const text = doc.createElement("span");
       const label = this.getOptionLabel(opt.kind);
       text.textContent = `${label}: ${opt.name}`;
 
@@ -186,30 +163,31 @@ export class PermissionDialog {
     options: Array<{ optionId: string; kind: string; name: string }>,
     wasGenerating: boolean
   ): void {
-    const overlay = this.doc.createElement("div");
+    const { doc } = this.ctx;
+    const overlay = doc.createElement("div");
     overlay.className = "permission-dialog-overlay";
 
-    const dialog = this.doc.createElement("div");
+    const dialog = doc.createElement("div");
     dialog.className = "permission-dialog";
 
-    const header = this.doc.createElement("div");
+    const header = doc.createElement("div");
     header.className = "permission-dialog-header";
     header.innerHTML = `
       <span class="permission-icon codicon codicon-lock"></span>
       <span>Permission Required</span>
     `;
 
-    const body = this.doc.createElement("div");
+    const body = doc.createElement("div");
     body.className = "permission-dialog-body";
 
-    const info = this.doc.createElement("div");
+    const info = doc.createElement("div");
     info.className = "permission-tool-info";
 
-    const kind = this.doc.createElement("div");
+    const kind = doc.createElement("div");
     kind.className = "permission-tool-kind";
     kind.textContent = toolCall.kind || "Unknown";
 
-    const title = this.doc.createElement("div");
+    const title = doc.createElement("div");
     title.className = "permission-tool-title";
     title.textContent = toolCall.title || "Tool Call";
 
@@ -217,17 +195,17 @@ export class PermissionDialog {
     info.appendChild(title);
 
     if (toolCall.description) {
-      const desc = this.doc.createElement("div");
+      const desc = doc.createElement("div");
       desc.className = "permission-tool-desc";
       desc.textContent = toolCall.description;
       info.appendChild(desc);
     }
 
-    const optionsContainer = this.doc.createElement("div");
+    const optionsContainer = doc.createElement("div");
     optionsContainer.className = "permission-options";
 
     options.forEach((opt) => {
-      const btn = this.doc.createElement("button");
+      const btn = doc.createElement("button");
       btn.className = `permission-option-btn permission-option-${opt.kind}`;
 
       const label = this.getOptionLabel(opt.kind);
@@ -252,7 +230,7 @@ export class PermissionDialog {
     dialog.appendChild(body);
     overlay.appendChild(dialog);
 
-    this.doc.body.appendChild(overlay);
+    doc.body.appendChild(overlay);
   }
 
   private getOptionLabel(kind: string): string {

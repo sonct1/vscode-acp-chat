@@ -4,8 +4,9 @@ import type {
   DropdownOption,
   ExtensionMessage,
   SessionToolbarElements,
-  VsCodeApi,
 } from "../types";
+import type { WebviewContext } from "../context";
+import type { MessageHandler } from "../message-router";
 import { getRequiredElement } from "../widget/dom";
 
 function cssEscapeAttr(value: string): string {
@@ -15,79 +16,76 @@ function cssEscapeAttr(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
-/**
- * Maps ACP `SessionConfigOptionCategory` values to codicon class names used
- * in the dropdown trigger.
- */
 const CATEGORY_ICONS: Record<string, string> = {
   thought_level: "codicon-lightbulb",
 };
 
 /**
  * Owns the session option strip: mode/model pickers, generic ACP config
- * options, and context usage. It translates extension metadata into Dropdown
- * widget state and posts selection changes back through the VS Code bridge.
+ * options, and context usage.
+ *
+ * Implements {@link MessageHandler} to self-register for session metadata
+ * and config update messages.
  */
-export class SessionToolbarComponent {
+export class SessionToolbarComponent implements MessageHandler {
   readonly elements: SessionToolbarElements;
-  private doc: Document;
-  private vscode?: VsCodeApi;
   private modeDropdown?: Dropdown;
   private modelDropdown?: Dropdown;
   private configOptionDropdowns = new Map<string, Dropdown>();
   private starredModels = new Set<string>();
-  private lastModelsMsg: ExtensionMessage["models"] = null;
 
   constructor(
-    doc: Document,
+    private ctx: WebviewContext,
     options?: {
       elements?: SessionToolbarElements;
-      vscode?: VsCodeApi;
     }
   ) {
-    this.doc = doc;
     this.elements = options?.elements ?? {
-      modeDropdown: getRequiredElement(doc, "mode-dropdown"),
-      modelDropdown: getRequiredElement(doc, "model-dropdown"),
+      modeDropdown: getRequiredElement(ctx.doc, "mode-dropdown"),
+      modelDropdown: getRequiredElement(ctx.doc, "model-dropdown"),
       configOptionsContainer: getRequiredElement(
-        doc,
+        ctx.doc,
         "config-options-container"
       ),
       contextUsageRing: getRequiredElement<HTMLDivElement>(
-        doc,
+        ctx.doc,
         "context-usage-ring"
       ),
     };
 
-    if (options?.vscode) {
-      this.attach(options.vscode);
+    this.initDropdowns();
+
+    // Register for session-related messages.
+    // Note: availableCommands is NOT registered here — the controller
+    // forwards it directly to messageList and inputPanel.
+    ctx.messageRouter.registerMany(
+      ["sessionMetadata", "modeUpdate", "modelUpdate", "contextUsage"],
+      this
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // MessageHandler
+  // -------------------------------------------------------------------
+
+  handleMessage(msg: ExtensionMessage): boolean | void {
+    switch (msg.type) {
+      case "sessionMetadata":
+        return this.updateMetadata(msg);
+      case "modeUpdate":
+        if (msg.modeId) this.modeDropdown?.setValue(msg.modeId);
+        return;
+      case "modelUpdate":
+        if (msg.modelId) this.modelDropdown?.setValue(msg.modelId);
+        return;
+      case "contextUsage":
+        return this.updateContextUsage(msg);
     }
   }
 
-  attach(vscode: VsCodeApi): void {
-    if (this.vscode) return;
-    this.vscode = vscode;
-
-    // Dropdown widgets attach document-level click listeners, so initialize
-    // them once even if tests or future lifecycle hooks call attach again.
-    this.modeDropdown = new Dropdown(this.elements.modeDropdown, (id) => {
-      this.vscode?.postMessage({ type: "selectMode", modeId: id });
-    });
-
-    this.modelDropdown = new Dropdown(
-      this.elements.modelDropdown,
-      (id) => {
-        this.vscode?.postMessage({ type: "selectModel", modelId: id });
-      },
-      (id, isStarred) => {
-        this.vscode?.postMessage({
-          type: "toggleModelStar",
-          modelId: id,
-          isStarred,
-        });
-      }
-    );
-  }
+  // -------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------
 
   updateMetadata(msg: ExtensionMessage): void {
     const hasModes =
@@ -118,11 +116,9 @@ export class SessionToolbarComponent {
 
     if (hasModels && msg.models) {
       this.elements.modelDropdown.style.display = "flex";
-      this.lastModelsMsg = msg.models;
       this.updateModelDropdown(msg.models);
     } else {
       this.elements.modelDropdown.style.display = "none";
-      this.lastModelsMsg = null;
     }
 
     this.renderGenericConfigOptions(msg.genericConfigOptions ?? []);
@@ -142,6 +138,30 @@ export class SessionToolbarComponent {
       size: msg.size,
       cost: msg.cost,
     });
+  }
+
+  // -------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------
+
+  private initDropdowns(): void {
+    this.modeDropdown = new Dropdown(this.elements.modeDropdown, (id) => {
+      this.ctx.vscode.postMessage({ type: "selectMode", modeId: id });
+    });
+
+    this.modelDropdown = new Dropdown(
+      this.elements.modelDropdown,
+      (id) => {
+        this.ctx.vscode.postMessage({ type: "selectModel", modelId: id });
+      },
+      (id, isStarred) => {
+        this.ctx.vscode.postMessage({
+          type: "toggleModelStar",
+          modelId: id,
+          isStarred,
+        });
+      }
+    );
   }
 
   private updateModelDropdown(
@@ -186,8 +206,6 @@ export class SessionToolbarComponent {
     const container = this.elements.configOptionsContainer;
     const incomingIds = new Set(options.map((option) => option.id));
 
-    // Remove stale dynamic controls before rendering updates so hidden agent
-    // options cannot keep posting old config IDs.
     for (const id of this.configOptionDropdowns.keys()) {
       if (!incomingIds.has(id)) {
         const element = container.querySelector<HTMLElement>(
@@ -198,8 +216,6 @@ export class SessionToolbarComponent {
       }
     }
 
-    // Reuse wrappers by config id to preserve dropdown instances and their
-    // outside-click listeners across metadata refreshes.
     for (const option of options) {
       const safeId = option.id.replace(/[^a-zA-Z0-9_-]/g, "_");
       let wrapper = container.querySelector<HTMLElement>(
@@ -230,38 +246,39 @@ export class SessionToolbarComponent {
     option: NonNullable<ExtensionMessage["genericConfigOptions"]>[number],
     safeId: string
   ): HTMLElement {
-    const wrapper = this.doc.createElement("div");
+    const { doc } = this.ctx;
+    const wrapper = doc.createElement("div");
     wrapper.className = "custom-dropdown";
     wrapper.setAttribute("data-config-id", option.id);
     wrapper.id = `config-option-${safeId}`;
     wrapper.style.display = "flex";
 
-    const trigger = this.doc.createElement("div");
+    const trigger = doc.createElement("div");
     trigger.className = "dropdown-trigger";
 
     const iconClass = option.category
       ? CATEGORY_ICONS[option.category]
       : undefined;
     if (iconClass) {
-      const icon = this.doc.createElement("span");
+      const icon = doc.createElement("span");
       icon.className = `dropdown-icon codicon ${iconClass}`;
       icon.setAttribute("aria-hidden", "true");
       trigger.appendChild(icon);
     }
 
-    const label = this.doc.createElement("span");
+    const label = doc.createElement("span");
     label.className = "selected-label";
     label.textContent = option.name || option.id;
     trigger.appendChild(label);
 
-    const chevron = this.doc.createElement("span");
+    const chevron = doc.createElement("span");
     chevron.className = "dropdown-chevron";
-    const chevronIcon = this.doc.createElement("span");
+    const chevronIcon = doc.createElement("span");
     chevronIcon.className = "codicon codicon-chevron-down";
     chevron.appendChild(chevronIcon);
     trigger.appendChild(chevron);
 
-    const popover = this.doc.createElement("div");
+    const popover = doc.createElement("div");
     popover.className = "dropdown-popover";
 
     wrapper.appendChild(trigger);
@@ -277,7 +294,7 @@ export class SessionToolbarComponent {
     if (existing) return existing;
 
     const dropdown = new Dropdown(wrapper, (value) => {
-      this.vscode?.postMessage({
+      this.ctx.vscode.postMessage({
         type: "selectConfigOption",
         configId,
         value,

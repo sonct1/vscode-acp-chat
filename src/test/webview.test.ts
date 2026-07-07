@@ -9,7 +9,11 @@ import {
   initWebview,
 } from "../views/webview/main";
 import { renderDiff } from "../views/webview/widget/diff-render";
-import type { VsCodeApi, WebviewElements } from "../views/webview/types";
+import type {
+  VsCodeApi,
+  WebviewElements,
+  Mention,
+} from "../views/webview/types";
 import { ansiToHtml, hasAnsiCodes } from "../views/webview/ansi-render";
 import { escapeHtml } from "../views/webview/html-utils";
 import {
@@ -643,34 +647,34 @@ suite("Webview", () => {
 
     suite("addMessage", () => {
       test("adds user message to DOM", () => {
-        controller.addMessage("Hello!", "user");
+        controller.messageList.addMessage("Hello!", "user");
         const msgs = elements.messagesEl.querySelectorAll(".message.user");
         assert.strictEqual(msgs.length, 1);
         assert.strictEqual(msgs[0].textContent, "Hello!");
       });
 
       test("adds assistant message to DOM", () => {
-        controller.addMessage("Hi there!", "assistant");
+        controller.messageList.addMessage("Hi there!", "assistant");
         const msgs = elements.messagesEl.querySelectorAll(".message.assistant");
         assert.strictEqual(msgs.length, 1);
         assert.strictEqual(msgs[0].textContent, "Hi there!");
       });
 
       test("adds error message to DOM", () => {
-        controller.addMessage("Error occurred", "error");
+        controller.messageList.addMessage("Error occurred", "error");
         const msgs = elements.messagesEl.querySelectorAll(".message.error");
         assert.strictEqual(msgs.length, 1);
       });
 
       test("sets accessibility attributes", () => {
-        const msg = controller.addMessage("Test", "user");
+        const msg = controller.messageList.addMessage("Test", "user");
         assert.strictEqual(msg.getAttribute("role"), "article");
         assert.strictEqual(msg.getAttribute("tabindex"), "0");
         assert.strictEqual(msg.getAttribute("aria-label"), "Your message");
       });
 
       test("returns the created element", () => {
-        const msg = controller.addMessage("Test", "user");
+        const msg = controller.messageList.addMessage("Test", "user");
         assert.ok(msg instanceof dom.window.HTMLElement);
         assert.strictEqual(msg.textContent, "Test");
       });
@@ -678,7 +682,10 @@ suite("Webview", () => {
 
     suite("updateStatus", () => {
       test("saves state after update", () => {
-        controller.updateStatus("connected");
+        controller.handleMessage({
+          type: "connectionState",
+          state: "connected",
+        });
         const state = mockVsCode.getState<{ isConnected: boolean }>();
         assert.strictEqual(state?.isConnected, true);
       });
@@ -686,15 +693,24 @@ suite("Webview", () => {
 
     suite("showThinking/hideThinking", () => {
       test("showThinking adds thinking element", () => {
-        controller.showThinking();
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
         const thinking = elements.messagesEl.querySelector(".agent-thought");
         assert.ok(thinking);
         assert.strictEqual(thinking?.getAttribute("open"), "");
       });
 
       test("hideThinking closes thinking element", () => {
-        controller.showThinking();
-        controller.hideThinking();
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        const block = controller.messageList.getBlockManager().getActiveBlock();
+        if (block && block.blockType === "thought") {
+          controller.messageList.getBlockManager().finalizeBlock(block);
+        }
         const thinking = elements.messagesEl.querySelector(".agent-thought");
         assert.strictEqual(thinking?.getAttribute("open"), null);
       });
@@ -964,7 +980,7 @@ suite("Webview", () => {
           commands: [{ name: "help", description: "Show help" }],
         });
 
-        controller.addMessage("Test", "user");
+        controller.messageList.addMessage("Test", "user");
         controller.handleMessage({ type: "chatCleared" });
 
         // Messages should be cleared
@@ -972,7 +988,8 @@ suite("Webview", () => {
         // Mode dropdown should still be visible
         assert.strictEqual(elements.modeDropdown.style.display, "flex");
         // Commands should still be available
-        const result = controller.getFilteredCommands("/");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 1);
       });
 
@@ -1643,7 +1660,7 @@ suite("Webview", () => {
         elements.messagesEl.dispatchEvent(new window.Event("scroll"));
 
         scrollHeight = 2400;
-        controller.addMessage("Next question", "user");
+        controller.messageList.addMessage("Next question", "user");
         runAllFrames();
 
         assert.strictEqual(scrollTop, 2400);
@@ -2086,7 +2103,7 @@ suite("Webview", () => {
         mockVsCode._clearMessages();
 
         // Simulate a command chip followed by text
-        const commandChip = (controller as any).renderCommandChip(
+        const commandChip = controller.chipRenderer.renderCommandChip(
           "/explain",
           "Explain this"
         );
@@ -2123,17 +2140,24 @@ suite("Webview", () => {
 
     suite("paste handling", () => {
       /**
-       * Helper that calls the public onPaste method with a mock event object.
+       * Helper that calls the inputPanel.handlePaste method with a mock event object.
        * The mock clipboardData matches the shape the handler expects.
        */
       function simulatePaste(clipboardData: {
         items: Array<{ type: string; getAsFile?: () => File | null }>;
         getData: (type: string) => string;
       }): void {
-        controller.onPaste({
-          clipboardData,
-          preventDefault: () => {},
-        });
+        controller.inputPanel.handlePaste(
+          {
+            clipboardData,
+            preventDefault: () => {},
+          },
+          (file) =>
+            controller.inputPanel.handleImageAttachment(file, (mention) =>
+              controller.inputPanel.insertMentionChip(mention)
+            )
+        );
+        controller.inputPanel.updateInputState();
       }
 
       test("paste plain text inserts text content only", () => {
@@ -2229,13 +2253,14 @@ suite("Webview", () => {
         });
 
         // Spy on insertMentionChip to detect image handling
-        const originalInsertMentionChip = (controller as any).insertMentionChip;
+        const originalInsertMentionChip =
+          controller.inputPanel.insertMentionChip.bind(controller.inputPanel);
         let imageInserted = false;
-        (controller as any).insertMentionChip = function (mention: any) {
+        controller.inputPanel.insertMentionChip = function (mention: Mention) {
           if (mention.type === "image") {
             imageInserted = true;
           }
-          return originalInsertMentionChip.call(this, mention);
+          return originalInsertMentionChip(mention);
         };
 
         simulatePaste({
@@ -2244,7 +2269,7 @@ suite("Webview", () => {
         });
 
         // Restore original method
-        (controller as any).insertMentionChip = originalInsertMentionChip;
+        controller.inputPanel.insertMentionChip = originalInsertMentionChip;
 
         assert.strictEqual(
           imageInserted,
@@ -2289,7 +2314,8 @@ suite("Webview", () => {
       ];
 
       test("getFilteredCommands returns empty for non-slash input", () => {
-        const result = controller.getFilteredCommands("hello");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("hello");
         assert.deepStrictEqual(result, []);
       });
 
@@ -2298,7 +2324,8 @@ suite("Webview", () => {
           type: "availableCommands",
           commands: testCommands,
         });
-        const result = controller.getFilteredCommands("/");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 3);
       });
 
@@ -2307,7 +2334,8 @@ suite("Webview", () => {
           type: "availableCommands",
           commands: testCommands,
         });
-        const result = controller.getFilteredCommands("/he");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/he");
         assert.strictEqual(result.length, 1);
         assert.ok(result.some((c) => c.name === "help"));
       });
@@ -2317,7 +2345,8 @@ suite("Webview", () => {
           type: "availableCommands",
           commands: testCommands,
         });
-        const result = controller.getFilteredCommands("/chat");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/chat");
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].name, "clear");
       });
@@ -2333,13 +2362,16 @@ suite("Webview", () => {
           '<div class="command-item"></div>';
         elements.commandAutocomplete.classList.add("visible");
 
-        controller.hideAutocomplete();
+        controller.inputPanel.autocomplete.hide();
         assert.ok(!elements.commandAutocomplete.classList.contains("visible"));
         assert.strictEqual(elements.commandAutocomplete.innerHTML, "");
       });
 
       test("command autocomplete items render without command icon", () => {
-        const html = (controller as any).renderCommandItem(testCommands[0], 0);
+        const html = controller.inputPanel.autocomplete.renderCommandItem(
+          testCommands[0],
+          0
+        );
         const wrapper = document.createElement("div");
         wrapper.innerHTML = html;
         const item = wrapper.querySelector(".command-item");
@@ -2404,7 +2436,8 @@ suite("Webview", () => {
           type: "availableCommands",
           commands: testCommands,
         });
-        const result = controller.getFilteredCommands("/");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 3);
       });
 
@@ -2415,7 +2448,8 @@ suite("Webview", () => {
           modes: null,
           models: null,
         });
-        const result = controller.getFilteredCommands("/");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 3);
       });
 
@@ -2425,7 +2459,8 @@ suite("Webview", () => {
           commands: testCommands,
         });
         controller.handleMessage({ type: "chatCleared" });
-        const result = controller.getFilteredCommands("/");
+        const result =
+          controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 3);
       });
 
@@ -2498,27 +2533,27 @@ suite("Webview", () => {
       };
 
       test("showPlan creates plan element", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const planEl =
           elements.planContainer.querySelector(".agent-plan-sticky");
         assert.ok(planEl);
       });
 
       test("showPlan displays all entries", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const entries = elements.planContainer.querySelectorAll(".plan-entry");
         assert.strictEqual(entries.length, 3);
       });
 
       test("showPlan shows progress count", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const progress = elements.planContainer.querySelector(".plan-counter");
         assert.ok(progress);
         assert.strictEqual(progress?.textContent, "1/3");
       });
 
       test("showPlan applies status classes", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const completed = elements.planContainer.querySelector(
           ".plan-entry-completed"
         );
@@ -2534,7 +2569,7 @@ suite("Webview", () => {
       });
 
       test("showPlan applies priority classes", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const high = elements.planContainer.querySelector(
           ".plan-priority-high"
         );
@@ -2548,14 +2583,14 @@ suite("Webview", () => {
       });
 
       test("showPlan is collapsed by default", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const planEntries =
           elements.planContainer.querySelector(".plan-entries");
         assert.ok(planEntries?.classList.contains("collapsed"));
       });
 
       test("showPlan header is clickable", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         const header = elements.planContainer.querySelector(".plan-header");
         assert.ok(header);
         // Verify it has the collapsed state initially
@@ -2564,7 +2599,7 @@ suite("Webview", () => {
       });
 
       test("plan header click toggles expand/collapse", () => {
-        controller.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
         let header = elements.planContainer.querySelector(
           ".plan-header"
         ) as HTMLElement;
@@ -2586,8 +2621,8 @@ suite("Webview", () => {
       });
 
       test("hidePlan removes plan element", () => {
-        controller.showPlan(testPlan.entries);
-        controller.hidePlan();
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.hidePlan();
         const planEl =
           elements.planContainer.querySelector(".agent-plan-sticky");
         assert.strictEqual(planEl, null);
@@ -2620,8 +2655,8 @@ suite("Webview", () => {
       });
 
       test("showPlan with empty entries hides plan", () => {
-        controller.showPlan(testPlan.entries);
-        controller.showPlan([]);
+        controller.auxiliaryPanels.showPlan(testPlan.entries);
+        controller.auxiliaryPanels.showPlan([]);
         const planEl =
           elements.planContainer.querySelector(".agent-plan-sticky");
         assert.strictEqual(planEl, null);
@@ -2843,7 +2878,11 @@ suite("Webview", () => {
       });
 
       test("appendThought creates details element", () => {
-        controller.appendThought("Thinking about this...");
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Thinking about this...");
         const thoughtEl = elements.messagesEl.querySelector(
           "details.agent-thought"
         );
@@ -2852,7 +2891,11 @@ suite("Webview", () => {
       });
 
       test("appendThought includes ARIA accessibility attributes", () => {
-        controller.appendThought("Thinking...");
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Thinking...");
         const thoughtEl = elements.messagesEl.querySelector(
           "details.agent-thought"
         );
@@ -2866,15 +2909,29 @@ suite("Webview", () => {
       });
 
       test("hideThought closes thought element", () => {
-        controller.appendThought("Some thought");
-        controller.hideThought();
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Some thought");
+        const activeBlock = controller.messageList
+          .getBlockManager()
+          .getActiveBlock();
+        if (activeBlock && activeBlock.blockType === "thought") {
+          controller.messageList.getBlockManager().finalizeBlock(activeBlock);
+          controller.messageList.getBlockManager().clearActiveBlock();
+        }
         const thoughtEl = elements.messagesEl.querySelector(".agent-thought");
         assert.ok(thoughtEl);
         assert.strictEqual(thoughtEl?.getAttribute("open"), null);
       });
 
       test("streamStart starts new assistant message", () => {
-        controller.appendThought("Old thought");
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Old thought");
         controller.handleMessage({ type: "streamStart" });
         // Old thought stays in previous message
         const thoughtEl = elements.messagesEl.querySelector(".agent-thought");
@@ -2882,7 +2939,11 @@ suite("Webview", () => {
       });
 
       test("streamEnd finalizes thought", () => {
-        controller.appendThought("Thinking...");
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Thinking...");
         controller.handleMessage({ type: "streamEnd" });
         const thoughtEl = elements.messagesEl.querySelector(".agent-thought");
         assert.ok(thoughtEl);
@@ -2890,7 +2951,11 @@ suite("Webview", () => {
       });
 
       test("chatCleared removes thought", () => {
-        controller.appendThought("Some thought");
+        const parentEl = controller.messageList.ensureAssistantMessage();
+        const block = controller.messageList
+          .getBlockManager()
+          .ensureBlock("thought", parentEl, elements.typingIndicatorEl);
+        block.appendContent("Some thought");
         controller.handleMessage({ type: "chatCleared" });
         const thoughtEl = elements.messagesEl.querySelector(".agent-thought");
         assert.strictEqual(thoughtEl, null);

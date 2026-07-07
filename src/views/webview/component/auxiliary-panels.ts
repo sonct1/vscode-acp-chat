@@ -1,38 +1,39 @@
 import { DiffSummary } from "../widget/diff-summary";
 import { PlanView } from "../widget/plan-view";
-import type { AuxiliaryPanelElements, PlanEntry, VsCodeApi } from "../types";
+import type {
+  AuxiliaryPanelElements,
+  ExtensionMessage,
+  PlanEntry,
+} from "../types";
+import type { WebviewContext } from "../context";
+import type { MessageHandler } from "../message-router";
 import { getRequiredElement } from "../widget/dom";
 
 /**
- * Groups side-channel panels that sit outside the message stream but are still
- * part of the chat session state. The concrete widgets remain isolated here so
- * the controller can treat plan and diff summary updates uniformly.
+ * Groups side-channel panels (plan, diff summary) that sit outside the
+ * message stream but are still part of the chat session state.
+ *
+ * Implements {@link MessageHandler} to self-register for plan and
+ * diffSummary messages.
  */
-export class AuxiliaryPanelsComponent {
+export class AuxiliaryPanelsComponent implements MessageHandler {
   readonly elements: AuxiliaryPanelElements;
   private planView?: PlanView;
   private diffSummary?: DiffSummary;
 
   constructor(
-    doc: Document,
+    private ctx: WebviewContext,
     options?: {
       elements?: AuxiliaryPanelElements;
-      vscode?: VsCodeApi;
-      onSaveState?: () => void;
     }
   ) {
     this.elements = options?.elements ?? {
-      planContainer: getRequiredElement(doc, "agent-plan-container"),
-      diffSummaryContainer: getRequiredElement(doc, "diff-summary-container"),
+      planContainer: getRequiredElement(ctx.doc, "agent-plan-container"),
+      diffSummaryContainer: getRequiredElement(
+        ctx.doc,
+        "diff-summary-container"
+      ),
     };
-
-    if (options?.vscode) {
-      this.attach(options.vscode, options.onSaveState);
-    }
-  }
-
-  attach(vscode: VsCodeApi, onSaveState?: () => void): void {
-    if (this.planView || this.diffSummary) return;
 
     this.planView = new PlanView({
       container: this.elements.planContainer,
@@ -40,11 +41,43 @@ export class AuxiliaryPanelsComponent {
 
     this.diffSummary = new DiffSummary({
       container: this.elements.diffSummaryContainer,
-      vscode,
-      // In tests this component may be constructed without persistence hooks.
-      onSaveState: onSaveState ?? (() => {}),
+      vscode: ctx.vscode,
+      onSaveState: () => ctx.stateService.flush(),
     });
+
+    // Register for plan and diff messages.
+    ctx.messageRouter.registerMany(
+      ["plan", "planComplete", "diffSummary"],
+      this
+    );
   }
+
+  // -------------------------------------------------------------------
+  // MessageHandler
+  // -------------------------------------------------------------------
+
+  handleMessage(msg: ExtensionMessage): boolean | void {
+    switch (msg.type) {
+      case "plan":
+        if (msg.plan && msg.plan.entries) {
+          this.showPlan(msg.plan.entries);
+        }
+        return;
+      case "planComplete":
+        this.hidePlan();
+        return;
+      case "diffSummary":
+        if (msg.changes) {
+          this.setDiffChanges(msg.changes);
+          this.ctx.stateService.flush();
+        }
+        return;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------
 
   showPlan(entries: PlanEntry[]): void {
     this.planView?.show(entries);

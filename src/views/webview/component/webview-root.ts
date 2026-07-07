@@ -1,26 +1,36 @@
+import type { WebviewContext } from "../context";
 import type { WebviewElements } from "../types";
 import { AuxiliaryPanelsComponent } from "./auxiliary-panels";
 import { InputPanelComponent } from "./input-panel";
 import { MessageListComponent } from "./message-list";
+import { ChipRendererComponent } from "./chip-renderer";
 
 /**
  * Top-level DOM composition for the webview. It builds component-owned element
  * groups first, then exposes the legacy flat aliases that existing controller
  * code and tests still consume during the incremental migration.
+ *
+ * Refactored to accept a {@link WebviewContext} instead of a raw Document.
  */
 export class WebviewRootComponent {
   readonly messageList: MessageListComponent;
   readonly inputPanel: InputPanelComponent;
   readonly auxiliaryPanels: AuxiliaryPanelsComponent;
+  readonly chipRenderer: ChipRendererComponent;
   readonly elements: WebviewElements;
 
-  constructor(doc: Document) {
-    this.messageList = new MessageListComponent(doc);
-    this.inputPanel = new InputPanelComponent(doc);
-    this.auxiliaryPanels = new AuxiliaryPanelsComponent(doc);
+  constructor(ctx: WebviewContext) {
+    this.chipRenderer = new ChipRendererComponent(ctx);
+    this.messageList = new MessageListComponent(ctx, {
+      chipRenderer: this.chipRenderer,
+    });
+    this.inputPanel = new InputPanelComponent(ctx, {
+      chipRenderer: this.chipRenderer,
+    });
+    this.auxiliaryPanels = new AuxiliaryPanelsComponent(ctx);
 
-    // Keep this alias map explicit so future migrations can remove flat fields
-    // one component at a time without changing DOM lookup behavior.
+    // Keep this alias map so existing code can consume flat fields while
+    // the migration to component-owned elements proceeds.
     const messageList = this.messageList.elements;
     const inputPanel = this.inputPanel.elements;
     const sessionToolbar = inputPanel.toolbar;
@@ -52,6 +62,6 @@ export class WebviewRootComponent {
   }
 }
 
-export function createWebviewRoot(doc: Document): WebviewElements {
-  return new WebviewRootComponent(doc).elements;
+export function createWebviewRoot(ctx: WebviewContext): WebviewElements {
+  return new WebviewRootComponent(ctx).elements;
 }
