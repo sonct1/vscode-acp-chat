@@ -261,60 +261,9 @@ export class InputPanelComponent implements MessageHandler {
    * trigger position if autocomplete is active).
    */
   insertMentionChip(mention: Mention): void {
-    const { win, doc } = this.ctx;
-    const selection = win.getSelection();
-    if (!selection) return;
-
-    let range: Range;
-    if (this.autocomplete.isActive() && selection.rangeCount > 0) {
-      range = selection.getRangeAt(0);
-      const triggerPos = this.autocomplete.getTriggerPos();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const startNode = range.startContainer instanceof (win as any).Node;
-      const useMockFallback = !startNode;
-      if (!useMockFallback) {
-        const { node, offset } = this.getNodeAtOffset(
-          this.elements.inputEl,
-          triggerPos
-        );
-        range.setStart(node, offset);
-      } else {
-        range.setStart(range.startContainer, triggerPos);
-      }
-      range.deleteContents();
-    } else {
-      this.elements.inputEl.focus();
-      const currentSelection = win.getSelection();
-      if (!currentSelection || currentSelection.rangeCount === 0) {
-        range = doc.createRange();
-        range.selectNodeContents(this.elements.inputEl);
-        range.collapse(false);
-      } else {
-        range = currentSelection.getRangeAt(0);
-      }
-    }
-
     const chip = this.chipRenderer.renderMentionChip(mention, false);
-    range.insertNode(chip);
+    if (!this.insertChipElement(chip)) return;
 
-    const space = doc.createTextNode(" ");
-    range.setStartAfter(chip);
-    range.insertNode(space);
-
-    const selectionAfter = win.getSelection();
-    if (selectionAfter) {
-      const newRange = doc.createRange();
-      newRange.setStart(space, space.length);
-      newRange.collapse(true);
-      if (typeof selectionAfter.removeAllRanges === "function") {
-        selectionAfter.removeAllRanges();
-        selectionAfter.addRange(newRange);
-      } else if (typeof selectionAfter.collapseToEnd === "function") {
-        selectionAfter.collapseToEnd();
-      }
-    }
-
-    this.elements.inputEl.focus();
     this.adjustHeight();
     this.updateInputState();
   }
@@ -323,64 +272,13 @@ export class InputPanelComponent implements MessageHandler {
    * Insert a command chip at the current cursor position.
    */
   insertCommandChip(command: string, description?: string): void {
-    const { win, doc } = this.ctx;
-    const selection = win.getSelection();
-    if (!selection) return;
-
-    let range: Range;
-    if (this.autocomplete.isActive() && selection.rangeCount > 0) {
-      range = selection.getRangeAt(0);
-      const triggerPos = this.autocomplete.getTriggerPos();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const startNode = range.startContainer instanceof (win as any).Node;
-      const useMockFallback = !startNode;
-      if (!useMockFallback) {
-        const { node, offset } = this.getNodeAtOffset(
-          this.elements.inputEl,
-          triggerPos
-        );
-        range.setStart(node, offset);
-      } else {
-        range.setStart(range.startContainer, triggerPos);
-      }
-      range.deleteContents();
-    } else {
-      this.elements.inputEl.focus();
-      const currentSelection = win.getSelection();
-      if (!currentSelection || currentSelection.rangeCount === 0) {
-        range = doc.createRange();
-        range.selectNodeContents(this.elements.inputEl);
-        range.collapse(false);
-      } else {
-        range = currentSelection.getRangeAt(0);
-      }
-    }
-
     const chip = this.chipRenderer.renderCommandChip(
       command,
       description,
       false
     );
-    range.insertNode(chip);
+    if (!this.insertChipElement(chip)) return;
 
-    const space = doc.createTextNode(" ");
-    range.setStartAfter(chip);
-    range.insertNode(space);
-
-    const selectionAfter = win.getSelection();
-    if (selectionAfter) {
-      const newRange = doc.createRange();
-      newRange.setStart(space, space.length);
-      newRange.collapse(true);
-      if (typeof selectionAfter.removeAllRanges === "function") {
-        selectionAfter.removeAllRanges();
-        selectionAfter.addRange(newRange);
-      } else if (typeof selectionAfter.collapseToEnd === "function") {
-        selectionAfter.collapseToEnd();
-      }
-    }
-
-    this.elements.inputEl.focus();
     this.updateInputState();
   }
 
@@ -403,6 +301,83 @@ export class InputPanelComponent implements MessageHandler {
       currentOffset += length;
     }
     return { node: parent, offset: 0 };
+  }
+
+  private insertChipElement(chip: HTMLElement): boolean {
+    const { win, doc } = this.ctx;
+    const replacementTriggerPos =
+      this.autocomplete.consumeReplacementTriggerPos();
+    const selection = win.getSelection();
+    if (!selection) return false;
+
+    const range = this.getChipInsertionRange(selection, replacementTriggerPos);
+    range.insertNode(chip);
+
+    const space = doc.createTextNode(" ");
+    range.setStartAfter(chip);
+    range.insertNode(space);
+
+    const selectionAfter = win.getSelection();
+    if (selectionAfter) {
+      const newRange = doc.createRange();
+      newRange.setStart(space, space.length);
+      newRange.collapse(true);
+      if (typeof selectionAfter.removeAllRanges === "function") {
+        selectionAfter.removeAllRanges();
+        selectionAfter.addRange(newRange);
+      } else if (typeof selectionAfter.collapseToEnd === "function") {
+        selectionAfter.collapseToEnd();
+      }
+    }
+
+    this.elements.inputEl.focus();
+    return true;
+  }
+
+  private getChipInsertionRange(
+    selection: Selection,
+    replacementTriggerPos: number
+  ): Range {
+    const { win, doc } = this.ctx;
+    const autocompleteTriggerPos =
+      replacementTriggerPos >= 0
+        ? replacementTriggerPos
+        : this.autocomplete.isActive()
+          ? this.autocomplete.getTriggerPos()
+          : -1;
+
+    if (autocompleteTriggerPos >= 0 && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      this.deleteAutocompleteQuery(range, autocompleteTriggerPos);
+      return range;
+    }
+
+    this.elements.inputEl.focus();
+    const currentSelection = win.getSelection();
+    if (!currentSelection || currentSelection.rangeCount === 0) {
+      const range = doc.createRange();
+      range.selectNodeContents(this.elements.inputEl);
+      range.collapse(false);
+      return range;
+    }
+
+    return currentSelection.getRangeAt(0);
+  }
+
+  private deleteAutocompleteQuery(range: Range, triggerPos: number): void {
+    const { win } = this.ctx;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const startNode = range.startContainer instanceof (win as any).Node;
+    if (startNode) {
+      const { node, offset } = this.getNodeAtOffset(
+        this.elements.inputEl,
+        triggerPos
+      );
+      range.setStart(node, offset);
+    } else {
+      range.setStart(range.startContainer, triggerPos);
+    }
+    range.deleteContents();
   }
 
   /**

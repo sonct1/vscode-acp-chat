@@ -22,6 +22,7 @@ interface FileResult {
 export class AutocompleteComponent implements MessageHandler {
   private mode: "none" | "command" | "file" = "none";
   private triggerPos = -1;
+  private pendingReplacementTriggerPos = -1;
   private selectedIndex = -1;
   private fileResults: FileResult[] = [];
   private availableCommands: AvailableCommand[] = [];
@@ -191,7 +192,11 @@ export class AutocompleteComponent implements MessageHandler {
       }
     }
 
-    this.hide();
+    if (result !== null) {
+      this.pendingReplacementTriggerPos = this.triggerPos;
+    }
+
+    this.hideInternal(result !== null);
     return result;
   }
 
@@ -206,11 +211,25 @@ export class AutocompleteComponent implements MessageHandler {
 
   /** Hide the autocomplete popover and reset state. */
   hide(): void {
+    this.hideInternal(false);
+  }
+
+  /** Return and clear the trigger position for the most recent selection. */
+  consumeReplacementTriggerPos(): number {
+    const triggerPos = this.pendingReplacementTriggerPos;
+    this.pendingReplacementTriggerPos = -1;
+    return triggerPos;
+  }
+
+  private hideInternal(preservePendingReplacement: boolean): void {
     const { commandAutocomplete, inputEl } = this.elements;
     commandAutocomplete.classList.remove("visible");
     commandAutocomplete.innerHTML = "";
     this.selectedIndex = -1;
     this.mode = "none";
+    if (!preservePendingReplacement) {
+      this.pendingReplacementTriggerPos = -1;
+    }
     inputEl.setAttribute("aria-expanded", "false");
   }
 

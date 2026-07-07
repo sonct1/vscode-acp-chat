@@ -127,6 +127,7 @@ suite("Webview", () => {
     const mockVsCode = createMockVsCodeApi();
     const elements = getElements(doc);
     (global as any).Node = window.Node;
+    (global as any).NodeFilter = window.NodeFilter;
     const controller = new WebviewController(
       mockVsCode,
       elements,
@@ -576,6 +577,7 @@ suite("Webview", () => {
       mockVsCode = createMockVsCodeApi();
       elements = getElements(document);
       (global as any).Node = window.Node;
+      (global as any).NodeFilter = window.NodeFilter;
 
       // Polyfill DataTransfer and ClipboardEvent for JSDOM clipboard testing
       if (!(window as any).DataTransfer) {
@@ -2583,6 +2585,67 @@ suite("Webview", () => {
         assert.ok(
           elements.commandAutocomplete.querySelector(".command-item.selected")
         );
+      });
+    });
+
+    suite("file autocomplete", () => {
+      test("replaces the @ query with the selected file chip", () => {
+        mockVsCode._clearMessages();
+
+        const queryNode = document.createTextNode("@auto");
+        elements.inputEl.appendChild(queryNode);
+
+        const range = document.createRange();
+        range.setStart(queryNode, queryNode.length);
+        range.collapse(true);
+
+        const selection = window.getSelection();
+        assert.ok(selection);
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        elements.inputEl.dispatchEvent(new window.Event("input"));
+
+        assert.deepStrictEqual(mockVsCode._getMessages(), [
+          { type: "searchFiles", text: "auto" },
+        ]);
+
+        controller.handleMessage({
+          type: "fileSearchResults",
+          results: [
+            {
+              name: "autocomplete.ts",
+              path: "src/views/webview/component/autocomplete.ts",
+              dir: "src/views/webview/component",
+              type: "file",
+              fsPath: "/repo/src/views/webview/component/autocomplete.ts",
+            },
+          ],
+        });
+
+        assert.ok(
+          elements.commandAutocomplete.classList.contains("visible"),
+          "file autocomplete should be visible"
+        );
+
+        elements.inputEl.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+
+        const chip = elements.inputEl.querySelector(
+          ".mention-chip"
+        ) as HTMLElement | null;
+        assert.ok(chip, "selected file should be inserted as a chip");
+        assert.strictEqual(chip.dataset.name, "autocomplete.ts");
+        assert.strictEqual(
+          chip.dataset.path,
+          "/repo/src/views/webview/component/autocomplete.ts"
+        );
+        assert.strictEqual(elements.inputEl.textContent, "autocomplete.ts ");
       });
     });
 
