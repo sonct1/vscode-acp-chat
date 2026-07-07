@@ -3,13 +3,14 @@ import { renderToolSummary, renderToolDetails } from "./tool-render";
 import { escapeHtml } from "./html-utils";
 import { AsyncSerialQueue } from "../../utils/async-queue";
 import { getFileIconHtml, getFolderIconHtml } from "./file-icon";
-import { Dropdown } from "./widget/dropdown";
 import { TooltipManager } from "./widget/tooltip";
 import { showConfirmDialog } from "./widget/confirm-dialog";
-import { updateContextUsageRing } from "./widget/context-usage";
 import { PermissionDialog } from "./widget/permission-dialog";
-import { DiffSummary } from "./widget/diff-summary";
-import { PlanView } from "./widget/plan-view";
+import { AuxiliaryPanelsComponent } from "./component/auxiliary-panels";
+import { InputPanelComponent } from "./component/input-panel";
+import { MessageListComponent } from "./component/message-list";
+import { SessionToolbarComponent } from "./component/session-toolbar";
+import { createWebviewRoot } from "./component/webview-root";
 import type {
   VsCodeApi,
   Tool,
@@ -20,31 +21,10 @@ import type {
   PlanEntry,
   ExtensionMessage,
   Mention,
-  DropdownOption,
   WebviewElements,
-  UserScrollDirection,
 } from "./types";
 
 declare function acquireVsCodeApi(): VsCodeApi;
-
-const BOTTOM_THRESHOLD_PX = 100;
-const AUTO_SCROLL_SETTLE_FRAMES = 3;
-
-function cssEscapeAttr(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
-}
-
-/**
- * Maps ACP `SessionConfigOptionCategory` values to codicon class names used
- * in the dropdown trigger. Categories not listed here render without an
- * icon. Add new entries here when agents advertise new semantic categories.
- */
-const CATEGORY_ICONS: Record<string, string> = {
-  thought_level: "codicon-lightbulb",
-};
 
 export function updateSelectLabel(select: HTMLSelectElement): void {
   Array.from(select.options).forEach((opt) => {
@@ -53,28 +33,13 @@ export function updateSelectLabel(select: HTMLSelectElement): void {
 }
 
 export function getElements(doc: Document): WebviewElements {
-  return {
-    messagesContainerEl: doc.getElementById("messages-container")!,
-    messagesEl: doc.getElementById("messages")!,
-    inputEl: doc.getElementById("input")!,
-    attachImageBtn: doc.getElementById("attach-image") as HTMLButtonElement,
-    imagePreviewPopover: doc.getElementById("image-preview-popover")!,
-    sendBtn: doc.getElementById("send") as HTMLButtonElement,
-    stopBtn: doc.getElementById("stop") as HTMLButtonElement,
-    modeDropdown: doc.getElementById("mode-dropdown")!,
-    modelDropdown: doc.getElementById("model-dropdown")!,
-    configOptionsContainer: doc.getElementById("config-options-container")!,
-    contextUsageRing: doc.getElementById(
-      "context-usage-ring"
-    ) as HTMLDivElement,
-    welcomeView: doc.getElementById("welcome-view")!,
-    commandAutocomplete: doc.getElementById("command-autocomplete")!,
-    planContainer: doc.getElementById("agent-plan-container")!,
-    typingIndicatorEl: doc.getElementById("typing-indicator")!,
-    diffSummaryContainer: doc.getElementById("diff-summary-container")!,
-  };
+  return createWebviewRoot(doc);
 }
 
+/**
+ * Coordinates ACP messages and streaming block state, while component classes
+ * own DOM behavior for the message list, input panel, toolbar, and side panels.
+ */
 export class WebviewController {
   private vscode: VsCodeApi;
   private elements: WebviewElements;
@@ -98,26 +63,13 @@ export class WebviewController {
   private autocompleteMode: "none" | "command" | "file" = "none";
   private autocompleteTriggerPos = -1;
 
-  private modeDropdown: Dropdown;
-  private modelDropdown: Dropdown;
-  private configOptionDropdowns = new Map<string, Dropdown>();
+  private messageList: MessageListComponent;
+  private inputPanel: InputPanelComponent;
+  private sessionToolbar: SessionToolbarComponent;
+  private auxiliaryPanels: AuxiliaryPanelsComponent;
   private isGenerating = false;
   private hoveredImageChip: HTMLElement | null = null;
-  private starredModels = new Set<string>();
-  private lastModelsMsg: ExtensionMessage["models"] = null;
   private permissionDialog: PermissionDialog;
-  private diffSummary: DiffSummary;
-  private planView: PlanView;
-  private isAutoScrollEnabled = true;
-  private pendingBottomScrollFrame: number | null = null;
-  private pendingBottomScrollForce = false;
-  private bottomScrollSettleFrames = 0;
-  private pendingPaintFrame: number | null = null;
-  private paintBump = false;
-  private userScrollIntent = false;
-  private pointerScrollActive = false;
-  private touchScrollActive = false;
-  private userScrollDirection: UserScrollDirection = "none";
   // Serializes messages from the extension host so they are processed
   // one-at-a-time in arrival order, preventing DOM update races when
   // multiple messages arrive in quick succession.
@@ -134,24 +86,26 @@ export class WebviewController {
     this.doc = doc;
     this.win = win;
 
-    this.modeDropdown = new Dropdown(this.elements.modeDropdown, (id) => {
-      this.vscode.postMessage({ type: "selectMode", modeId: id });
+    this.messageList = new MessageListComponent(this.doc, {
+      elements: this.elements.messageList,
+      win: this.win,
+    });
+    this.inputPanel = new InputPanelComponent(this.doc, {
+      elements: this.elements.inputPanel,
+      win: this.win,
+    });
+    this.sessionToolbar = new SessionToolbarComponent(this.doc, {
+      elements: this.elements.sessionToolbar,
+      vscode: this.vscode,
+    });
+    this.auxiliaryPanels = new AuxiliaryPanelsComponent(this.doc, {
+      elements: this.elements.auxiliaryPanels,
+      vscode: this.vscode,
+      onSaveState: () => this.saveState(),
     });
 
-    this.modelDropdown = new Dropdown(
-      this.elements.modelDropdown,
-      (id) => {
-        this.vscode.postMessage({ type: "selectModel", modelId: id });
-      },
-      (id, isStarred) => {
-        this.vscode.postMessage({
-          type: "toggleModelStar",
-          modelId: id,
-          isStarred,
-        });
-      }
-    );
-
+    // Permission decisions can change generation state and scroll position, so
+    // this dialog stays wired to controller-level streaming state for now.
     this.permissionDialog = new PermissionDialog({
       doc: this.doc,
       vscode: this.vscode,
@@ -162,16 +116,6 @@ export class WebviewController {
         this.blocks.find((b) => b.type === "tool" && b.toolId === id),
     });
 
-    this.diffSummary = new DiffSummary({
-      container: this.elements.diffSummaryContainer,
-      vscode: this.vscode,
-      onSaveState: () => this.saveState(),
-    });
-
-    this.planView = new PlanView({
-      container: this.elements.planContainer,
-    });
-
     this.restoreState();
     this.setupEventListeners();
     this.updateViewState();
@@ -179,115 +123,12 @@ export class WebviewController {
     this.updateInputState();
     this.vscode.postMessage({ type: "ready" });
     new TooltipManager(this.doc, this.win).setup();
-    this.setupCodeCopyHandler();
-    this.setupFileLinkHandler();
-    this.setupDiffHeaderClickHandler();
-  }
-
-  private setupCodeCopyHandler(): void {
-    // Use event delegation on messages container to handle copy button clicks
-    this.elements.messagesEl.addEventListener("click", async (e) => {
-      const target = e.target as HTMLElement;
-      const copyBtn = target.closest(".code-copy-btn") as HTMLButtonElement;
-
-      if (!copyBtn) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Find the pre element within the same wrapper
-      const wrapper = copyBtn.closest(".code-block-wrapper");
-      if (!wrapper) return;
-
-      const pre = wrapper.querySelector("pre");
-      if (!pre) return;
-
-      // Extract text content from the pre element
-      const textToCopy = pre.textContent || "";
-
-      try {
-        await navigator.clipboard.writeText(textToCopy);
-
-        // Show success feedback by changing icon
-        const icon = copyBtn.querySelector(".codicon");
-        if (icon) {
-          icon.classList.remove("codicon-copy");
-          icon.classList.add("codicon-check");
-          copyBtn.classList.add("copied");
-          copyBtn.setAttribute("acp-title", "Copied!");
-        }
-
-        // Reset after 1.5 seconds
-        setTimeout(() => {
-          if (icon) {
-            icon.classList.remove("codicon-check");
-            icon.classList.add("codicon-copy");
-            copyBtn.classList.remove("copied");
-            // Reset tooltip based on button type
-            const wrapper = copyBtn.closest(".code-block-wrapper");
-            if (wrapper) {
-              const pre = wrapper.querySelector("pre");
-              if (pre && pre.classList.contains("detail-input")) {
-                copyBtn.setAttribute("acp-title", "Copy input");
-              } else if (pre && pre.classList.contains("tool-output")) {
-                copyBtn.setAttribute("acp-title", "Copy output");
-              } else {
-                copyBtn.setAttribute("acp-title", "Copy code");
-              }
-            }
-          }
-        }, 1500);
-      } catch (err) {
-        console.error("Failed to copy:", err);
-      }
-    });
-  }
-
-  private setupFileLinkHandler(): void {
-    // Delegated click handler for file links in markdown
-    this.elements.messagesEl.addEventListener("click", (e) => {
-      const target = (e.target as HTMLElement).closest(
-        "a"
-      ) as HTMLAnchorElement | null;
-      if (!target) return;
-
-      const href = target.getAttribute("href");
-      if (href) {
-        // Ignore anchor-only links
-        if (href.startsWith("#")) return;
-        // Ignore links with a scheme other than file://
-        if (/^[a-zA-Z][a-zA-Z0-9.+-]*:/.test(href) && !href.startsWith("file:"))
-          return;
-
-        e.preventDefault();
-        e.stopPropagation();
-        this.vscode.postMessage({
-          type: "openFile",
-          href: href,
-        });
-      }
-    });
-  }
-
-  private setupDiffHeaderClickHandler(): void {
-    // Delegated click handler for diff headers
-    this.elements.messagesEl.addEventListener("click", (e) => {
-      const target = (e.target as HTMLElement).closest(
-        ".diff-header"
-      ) as HTMLElement | null;
-      if (!target) return;
-
-      const path = target.getAttribute("data-file-path");
-      if (path) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.vscode.postMessage({
-          type: "openFile",
-          path: path,
-          checkExists: true,
-        });
-      }
-    });
+    // Delegated message-list handlers are installed after state restoration so
+    // restored DOM chips and subsequent streamed content share one listener set.
+    this.messageList.setupCodeCopyHandler();
+    this.messageList.setupFileLinkHandler(this.vscode);
+    this.messageList.setupDiffHeaderClickHandler(this.vscode);
+    this.messageList.setupScrollEventListeners(this.win);
   }
 
   private showConfirmDialog(actionLabel: string): Promise<boolean> {
@@ -295,47 +136,18 @@ export class WebviewController {
   }
 
   private updateInputState(): void {
-    const text = this.elements.inputEl.textContent?.trim() || "";
-    const hasMentions =
-      this.elements.inputEl.querySelectorAll(".mention-chip").length > 0;
-
-    // If the hovered image chip is no longer present, hide the preview
-    if (
-      this.hoveredImageChip &&
-      !this.elements.inputEl.contains(this.hoveredImageChip)
-    ) {
-      this.hoveredImageChip = null;
-      this.hideImagePreview();
-    }
-
-    // Fix for placeholder: if truly empty of text and mentions, ensure innerHTML is empty
-    // to allow :empty CSS selector to work.
-    if (!text && !hasMentions) {
-      if (this.elements.inputEl.innerHTML !== "") {
-        this.elements.inputEl.innerHTML = "";
-      }
-    }
-
-    this.elements.sendBtn.disabled =
-      (!text && !hasMentions) || this.isGenerating;
+    this.hoveredImageChip = this.inputPanel.updateInputState(
+      this.isGenerating,
+      this.hoveredImageChip
+    );
   }
 
   private updatePlaceholder(agentName: string): void {
-    const placeholder = `Ask ${agentName.toLowerCase()}... (type / for commands, @ for files)`;
-    this.elements.inputEl.setAttribute("data-placeholder", placeholder);
+    this.inputPanel.setPlaceholder(agentName);
   }
 
   private adjustHeight(): void {
-    const { inputEl } = this.elements;
-    const scrollTop = inputEl.scrollTop;
-    inputEl.style.height = "auto";
-    const maxHeight = this.win.innerHeight / 3;
-    const scrollHeight = inputEl.scrollHeight;
-    const newHeight = Math.max(52, Math.min(scrollHeight, maxHeight));
-    inputEl.style.height = newHeight + "px";
-    inputEl.style.overflowY =
-      scrollHeight > maxHeight - 1 ? "overlay" : "hidden";
-    inputEl.scrollTop = scrollTop;
+    this.inputPanel.adjustHeight();
   }
 
   private restoreState(): void {
@@ -368,7 +180,7 @@ export class WebviewController {
         });
       }
       if (previousState.diffChanges) {
-        this.diffSummary.setChanges(previousState.diffChanges);
+        this.auxiliaryPanels.setDiffChanges(previousState.diffChanges);
       }
     }
   }
@@ -377,7 +189,7 @@ export class WebviewController {
     this.vscode.setState<WebviewState>({
       isConnected: this.isConnected,
       inputValue: this.elements.inputEl.innerHTML || "",
-      diffChanges: this.diffSummary.getChanges(),
+      diffChanges: this.auxiliaryPanels.getDiffChanges(),
     });
   }
 
@@ -396,43 +208,20 @@ export class WebviewController {
     };
     preventDefault: () => void;
   }): void {
-    const items = e.clipboardData?.items;
-    if (items) {
-      for (const item of items) {
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          const blob = item.getAsFile?.();
-          if (blob) this.handleImageAttachment(blob);
-          return;
-        }
-      }
-    }
-    // For text content, extract plain text only to avoid:
-    // 1. UI misalignment from rich HTML formatting
-    // 2. XSS injection from malicious HTML/scripts
-    e.preventDefault();
-    const plainText = e.clipboardData?.getData("text/plain") ?? "";
-    const selection = this.win.getSelection();
-    if (!selection || selection.rangeCount === 0) {
+    const insertedText = this.inputPanel.handlePaste(e, (file) =>
+      this.handleImageAttachment(file)
+    );
+    if (!insertedText) {
       return;
     }
-    const range = selection.getRangeAt(0);
-    range.deleteContents();
-    const textNode = this.doc.createTextNode(plainText);
-    range.insertNode(textNode);
-    range.setStart(textNode, textNode.length);
-    range.setEnd(textNode, textNode.length);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    this.adjustHeight();
+
     this.updateAutocomplete();
     this.saveState();
     this.updateInputState();
   }
 
   private setupEventListeners(): void {
-    const { sendBtn, stopBtn, inputEl, messagesEl, attachImageBtn } =
-      this.elements;
+    const { sendBtn, stopBtn, inputEl } = this.elements;
 
     const { commandAutocomplete } = this.elements;
 
@@ -495,20 +284,9 @@ export class WebviewController {
       this.onPaste(e as unknown as Parameters<typeof this.onPaste>[0]);
     });
 
-    attachImageBtn.addEventListener("click", () => {
-      const input = this.doc.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.multiple = true;
-      input.onchange = () => {
-        if (input.files) {
-          Array.from(input.files).forEach((file) =>
-            this.handleImageAttachment(file)
-          );
-        }
-      };
-      input.click();
-    });
+    this.inputPanel.setupAttachImageButton((file) =>
+      this.handleImageAttachment(file)
+    );
 
     commandAutocomplete.addEventListener("mousedown", (e) => {
       const item = (e.target as HTMLElement).closest(".command-item");
@@ -537,74 +315,6 @@ export class WebviewController {
       }
     });
 
-    messagesEl.addEventListener("wheel", (e) => {
-      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
-      const direction = e.deltaY < 0 ? "up" : e.deltaY > 0 ? "down" : "unknown";
-      this.markUserScrollIntent(direction);
-    });
-
-    messagesEl.addEventListener("pointerdown", (e) => {
-      // Treat scrollbar/container drags as scroll intent, but not clicks inside message content.
-      if (
-        e.target !== messagesEl ||
-        !this.isEventFromMessagesScrollContainer(e.target)
-      ) {
-        return;
-      }
-      this.pointerScrollActive = true;
-      this.markUserScrollIntent("unknown");
-    });
-
-    messagesEl.addEventListener("touchstart", (e) => {
-      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
-      this.touchScrollActive = true;
-    });
-
-    messagesEl.addEventListener("touchmove", (e) => {
-      if (!this.isEventFromMessagesScrollContainer(e.target)) return;
-      this.touchScrollActive = true;
-      this.markUserScrollIntent("unknown");
-    });
-
-    messagesEl.addEventListener("keydown", (e) => {
-      if (this.isEventFromMessagesScrollContainer(e.target)) {
-        if (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home") {
-          this.markUserScrollIntent("up");
-        } else if (
-          e.key === "ArrowDown" ||
-          e.key === "PageDown" ||
-          e.key === "End" ||
-          e.key === " "
-        ) {
-          this.markUserScrollIntent("down");
-        }
-      }
-
-      const messages = Array.from(messagesEl.querySelectorAll(".message"));
-      const currentIndex = messages.indexOf(this.doc.activeElement as Element);
-
-      if (e.key === "ArrowDown" && currentIndex < messages.length - 1) {
-        e.preventDefault();
-        (messages[currentIndex + 1] as HTMLElement).focus();
-      } else if (e.key === "ArrowUp" && currentIndex > 0) {
-        e.preventDefault();
-        (messages[currentIndex - 1] as HTMLElement).focus();
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        (messages[0] as HTMLElement)?.focus();
-      } else if (e.key === "End") {
-        e.preventDefault();
-        (messages[messages.length - 1] as HTMLElement)?.focus();
-      }
-    });
-
-    messagesEl.addEventListener("scroll", () => this.handleMessagesScroll());
-
-    this.win.addEventListener("pointerup", () => this.clearPointerScroll());
-    this.win.addEventListener("pointercancel", () => this.clearPointerScroll());
-    this.win.addEventListener("touchend", () => this.clearTouchScroll());
-    this.win.addEventListener("touchcancel", () => this.clearTouchScroll());
-
     this.win.addEventListener("message", (e: MessageEvent<ExtensionMessage>) =>
       this.enqueueExtensionMessage(e.data)
     );
@@ -621,219 +331,21 @@ export class WebviewController {
   }
 
   private handleImageAttachment(file: File): void {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string;
-      this.insertMentionChip({
-        name: file.name,
-        type: "image",
-        dataUrl: base64,
-      });
-    };
-    reader.readAsDataURL(file);
+    this.inputPanel.handleImageAttachment(file, (mention) =>
+      this.insertMentionChip(mention)
+    );
   }
 
   private showImagePreview(base64: string, event: MouseEvent): void {
-    const { imagePreviewPopover } = this.elements;
-    const img = imagePreviewPopover.querySelector("img")!;
-    img.src = base64;
-    imagePreviewPopover.style.display = "block";
-
-    const x = Math.min(
-      event.clientX + 10,
-      this.win.innerWidth - imagePreviewPopover.offsetWidth - 20
-    );
-    const y = Math.max(
-      20,
-      event.clientY - imagePreviewPopover.offsetHeight - 10
-    );
-    imagePreviewPopover.style.left = x + "px";
-    imagePreviewPopover.style.top = y + "px";
+    this.inputPanel.showImagePreview(base64, event);
   }
 
   private hideImagePreview(): void {
-    this.elements.imagePreviewPopover.style.display = "none";
-  }
-
-  private isNearMessagesBottom(): boolean {
-    const { messagesEl } = this.elements;
-    return (
-      messagesEl.scrollHeight -
-        messagesEl.scrollTop -
-        messagesEl.clientHeight <=
-      BOTTOM_THRESHOLD_PX
-    );
-  }
-
-  private isEventFromMessagesScrollContainer(
-    target: EventTarget | null
-  ): boolean {
-    const { messagesEl } = this.elements;
-    if (target === messagesEl) {
-      return true;
-    }
-    if (!target || typeof (target as Element).closest !== "function") {
-      return false;
-    }
-
-    const targetEl = target as Element;
-    if (!messagesEl.contains(targetEl)) {
-      return false;
-    }
-
-    return !targetEl.closest(
-      ".diff-content, .tool-output, .diff-summary-list, .detail-input"
-    );
-  }
-
-  private markUserScrollIntent(direction: UserScrollDirection): void {
-    this.userScrollIntent = true;
-    this.userScrollDirection = direction;
-  }
-
-  private clearDiscreteScrollIntent(): void {
-    if (this.pointerScrollActive || this.touchScrollActive) {
-      return;
-    }
-    this.userScrollIntent = false;
-    this.userScrollDirection = "none";
-  }
-
-  private clearPointerScroll(): void {
-    this.pointerScrollActive = false;
-    this.clearDiscreteScrollIntent();
-  }
-
-  private clearTouchScroll(): void {
-    this.touchScrollActive = false;
-    this.clearDiscreteScrollIntent();
-  }
-
-  private enableAutoScroll(): void {
-    this.isAutoScrollEnabled = true;
-  }
-
-  private disableAutoScroll(): void {
-    this.isAutoScrollEnabled = false;
-    this.cancelPendingBottomScroll();
-  }
-
-  private handleMessagesScroll(): void {
-    const hasUserIntent =
-      this.userScrollIntent ||
-      this.pointerScrollActive ||
-      this.touchScrollActive;
-
-    if (hasUserIntent) {
-      const isNearBottom = this.isNearMessagesBottom();
-      const direction = this.userScrollDirection;
-
-      if (isNearBottom) {
-        this.enableAutoScroll();
-      } else if (this.pointerScrollActive || this.touchScrollActive) {
-        this.disableAutoScroll();
-      } else if (direction === "up" || direction === "unknown") {
-        this.disableAutoScroll();
-      }
-
-      this.clearDiscreteScrollIntent();
-    }
-
-    this.scheduleMessagesPaintInvalidation();
+    this.inputPanel.hideImagePreview();
   }
 
   private scrollToBottom(force = false): void {
-    if (force) {
-      this.enableAutoScroll();
-    }
-
-    if (!force && !this.isAutoScrollEnabled) {
-      this.scheduleMessagesPaintInvalidation();
-      return;
-    }
-
-    this.pendingBottomScrollForce = this.pendingBottomScrollForce || force;
-    this.bottomScrollSettleFrames = Math.max(
-      this.bottomScrollSettleFrames,
-      AUTO_SCROLL_SETTLE_FRAMES
-    );
-    this.scheduleBottomScrollFrame();
-  }
-
-  private scheduleBottomScrollFrame(): void {
-    if (this.pendingBottomScrollFrame !== null) {
-      return;
-    }
-
-    this.pendingBottomScrollFrame = this.requestFrame(() => {
-      this.pendingBottomScrollFrame = null;
-      const shouldScroll =
-        this.pendingBottomScrollForce || this.isAutoScrollEnabled;
-      this.pendingBottomScrollForce = false;
-
-      if (!shouldScroll) {
-        this.bottomScrollSettleFrames = 0;
-        this.scheduleMessagesPaintInvalidation();
-        return;
-      }
-
-      this.performScrollToBottom();
-      this.bottomScrollSettleFrames = Math.max(
-        0,
-        this.bottomScrollSettleFrames - 1
-      );
-      if (this.bottomScrollSettleFrames > 0 && this.isAutoScrollEnabled) {
-        this.scheduleBottomScrollFrame();
-      }
-    });
-  }
-
-  private performScrollToBottom(): void {
-    const { messagesEl } = this.elements;
-    const previousScrollBehavior = messagesEl.style.scrollBehavior;
-    messagesEl.style.scrollBehavior = "auto";
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    void messagesEl.offsetHeight;
-    messagesEl.style.scrollBehavior = previousScrollBehavior;
-    this.isAutoScrollEnabled = true;
-    this.scheduleMessagesPaintInvalidation();
-  }
-
-  private cancelPendingBottomScroll(): void {
-    if (this.pendingBottomScrollFrame !== null) {
-      this.cancelFrame(this.pendingBottomScrollFrame);
-      this.pendingBottomScrollFrame = null;
-    }
-    this.pendingBottomScrollForce = false;
-    this.bottomScrollSettleFrames = 0;
-  }
-
-  private scheduleMessagesPaintInvalidation(): void {
-    if (this.pendingPaintFrame !== null) {
-      return;
-    }
-
-    this.pendingPaintFrame = this.requestFrame(() => {
-      this.pendingPaintFrame = null;
-      this.paintBump = !this.paintBump;
-      this.elements.messagesEl.dataset.paintBump = this.paintBump ? "1" : "0";
-      void this.elements.messagesEl.offsetHeight;
-    });
-  }
-
-  private requestFrame(callback: FrameRequestCallback): number {
-    if (typeof this.win.requestAnimationFrame === "function") {
-      return this.win.requestAnimationFrame(callback);
-    }
-    return this.win.setTimeout(() => callback(Date.now()), 0);
-  }
-
-  private cancelFrame(frame: number): void {
-    if (typeof this.win.cancelAnimationFrame === "function") {
-      this.win.cancelAnimationFrame(frame);
-      return;
-    }
-    this.win.clearTimeout(frame);
+    this.messageList.scrollToBottom(force);
   }
 
   public addMessage(
@@ -841,124 +353,14 @@ export class WebviewController {
     type: "user" | "assistant" | "error" | "system",
     mentions?: Mention[]
   ): HTMLElement {
-    const div = this.doc.createElement("div");
-    div.className = "message " + type;
-    div.setAttribute("role", "article");
-    div.setAttribute("tabindex", "0");
-
-    const label =
-      type === "user"
-        ? "Your message"
-        : type === "assistant"
-          ? "Agent response"
-          : type === "error"
-            ? "Error message"
-            : "System message";
-    div.setAttribute("aria-label", label);
-
-    if (text) {
-      const textEl = this.doc.createElement("div");
-      textEl.className = "message-content-text";
-
-      const placeholderRegex = /__MENTION_(\d+)__/g;
-      const commandRegex = /(?<=^|\s)\/[\w-]+(?=\s|$)/g;
-
-      type Token =
-        | { type: "mention"; start: number; end: number; index: number }
-        | { type: "command"; start: number; end: number; name: string };
-
-      const tokens: Token[] = [];
-      let match: RegExpExecArray | null;
-
-      while ((match = placeholderRegex.exec(text)) !== null) {
-        tokens.push({
-          type: "mention",
-          start: match.index,
-          end: placeholderRegex.lastIndex,
-          index: parseInt(match[1], 10),
-        });
-      }
-
-      if (type === "user") {
-        while ((match = commandRegex.exec(text)) !== null) {
-          const commandName = match[0].substring(1);
-          const cmd = this.availableCommands.find(
-            (c) => c.name === commandName
-          );
-          if (cmd) {
-            tokens.push({
-              type: "command",
-              start: match.index,
-              end: commandRegex.lastIndex,
-              name: commandName,
-            });
-          }
-        }
-      }
-
-      tokens.sort((a, b) => a.start - b.start);
-
-      const validTokens: Token[] = [];
-      let currentEnd = 0;
-      for (const token of tokens) {
-        if (token.start >= currentEnd) {
-          validTokens.push(token);
-          currentEnd = token.end;
-        }
-      }
-
-      let lastIndex = 0;
-      for (const token of validTokens) {
-        if (token.start > lastIndex) {
-          textEl.appendChild(
-            this.doc.createTextNode(text.substring(lastIndex, token.start))
-          );
-        }
-
-        if (token.type === "mention") {
-          if (mentions && mentions[token.index]) {
-            textEl.appendChild(
-              this.renderMentionChip(mentions[token.index], true)
-            );
-          }
-        } else if (token.type === "command") {
-          const cmd = this.availableCommands.find(
-            (c) => c.name === token.name
-          )!;
-          textEl.appendChild(
-            this.renderCommandChip("/" + token.name, cmd.description, true)
-          );
-        }
-
-        lastIndex = token.end;
-      }
-
-      if (lastIndex < text.length) {
-        textEl.appendChild(this.doc.createTextNode(text.substring(lastIndex)));
-      }
-
-      div.appendChild(textEl);
-    }
-
-    this.elements.messagesEl.appendChild(div);
-    this.scrollToBottom(type === "user");
-
-    if (text) {
-      this.announceToScreenReader(label + ": " + text.substring(0, 100));
-    }
-
-    this.updateViewState();
-    return div;
-  }
-
-  private announceToScreenReader(message: string): void {
-    const announcement = this.doc.createElement("div");
-    announcement.setAttribute("role", "status");
-    announcement.setAttribute("aria-live", "polite");
-    announcement.className = "sr-only";
-    announcement.textContent = message;
-    this.doc.body.appendChild(announcement);
-    setTimeout(() => announcement.remove(), 1000);
+    return this.messageList.addMessage(text, type, {
+      mentions,
+      availableCommands: this.availableCommands,
+      renderMentionChip: (mention, readonly) =>
+        this.renderMentionChip(mention, readonly),
+      renderCommandChip: (command, description, readonly) =>
+        this.renderCommandChip(command, description, readonly),
+    });
   }
 
   private resetActiveBlockTracking(): void {
@@ -1237,19 +639,15 @@ export class WebviewController {
   }
 
   updateViewState(): void {
-    const hasMessages = this.elements.messagesEl.children.length > 0;
-    this.elements.welcomeView.style.display = !hasMessages ? "flex" : "none";
-    this.elements.messagesContainerEl.style.display = hasMessages
-      ? "flex"
-      : "none";
+    this.messageList.updateViewState();
   }
 
   showPlan(entries: PlanEntry[]): void {
-    this.planView.show(entries);
+    this.auxiliaryPanels.showPlan(entries);
   }
 
   hidePlan(): void {
-    this.planView.hide();
+    this.auxiliaryPanels.hidePlan();
   }
 
   private send(): void {
@@ -1312,16 +710,13 @@ export class WebviewController {
     });
 
     this.clearInput();
-    this.elements.sendBtn.disabled = true;
+    this.updateInputState();
     this.saveState();
   }
 
   private clearInput(): void {
-    this.elements.inputEl.innerHTML = "";
-    this.adjustHeight();
-    this.elements.inputEl.focus();
+    this.inputPanel.clearInput();
     this.hideAutocomplete();
-    this.hideImagePreview();
     this.saveState();
     this.updateInputState();
   }
@@ -1569,7 +964,7 @@ export class WebviewController {
 
     const useMockFallback = !(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (range.startContainer instanceof (this.win as any).Node)
+      range.startContainer instanceof (this.win as any).Node
     );
 
     if (!useMockFallback) {
@@ -1752,7 +1147,7 @@ export class WebviewController {
 
       const useMockFallback = !(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (range.startContainer instanceof (this.win as any).Node)
+        range.startContainer instanceof (this.win as any).Node
       );
 
       if (!useMockFallback) {
@@ -1786,11 +1181,15 @@ export class WebviewController {
 
     const selectionAfter = this.win.getSelection();
     if (selectionAfter) {
-      selectionAfter.removeAllRanges();
       const newRange = this.doc.createRange();
       newRange.setStart(space, space.length);
       newRange.collapse(true);
-      selectionAfter.addRange(newRange);
+      if (typeof selectionAfter.removeAllRanges === "function") {
+        selectionAfter.removeAllRanges();
+        selectionAfter.addRange(newRange);
+      } else if (typeof selectionAfter.collapseToEnd === "function") {
+        selectionAfter.collapseToEnd();
+      }
     }
 
     this.elements.inputEl.focus();
@@ -1808,7 +1207,7 @@ export class WebviewController {
 
       const useMockFallback = !(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (range.startContainer instanceof (this.win as any).Node)
+        range.startContainer instanceof (this.win as any).Node
       );
 
       if (!useMockFallback) {
@@ -1845,11 +1244,15 @@ export class WebviewController {
 
     const selectionAfter = this.win.getSelection();
     if (selectionAfter) {
-      selectionAfter.removeAllRanges();
       const newRange = this.doc.createRange();
       newRange.setStart(space, space.length);
       newRange.collapse(true);
-      selectionAfter.addRange(newRange);
+      if (typeof selectionAfter.removeAllRanges === "function") {
+        selectionAfter.removeAllRanges();
+        selectionAfter.addRange(newRange);
+      } else if (typeof selectionAfter.collapseToEnd === "function") {
+        selectionAfter.collapseToEnd();
+      }
     }
 
     this.elements.inputEl.focus();
@@ -1922,45 +1325,20 @@ export class WebviewController {
     const pasteBtn = createBtn("edit", "Copy to input", () => {
       const text = getFinalText();
       if (text) {
-        this.elements.inputEl.textContent = text;
-        this.adjustHeight();
+        this.inputPanel.setTextAndFocus(text);
         this.saveState();
         this.updateInputState();
-        this.elements.inputEl.focus();
-
-        const range = this.doc.createRange();
-        const sel = this.win.getSelection();
-        range.selectNodeContents(this.elements.inputEl);
-        range.collapse(false);
-        sel?.removeAllRanges();
-        sel?.addRange(range);
       }
     });
 
     // Scroll to Top Button
     const topBtn = createBtn("arrow-up", "Scroll to top", () => {
-      this.disableAutoScroll();
-      this.elements.messagesEl.scrollTo({ top: 0, behavior: "smooth" });
+      this.messageList.scrollToTop();
     });
 
     // Scroll to Recent User Input Button
     const userBtn = createBtn("reply", "Scroll to user question", () => {
-      this.disableAutoScroll();
-      const allMessages = Array.from(
-        this.elements.messagesEl.querySelectorAll(".message")
-      );
-      const currentIdx = allMessages.indexOf(messageEl);
-      if (currentIdx > 0) {
-        for (let i = currentIdx - 1; i >= 0; i--) {
-          if (allMessages[i].classList.contains("user")) {
-            allMessages[i].scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            });
-            break;
-          }
-        }
-      }
+      this.messageList.scrollToPreviousUserMessage(messageEl);
     });
 
     actionsContainer.appendChild(copyBtn);
@@ -1973,33 +1351,18 @@ export class WebviewController {
 
   private setGenerating(isGenerating: boolean): void {
     this.isGenerating = isGenerating;
-    const { typingIndicatorEl, messagesEl, sendBtn, stopBtn } = this.elements;
+    this.inputPanel.setGenerating(isGenerating);
     if (isGenerating) {
-      sendBtn.style.display = "none";
-      stopBtn.style.display = "flex";
-      typingIndicatorEl.classList.add("visible");
-      // Move indicator to the end of the current assistant message if it exists,
-      // otherwise to the end of the messages container
-      if (this.currentAssistantMessage) {
-        this.currentAssistantMessage.appendChild(typingIndicatorEl);
-      } else {
-        messagesEl.appendChild(typingIndicatorEl);
-      }
+      this.messageList.showTypingIndicator(this.currentAssistantMessage);
       this.scrollToBottom(true);
     } else {
-      sendBtn.style.display = "flex";
-      stopBtn.style.display = "none";
-      typingIndicatorEl.classList.remove("visible");
+      this.messageList.hideTypingIndicator();
       this.updateInputState();
     }
   }
 
   private updateContextUsageRing(msg: ExtensionMessage): void {
-    updateContextUsageRing(this.elements.contextUsageRing, {
-      used: msg.used,
-      size: msg.size,
-      cost: msg.cost,
-    });
+    this.sessionToolbar.updateContextUsage(msg);
   }
 
   async handleMessage(msg: ExtensionMessage): Promise<void> {
@@ -2058,7 +1421,7 @@ export class WebviewController {
           this.renderActionButtons(this.currentAssistantMessage);
           this.currentAssistantMessage = null; // Clear to ensure next turn starts a new message
         }
-        this.elements.inputEl.focus();
+        this.inputPanel.focus();
         this.scrollToBottom();
         break;
       case "toolCallStart":
@@ -2161,7 +1524,7 @@ export class WebviewController {
       case "error":
         if (msg.text) this.addMessage(msg.text, "error");
         this.setGenerating(false);
-        this.elements.inputEl.focus();
+        this.inputPanel.focus();
         break;
       case "agentError":
         if (msg.text) this.addMessage(msg.text, "error");
@@ -2178,15 +1541,15 @@ export class WebviewController {
         if (msg.agentName) {
           this.updatePlaceholder(msg.agentName);
         }
-        this.diffSummary.clear();
+        this.auxiliaryPanels.clearDiff();
       // fallthrough
       case "chatCleared":
-        this.elements.messagesEl.innerHTML = "";
+        this.messageList.clear();
         this.currentAssistantMessage = null;
         this.resetRenderedBlockTracking();
         this.hideAutocomplete();
-        this.planView.hide();
-        this.diffSummary.clear();
+        this.auxiliaryPanels.hidePlan();
+        this.auxiliaryPanels.clearDiff();
         this.updateViewState();
         break;
       case "triggerNewChat":
@@ -2206,42 +1569,7 @@ export class WebviewController {
         break;
       }
       case "sessionMetadata": {
-        const hasModes =
-          msg.modes &&
-          msg.modes.availableModes &&
-          msg.modes.availableModes.length > 0;
-        const hasModels =
-          msg.models &&
-          msg.models.availableModels &&
-          msg.models.availableModels.length > 0;
-
-        if (Array.isArray(msg.starredModels)) {
-          this.starredModels = new Set(msg.starredModels);
-        }
-
-        if (hasModes && msg.modes) {
-          this.elements.modeDropdown.style.display = "flex";
-          this.modeDropdown.setOptions(
-            msg.modes.availableModes.map((m) => ({
-              id: m.id,
-              name: m.name || m.id,
-            })),
-            msg.modes.currentModeId
-          );
-        } else {
-          this.elements.modeDropdown.style.display = "none";
-        }
-
-        if (hasModels && msg.models) {
-          this.elements.modelDropdown.style.display = "flex";
-          this.lastModelsMsg = msg.models;
-          this.updateModelDropdown(msg.models);
-        } else {
-          this.elements.modelDropdown.style.display = "none";
-          this.lastModelsMsg = null;
-        }
-
-        this.renderGenericConfigOptions(msg.genericConfigOptions ?? []);
+        this.sessionToolbar.updateMetadata(msg);
 
         if (msg.commands && Array.isArray(msg.commands)) {
           this.availableCommands = msg.commands;
@@ -2250,12 +1578,12 @@ export class WebviewController {
       }
       case "modeUpdate":
         if (msg.modeId) {
-          this.modeDropdown.setValue(msg.modeId);
+          this.sessionToolbar.setModeValue(msg.modeId);
         }
         break;
       case "modelUpdate":
         if (msg.modelId) {
-          this.modelDropdown.setValue(msg.modelId);
+          this.sessionToolbar.setModelValue(msg.modelId);
         }
         break;
       case "availableCommands":
@@ -2265,15 +1593,15 @@ export class WebviewController {
         break;
       case "plan":
         if (msg.plan && msg.plan.entries) {
-          this.planView.show(msg.plan.entries);
+          this.auxiliaryPanels.showPlan(msg.plan.entries);
         }
         break;
       case "planComplete":
-        this.planView.hide();
+        this.auxiliaryPanels.hidePlan();
         break;
       case "diffSummary":
         if (msg.changes) {
-          this.diffSummary.setChanges(msg.changes);
+          this.auxiliaryPanels.setDiffChanges(msg.changes);
           this.saveState();
         }
         break;
@@ -2291,139 +1619,6 @@ export class WebviewController {
         }
         break;
     }
-  }
-
-  private updateModelDropdown(
-    modelsMsg: NonNullable<ExtensionMessage["models"]>
-  ): void {
-    const options: DropdownOption[] = [];
-    const availableModels = modelsMsg.availableModels || [];
-
-    const starred = availableModels.filter((m) =>
-      this.starredModels.has(m.modelId)
-    );
-
-    if (starred.length > 0) {
-      options.push({ id: "header-starred", name: "Starred", type: "header" });
-      starred.forEach((m) => {
-        options.push({
-          id: m.modelId,
-          name: m.name || m.modelId,
-          isStarred: true,
-          canStar: true,
-        });
-      });
-      options.push({ id: "divider-1", name: "", type: "divider" });
-      options.push({ id: "header-all", name: "All Models", type: "header" });
-    }
-
-    availableModels.forEach((m) => {
-      options.push({
-        id: m.modelId,
-        name: m.name || m.modelId,
-        isStarred: this.starredModels.has(m.modelId),
-        canStar: true,
-      });
-    });
-
-    this.modelDropdown.setOptions(options, modelsMsg.currentModelId);
-  }
-
-  private renderGenericConfigOptions(
-    options: NonNullable<ExtensionMessage["genericConfigOptions"]>
-  ): void {
-    const container = this.elements.configOptionsContainer;
-    const incomingIds = new Set(options.map((o) => o.id));
-
-    for (const id of this.configOptionDropdowns.keys()) {
-      if (!incomingIds.has(id)) {
-        const el = container.querySelector<HTMLElement>(
-          `[data-config-id="${cssEscapeAttr(id)}"]`
-        );
-        if (el) el.remove();
-        this.configOptionDropdowns.delete(id);
-      }
-    }
-
-    for (const opt of options) {
-      const safeId = opt.id.replace(/[^a-zA-Z0-9_-]/g, "_");
-      let wrapper = container.querySelector<HTMLElement>(
-        `[data-config-id="${cssEscapeAttr(opt.id)}"]`
-      );
-
-      if (!wrapper) {
-        wrapper = this.createGenericConfigOptionElement(opt, safeId);
-        container.appendChild(wrapper);
-      }
-
-      const dropdown = this.ensureConfigOptionDropdown(opt.id, wrapper);
-      const titleText = opt.description
-        ? `${opt.name}\n${opt.description}`
-        : opt.name;
-      dropdown.setCustomTitle(titleText);
-      dropdown.setOptions(
-        opt.options.map((o) => ({ id: o.value, name: o.name || o.value })),
-        opt.currentValue
-      );
-    }
-  }
-
-  private createGenericConfigOptionElement(
-    opt: NonNullable<ExtensionMessage["genericConfigOptions"]>[number],
-    safeId: string
-  ): HTMLElement {
-    const wrapper = this.doc.createElement("div");
-    wrapper.className = "custom-dropdown";
-    wrapper.setAttribute("data-config-id", opt.id);
-    wrapper.id = `config-option-${safeId}`;
-    wrapper.style.display = "flex";
-
-    const trigger = this.doc.createElement("div");
-    trigger.className = "dropdown-trigger";
-
-    const iconClass = opt.category ? CATEGORY_ICONS[opt.category] : undefined;
-    if (iconClass) {
-      const icon = this.doc.createElement("span");
-      icon.className = `dropdown-icon codicon ${iconClass}`;
-      icon.setAttribute("aria-hidden", "true");
-      trigger.appendChild(icon);
-    }
-
-    const label = this.doc.createElement("span");
-    label.className = "selected-label";
-    label.textContent = opt.name || opt.id;
-    trigger.appendChild(label);
-
-    const chevron = this.doc.createElement("span");
-    chevron.className = "dropdown-chevron";
-    const chevronIcon = this.doc.createElement("span");
-    chevronIcon.className = "codicon codicon-chevron-down";
-    chevron.appendChild(chevronIcon);
-    trigger.appendChild(chevron);
-
-    const popover = this.doc.createElement("div");
-    popover.className = "dropdown-popover";
-
-    wrapper.appendChild(trigger);
-    wrapper.appendChild(popover);
-    return wrapper;
-  }
-
-  private ensureConfigOptionDropdown(
-    configId: string,
-    wrapper: HTMLElement
-  ): Dropdown {
-    const existing = this.configOptionDropdowns.get(configId);
-    if (existing) return existing;
-    const dropdown = new Dropdown(wrapper, (value) => {
-      this.vscode.postMessage({
-        type: "selectConfigOption",
-        configId,
-        value,
-      });
-    });
-    this.configOptionDropdowns.set(configId, dropdown);
-    return dropdown;
   }
 
   getIsConnected(): boolean {

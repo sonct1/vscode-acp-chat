@@ -461,6 +461,22 @@ suite("Webview", () => {
       assert.strictEqual(elements.inputEl.tagName, "DIV");
       assert.strictEqual(elements.sendBtn.tagName, "BUTTON");
     });
+
+    test("groups elements by top-level components", () => {
+      const elements = getElements(document);
+      // Guard the compatibility aliases while controller code migrates from
+      // flat DOM handles to component-owned element groups.
+      assert.strictEqual(elements.messageList.messagesEl, elements.messagesEl);
+      assert.strictEqual(elements.inputPanel.inputEl, elements.inputEl);
+      assert.strictEqual(
+        elements.sessionToolbar.modeDropdown,
+        elements.modeDropdown
+      );
+      assert.strictEqual(
+        elements.auxiliaryPanels.planContainer,
+        elements.planContainer
+      );
+    });
   });
 
   suite("WebviewController", () => {

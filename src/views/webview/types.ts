@@ -267,8 +267,52 @@ export interface DropdownOption {
 // Webview DOM element handles
 // ---------------------------------------------------------------------------
 
-/** Cached references to every DOM element the controller interacts with. */
+/** DOM handles owned by the message list component. */
+export interface MessageListElements {
+  containerEl: HTMLElement;
+  messagesEl: HTMLElement;
+  typingIndicatorEl: HTMLElement;
+  welcomeView: HTMLElement;
+}
+
+/** DOM handles owned by the session toolbar nested inside the input panel. */
+export interface SessionToolbarElements {
+  modeDropdown: HTMLElement;
+  modelDropdown: HTMLElement;
+  configOptionsContainer: HTMLElement;
+  contextUsageRing: HTMLDivElement;
+}
+
+/** DOM handles owned by the input panel component. */
+export interface InputPanelElements {
+  inputEl: HTMLElement;
+  commandAutocomplete: HTMLElement;
+  attachImageBtn: HTMLButtonElement;
+  imagePreviewPopover: HTMLElement;
+  sendBtn: HTMLButtonElement;
+  stopBtn: HTMLButtonElement;
+  toolbar: SessionToolbarElements;
+}
+
+/** DOM handles for secondary panels rendered around the main chat flow. */
+export interface AuxiliaryPanelElements {
+  planContainer: HTMLElement;
+  diffSummaryContainer: HTMLElement;
+}
+
+/**
+ * Top-level webview component handles.
+ *
+ * The nested component fields are the preferred ownership boundaries.  The
+ * flat fields are compatibility aliases while controller responsibilities are
+ * migrated out of `main.ts`; new code should prefer the nested fields.
+ */
 export interface WebviewElements {
+  messageList: MessageListElements;
+  inputPanel: InputPanelElements;
+  sessionToolbar: SessionToolbarElements;
+  auxiliaryPanels: AuxiliaryPanelElements;
+
   messagesContainerEl: HTMLElement;
   messagesEl: HTMLElement;
   inputEl: HTMLElement;
