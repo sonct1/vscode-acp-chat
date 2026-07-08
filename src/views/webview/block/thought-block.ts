@@ -1,5 +1,6 @@
 import { BlockWidget } from "./block-widget";
 import type { WebviewContext } from "../context";
+import { marked } from "../marked-config";
 
 /**
  * Streaming thought block. Renders as a collapsible <details> element
@@ -41,7 +42,7 @@ export class ThoughtBlock extends BlockWidget {
 
   appendContent(text: string): void {
     this.rawContent += text;
-    this.contentEl.innerHTML = this.ctx.renderMarkdown(this.rawContent);
+    this.contentEl.innerHTML = marked.parse(this.rawContent) as string;
   }
 
   finalize(): void {

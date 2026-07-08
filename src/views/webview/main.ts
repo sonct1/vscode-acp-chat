@@ -1,6 +1,3 @@
-import { marked } from "./marked-config";
-import { escapeHtml } from "./html-utils";
-import { getFileIconHtml, getFolderIconHtml } from "./file-icon";
 import { TooltipManager } from "./widget/tooltip";
 import { showConfirmDialog } from "./widget/confirm-dialog";
 import { PermissionDialog } from "./widget/permission-dialog";
@@ -59,12 +56,6 @@ export class WebviewController implements MessageHandler {
       stateService: this.stateService,
       messageRouter: this.messageRouter,
       eventBus,
-      escapeHtml,
-      renderMarkdown: (content: string) => marked.parse(content) as string,
-      getFileIconHtml,
-      getFolderIconHtml,
-      scrollToBottom: (force?: boolean) =>
-        this.messageList.scrollToBottom(force ?? false),
     };
 
     const root = new WebviewRootComponent(this.ctx);

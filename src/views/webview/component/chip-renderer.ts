@@ -1,5 +1,7 @@
 import type { WebviewContext } from "../context";
 import type { Mention } from "../types";
+import { escapeHtml } from "../html-utils";
+import { getFileIconHtml, getFolderIconHtml } from "../file-icon";
 
 /**
  * Renders mention chips (@file, @folder, @image, @terminal, @selection) and
@@ -66,7 +68,7 @@ export class ChipRendererComponent {
       }
     > = {
       file: {
-        iconHtml: this.ctx.getFileIconHtml(filename),
+        iconHtml: getFileIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -79,7 +81,7 @@ export class ChipRendererComponent {
         },
       },
       folder: {
-        iconHtml: this.ctx.getFolderIconHtml(filename),
+        iconHtml: getFolderIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -91,7 +93,7 @@ export class ChipRendererComponent {
         },
       },
       selection: {
-        iconHtml: this.ctx.getFileIconHtml(filename),
+        iconHtml: getFileIconHtml(filename),
         onClick: (e) => {
           if (mention.path) {
             e.stopPropagation();
@@ -107,7 +109,7 @@ export class ChipRendererComponent {
         iconHtml: '<span class="codicon codicon-terminal"></span>',
       },
       image: {
-        iconHtml: this.ctx.getFileIconHtml(filename),
+        iconHtml: getFileIconHtml(filename),
         onHover: (e) => {
           if (mention.dataUrl) {
             if (!readonly) this.hoveredImageChip = chip;
@@ -119,7 +121,7 @@ export class ChipRendererComponent {
 
     const config = typeConfigs[mentionType] || typeConfigs.file;
 
-    chip.innerHTML = `<span class="chip-icon">${config.iconHtml}</span><span class="chip-label">${this.ctx.escapeHtml(displayLabel)}</span>`;
+    chip.innerHTML = `<span class="chip-icon">${config.iconHtml}</span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
 
     if (config.onClick) {
       chip.addEventListener("click", config.onClick);
@@ -163,7 +165,7 @@ export class ChipRendererComponent {
     const displayLabel = command.startsWith("/")
       ? command.substring(1)
       : command;
-    chip.innerHTML = `<span class="chip-prefix">/</span><span class="chip-label">${this.ctx.escapeHtml(displayLabel)}</span>`;
+    chip.innerHTML = `<span class="chip-prefix">/</span><span class="chip-label">${escapeHtml(displayLabel)}</span>`;
 
     return chip;
   }

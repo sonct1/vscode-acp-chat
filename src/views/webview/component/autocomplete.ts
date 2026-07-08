@@ -1,6 +1,8 @@
 import type { WebviewContext } from "../context";
 import type { MessageHandler } from "../message-router";
 import type { AvailableCommand, ExtensionMessage, Mention } from "../types";
+import { escapeHtml } from "../html-utils";
+import { getFileIconHtml, getFolderIconHtml } from "../file-icon";
 
 interface FileResult {
   name: string;
@@ -341,15 +343,13 @@ export class AutocompleteComponent implements MessageHandler {
 
   renderCommandItem(cmd: AvailableCommand, i: number): string {
     const hint = cmd.input?.hint
-      ? '<div class="command-hint">' +
-        this.ctx.escapeHtml(cmd.input.hint) +
-        "</div>"
+      ? '<div class="command-hint">' + escapeHtml(cmd.input.hint) + "</div>"
       : "";
     return `
       <div class="command-item ${i === this.selectedIndex ? "selected" : ""}" data-index="${i}" role="option" aria-selected="${i === this.selectedIndex}">
         <div class="command-content">
-          <div class="command-name"><span class="trigger-char">/</span>${this.ctx.escapeHtml(cmd.name)}</div>
-          ${cmd.description ? '<div class="command-description">' + this.ctx.escapeHtml(cmd.description) + "</div>" : ""}
+          <div class="command-name"><span class="trigger-char">/</span>${escapeHtml(cmd.name)}</div>
+          ${cmd.description ? '<div class="command-description">' + escapeHtml(cmd.description) + "</div>" : ""}
           ${hint}
         </div>
       </div>
@@ -359,17 +359,17 @@ export class AutocompleteComponent implements MessageHandler {
   private renderFileItem(file: FileResult, i: number): string {
     const isFolder = file.type === "folder";
     const iconHtml = isFolder
-      ? this.ctx.getFolderIconHtml(file.name)
-      : this.ctx.getFileIconHtml(file.name);
+      ? getFolderIconHtml(file.name)
+      : getFileIconHtml(file.name);
 
-    const displayPath = file.dir ? this.ctx.escapeHtml(file.dir + "/") : "";
+    const displayPath = file.dir ? escapeHtml(file.dir + "/") : "";
 
     return `
-      <div class="command-item ${i === this.selectedIndex ? "selected" : ""}" data-index="${i}" role="option" aria-selected="${i === this.selectedIndex}" data-fspath="${this.ctx.escapeHtml(file.fsPath)}">
+      <div class="command-item ${i === this.selectedIndex ? "selected" : ""}" data-index="${i}" role="option" aria-selected="${i === this.selectedIndex}" data-fspath="${escapeHtml(file.fsPath)}">
         <div class="command-icon">${iconHtml}</div>
         <div class="command-content">
           <div class="command-name">
-            <span class="file-name">${this.ctx.escapeHtml(file.name)}</span>
+            <span class="file-name">${escapeHtml(file.name)}</span>
             ${displayPath ? '<span class="file-path">' + displayPath + "</span>" : ""}
           </div>
         </div>

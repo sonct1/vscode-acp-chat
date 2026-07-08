@@ -1,5 +1,6 @@
 import { BlockWidget } from "./block-widget";
 import type { WebviewContext } from "../context";
+import { marked } from "../marked-config";
 
 /**
  * Streaming text block. Accumulates markdown content and renders it via
@@ -24,7 +25,7 @@ export class TextBlock extends BlockWidget {
 
   appendContent(text: string): void {
     this.rawContent += text;
-    this.contentEl.innerHTML = this.ctx.renderMarkdown(this.rawContent);
+    this.contentEl.innerHTML = marked.parse(this.rawContent) as string;
     this.element.setAttribute("data-raw-content", this.rawContent);
   }
 
