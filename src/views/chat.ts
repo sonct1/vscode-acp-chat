@@ -648,11 +648,13 @@ export class ChatViewProvider
   }
 
   public newChat(): void {
-    this.postMessage({ type: "triggerNewChat" });
+    this.handleNewChat().catch((err) => {
+      console.error("[Chat] handleNewChat failed:", err);
+    });
   }
 
   public clearChat(): void {
-    this.postMessage({ type: "triggerClearChat" });
+    this.handleClearChat();
   }
 
   /**

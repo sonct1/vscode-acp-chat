@@ -191,14 +191,6 @@ export class WebviewController implements MessageHandler {
         this.resetChatState();
         return;
 
-      case "triggerNewChat":
-        this.ctx.vscode.postMessage({ type: "newChat" });
-        return;
-
-      case "triggerClearChat":
-        this.ctx.vscode.postMessage({ type: "clearChat" });
-        return;
-
       case "confirmAction": {
         const actionLabel = msg.actionLabel || msg.action || "this action";
         return showConfirmDialog(this.ctx.doc, actionLabel).then(
