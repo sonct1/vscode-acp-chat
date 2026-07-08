@@ -27,8 +27,6 @@ export class InputPanelComponent implements MessageHandler {
 
   private isGenerating = false;
 
-  onStateChange?: () => void;
-
   constructor(
     private ctx: WebviewContext,
     options?: {
@@ -75,6 +73,7 @@ export class InputPanelComponent implements MessageHandler {
     ctx.messageRouter.register("addMention", this);
 
     this.setupEventListeners();
+    this.restoreState();
   }
 
   // -------------------------------------------------------------------
@@ -95,95 +94,6 @@ export class InputPanelComponent implements MessageHandler {
   /** Set the available commands (forwarded to autocomplete). */
   setAvailableCommands(commands: import("../types").AvailableCommand[]): void {
     this.autocomplete.setAvailableCommands(commands);
-  }
-
-  private handleAutocompleteSelection(result: string | Mention): void {
-    if (typeof result === "string") {
-      this.insertCommandChip(result);
-    } else {
-      this.insertMentionChip(result);
-    }
-    this.onStateChange?.();
-    this.updateInputState();
-  }
-
-  private setupEventListeners(): void {
-    const { sendBtn, stopBtn, inputEl } = this.elements;
-
-    sendBtn.addEventListener("click", () => this.send());
-    stopBtn.addEventListener("click", () => {
-      this.ctx.vscode.postMessage({ type: "stop" });
-    });
-
-    inputEl.addEventListener("keydown", (e) => {
-      // Let autocomplete handle keys first
-      if (this.autocomplete.handleKeyDown(e)) {
-        // If Enter/Tab was pressed with a selection, insert the chip
-        if (
-          (e.key === "Tab" || e.key === "Enter") &&
-          this.autocomplete.isActive()
-        ) {
-          const result = this.autocomplete.selectCurrent();
-          if (result) {
-            this.handleAutocompleteSelection(result);
-          }
-        }
-        return;
-      }
-
-      if (e.key === "Enter" && !e.shiftKey && !this.getIsGenerating()) {
-        e.preventDefault();
-        this.send();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        this.clearInput();
-        this.autocomplete.hide();
-        this.onStateChange?.();
-        this.updateInputState();
-      }
-    });
-
-    inputEl.addEventListener("input", () => {
-      this.adjustHeight();
-      this.autocomplete.update();
-      this.onStateChange?.();
-      this.updateInputState();
-    });
-
-    inputEl.addEventListener("paste", (e) => {
-      const insertedText = this.handlePaste(
-        e as unknown as Parameters<typeof this.handlePaste>[0],
-        (file) =>
-          this.handleImageAttachment(file, (mention) =>
-            this.insertMentionChip(mention)
-          )
-      );
-      if (!insertedText) return;
-      this.autocomplete.update();
-      this.onStateChange?.();
-      this.updateInputState();
-    });
-
-    this.setupAttachImageButton();
-  }
-
-  private setupAttachImageButton(): void {
-    this.elements.attachImageBtn.addEventListener("click", () => {
-      const input = this.ctx.doc.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.multiple = true;
-      input.onchange = () => {
-        if (input.files) {
-          Array.from(input.files).forEach((file) => {
-            this.handleImageAttachment(file, (mention) =>
-              this.insertMentionChip(mention)
-            );
-          });
-        }
-      };
-      input.click();
-    });
   }
 
   updateInputState(): void {
@@ -312,6 +222,7 @@ export class InputPanelComponent implements MessageHandler {
     // Hide image preview
     const popover = this.ctx.doc.getElementById("image-preview-popover");
     if (popover) popover.style.display = "none";
+    this.saveState();
   }
 
   setTextAndFocus(text: string): void {
@@ -357,9 +268,184 @@ export class InputPanelComponent implements MessageHandler {
     this.updateInputState();
   }
 
+  /**
+   * Parse the input element DOM and return structured message data.
+   * Extracts mentions, images, commands, and text from the contenteditable
+   * input surface.
+   */
+  collectMessage(): {
+    text: string;
+    images: string[];
+    mentions: Mention[];
+  } | null {
+    const inputEl = this.elements.inputEl;
+    const mentions: Mention[] = [];
+    const images: string[] = [];
+    let text = "";
+
+    inputEl.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        if (el.classList.contains("mention-chip")) {
+          const mention = this.parseMentionFromChip(el);
+          const type = mention.type;
+          const dataUrl = mention.dataUrl;
+
+          if (type === "image" && dataUrl) {
+            images.push(dataUrl);
+          }
+
+          const idx = mentions.length;
+          mentions.push(mention);
+          text += `__MENTION_${idx}__`;
+        } else if (el.classList.contains("command-chip")) {
+          text += el.dataset.command || "";
+        } else if (el.tagName === "BR") {
+          text += "\n";
+        } else {
+          text += el.textContent;
+        }
+      }
+    });
+
+    text = text.trim();
+    if (!text && images.length === 0) return null;
+
+    return { text, images, mentions };
+  }
+
   // -------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------
+
+  private parseMentionFromChip(el: HTMLElement): Mention {
+    return {
+      name: el.dataset.name || "",
+      path: el.dataset.path,
+      type: el.dataset.type as Mention["type"],
+      content: el.dataset.content,
+      dataUrl: el.dataset.dataUrl,
+      range: el.dataset.range
+        ? {
+            startLine: parseInt(el.dataset.range.split("-")[0], 10),
+            endLine: parseInt(el.dataset.range.split("-")[1], 10),
+          }
+        : undefined,
+    };
+  }
+
+  private restoreState(): void {
+    const previousState = this.ctx.stateService.restore();
+    if (!previousState?.inputValue) return;
+
+    this.elements.inputEl.innerHTML = previousState.inputValue;
+    const chips = Array.from(
+      this.elements.inputEl.querySelectorAll(".mention-chip")
+    );
+    chips.forEach((chip) => {
+      const c = chip as HTMLElement;
+      const mention = this.parseMentionFromChip(c);
+      const newChip = this.chipRenderer.renderMentionChip(mention, false);
+      c.replaceWith(newChip);
+    });
+  }
+
+  private saveState(): void {
+    this.ctx.stateService.update(
+      "inputValue",
+      this.elements.inputEl.innerHTML || ""
+    );
+  }
+
+  private handleAutocompleteSelection(result: string | Mention): void {
+    if (typeof result === "string") {
+      this.insertCommandChip(result);
+    } else {
+      this.insertMentionChip(result);
+    }
+    this.saveState();
+    this.updateInputState();
+  }
+
+  private setupEventListeners(): void {
+    const { sendBtn, stopBtn, inputEl } = this.elements;
+
+    sendBtn.addEventListener("click", () => this.send());
+    stopBtn.addEventListener("click", () => {
+      this.ctx.vscode.postMessage({ type: "stop" });
+    });
+
+    inputEl.addEventListener("keydown", (e) => {
+      // Let autocomplete handle keys first
+      if (this.autocomplete.handleKeyDown(e)) {
+        // If Enter/Tab was pressed with a selection, insert the chip
+        if (
+          (e.key === "Tab" || e.key === "Enter") &&
+          this.autocomplete.isActive()
+        ) {
+          const result = this.autocomplete.selectCurrent();
+          if (result) {
+            this.handleAutocompleteSelection(result);
+          }
+        }
+        return;
+      }
+
+      if (e.key === "Enter" && !e.shiftKey && !this.getIsGenerating()) {
+        e.preventDefault();
+        this.send();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.clearInput();
+        this.autocomplete.hide();
+        this.updateInputState();
+      }
+    });
+
+    inputEl.addEventListener("input", () => {
+      this.adjustHeight();
+      this.autocomplete.update();
+      this.saveState();
+      this.updateInputState();
+    });
+
+    inputEl.addEventListener("paste", (e) => {
+      const insertedText = this.handlePaste(
+        e as unknown as Parameters<typeof this.handlePaste>[0],
+        (file) =>
+          this.handleImageAttachment(file, (mention) =>
+            this.insertMentionChip(mention)
+          )
+      );
+      if (!insertedText) return;
+      this.autocomplete.update();
+      this.saveState();
+      this.updateInputState();
+    });
+
+    this.setupAttachImageButton();
+  }
+
+  private setupAttachImageButton(): void {
+    this.elements.attachImageBtn.addEventListener("click", () => {
+      const input = this.ctx.doc.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.multiple = true;
+      input.onchange = () => {
+        if (input.files) {
+          Array.from(input.files).forEach((file) => {
+            this.handleImageAttachment(file, (mention) =>
+              this.insertMentionChip(mention)
+            );
+          });
+        }
+      };
+      input.click();
+    });
+  }
 
   private getNodeAtOffset(
     parent: Node,
@@ -453,66 +539,5 @@ export class InputPanelComponent implements MessageHandler {
       range.setStart(range.startContainer, triggerPos);
     }
     range.deleteContents();
-  }
-
-  /**
-   * Parse the input element DOM and return structured message data.
-   * Extracts mentions, images, commands, and text from the contenteditable
-   * input surface.
-   */
-  collectMessage(): {
-    text: string;
-    images: string[];
-    mentions: Mention[];
-  } | null {
-    const inputEl = this.elements.inputEl;
-    const mentions: Mention[] = [];
-    const images: string[] = [];
-    let text = "";
-
-    inputEl.childNodes.forEach((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent;
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.classList.contains("mention-chip")) {
-          const type = el.dataset.type as Mention["type"];
-          const dataUrl = el.dataset.dataUrl;
-
-          const mention: Mention = {
-            name: el.dataset.name || "",
-            path: el.dataset.path,
-            type,
-            content: el.dataset.content,
-            dataUrl,
-            range: el.dataset.range
-              ? {
-                  startLine: parseInt(el.dataset.range.split("-")[0], 10),
-                  endLine: parseInt(el.dataset.range.split("-")[1], 10),
-                }
-              : undefined,
-          };
-
-          if (type === "image" && dataUrl) {
-            images.push(dataUrl);
-          }
-
-          const idx = mentions.length;
-          mentions.push(mention);
-          text += `__MENTION_${idx}__`;
-        } else if (el.classList.contains("command-chip")) {
-          text += el.dataset.command || "";
-        } else if (el.tagName === "BR") {
-          text += "\n";
-        } else {
-          text += el.textContent;
-        }
-      }
-    });
-
-    text = text.trim();
-    if (!text && images.length === 0) return null;
-
-    return { text, images, mentions };
   }
 }

@@ -8,6 +8,7 @@ import {
   WebviewController,
   initWebview,
 } from "../views/webview/main";
+import { StatePersistenceService } from "../views/webview/state-persistence";
 import { renderDiff } from "../views/webview/widget/diff-render";
 import type {
   VsCodeApi,
@@ -3694,6 +3695,104 @@ suite("Webview", () => {
         elements.diffSummaryContainer.innerHTML.includes("diff-summary-list")
       );
       assert.ok(elements.diffSummaryContainer.innerHTML.includes("file1.ts"));
+    });
+
+    test("restores diff changes from persisted state", () => {
+      const changes = [
+        {
+          path: "/test/file1.ts",
+          relativePath: "file1.ts",
+          oldText: "old",
+          newText: "new",
+          status: "pending",
+        },
+      ];
+      const dom = new JSDOM(createWebviewHTML(), {
+        runScripts: "dangerously",
+        url: "https://localhost",
+      });
+      const doc = dom.window.document;
+      const win = dom.window;
+      const mockVsCode = createMockVsCodeApi();
+      (global as any).Node = win.Node;
+      (global as any).NodeFilter = win.NodeFilter;
+
+      mockVsCode.setState({
+        isConnected: false,
+        inputValue: "",
+        diffChanges: changes,
+      });
+
+      const elements = getElements(doc);
+      new WebviewController(
+        mockVsCode,
+        elements,
+        doc,
+        win as unknown as Window
+      );
+
+      assert.strictEqual(elements.diffSummaryContainer.style.display, "block");
+      assert.ok(
+        elements.diffSummaryContainer.innerHTML.includes("1 files modified")
+      );
+      dom.window.close();
+    });
+  });
+
+  suite("StatePersistenceService", () => {
+    test("update() before restore() preserves existing state", () => {
+      const mockVsCode = createMockVsCodeApi();
+      mockVsCode.setState({ isConnected: true, inputValue: "hello" });
+
+      const service = new StatePersistenceService(mockVsCode);
+
+      // Call update() before restore() — should not clobber isConnected
+      service.update("inputValue", "world");
+
+      const state = service.restore();
+      assert.strictEqual(state?.isConnected, true);
+      assert.strictEqual(state?.inputValue, "world");
+    });
+
+    test("update() merges into restored state", () => {
+      const mockVsCode = createMockVsCodeApi();
+      mockVsCode.setState({
+        isConnected: true,
+        inputValue: "hello",
+        diffChanges: [
+          {
+            path: "/a.ts",
+            relativePath: "a.ts",
+            oldText: null,
+            newText: "x",
+            status: "pending",
+          },
+        ],
+      });
+
+      const service = new StatePersistenceService(mockVsCode);
+      service.restore(); // populate cache
+
+      service.update("inputValue", "updated");
+
+      const state = service.restore();
+      assert.strictEqual(state?.isConnected, true);
+      assert.strictEqual(state?.inputValue, "updated");
+      assert.strictEqual(state?.diffChanges?.length, 1);
+    });
+
+    test("restore() is memoized", () => {
+      const mockVsCode = createMockVsCodeApi();
+      mockVsCode.setState({ isConnected: false, inputValue: "cached" });
+
+      const service = new StatePersistenceService(mockVsCode);
+      const first = service.restore();
+      // Mutate the underlying store — second call should still return cached
+      mockVsCode.setState({ isConnected: true, inputValue: "changed" });
+      const second = service.restore();
+
+      assert.strictEqual(first, second);
+      assert.strictEqual(second?.inputValue, "cached");
     });
   });
 

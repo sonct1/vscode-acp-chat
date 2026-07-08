@@ -42,7 +42,7 @@ export class AuxiliaryPanelsComponent implements MessageHandler {
     this.diffSummary = new DiffSummary({
       container: this.elements.diffSummaryContainer,
       vscode: ctx.vscode,
-      onSaveState: () => ctx.stateService.flush(),
+      stateService: ctx.stateService,
     });
 
     // Register for plan and diff messages.
@@ -68,8 +68,7 @@ export class AuxiliaryPanelsComponent implements MessageHandler {
         return;
       case "diffSummary":
         if (msg.changes) {
-          this.setDiffChanges(msg.changes);
-          this.ctx.stateService.flush();
+          this.diffSummary?.setChanges(msg.changes);
         }
         return;
     }
@@ -85,30 +84,6 @@ export class AuxiliaryPanelsComponent implements MessageHandler {
 
   hidePlan(): void {
     this.planView?.hide();
-  }
-
-  setDiffChanges(
-    changes: Array<{
-      path: string;
-      relativePath: string;
-      oldText: string | null;
-      newText: string;
-      status: string;
-    }>
-  ): void {
-    this.diffSummary?.setChanges(changes);
-  }
-
-  getDiffChanges():
-    | Array<{
-        path: string;
-        relativePath: string;
-        oldText: string | null;
-        newText: string;
-        status: string;
-      }>
-    | undefined {
-    return this.diffSummary?.getChanges();
   }
 
   clearDiff(): void {

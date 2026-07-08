@@ -40,7 +40,12 @@ export class StatePersistenceService {
    * Merges with the existing snapshot.
    */
   update<K extends keyof WebviewState>(key: K, value: WebviewState[K]): void {
-    const current = this.cached ?? ({} as WebviewState);
+    // Fallback to getState() so we merge into the existing snapshot rather
+    // than clobbering it when update() is called before restore().
+    const current =
+      this.cached ??
+      this.vscode.getState<WebviewState>() ??
+      ({} as WebviewState);
     (current as unknown as Record<string, unknown>)[key] = value;
     this.cached = current;
     this.scheduleWrite();

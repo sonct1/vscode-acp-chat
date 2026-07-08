@@ -9,6 +9,7 @@ import { computeLineDiff } from "../../../utils/diff";
 import { escapeHtml } from "../html-utils";
 import { getFileIconHtml } from "../file-icon";
 import type { VsCodeApi } from "../types";
+import type { StatePersistenceService } from "../state-persistence";
 
 /** A single file change entry tracked by the diff summary. */
 export interface DiffChange {
@@ -23,7 +24,7 @@ export interface DiffChange {
 export interface DiffSummaryOptions {
   container: HTMLElement;
   vscode: VsCodeApi;
-  onSaveState: () => void;
+  stateService: StatePersistenceService;
 }
 
 /**
@@ -35,20 +36,22 @@ export interface DiffSummaryOptions {
 export class DiffSummary {
   private container: HTMLElement;
   private vscode: VsCodeApi;
-  private onSaveState: () => void;
+  private stateService: StatePersistenceService;
   private changes: DiffChange[] = [];
   private expanded = false;
 
   constructor(options: DiffSummaryOptions) {
     this.container = options.container;
     this.vscode = options.vscode;
-    this.onSaveState = options.onSaveState;
+    this.stateService = options.stateService;
+    this.restoreState();
   }
 
   /** Replace the current set of changes and re-render. */
   setChanges(changes: DiffChange[]): void {
     this.changes = changes;
     this.render();
+    this.stateService.update("diffChanges", this.changes);
   }
 
   /** Clear all changes and collapse the summary. */
@@ -56,11 +59,15 @@ export class DiffSummary {
     this.changes = [];
     this.expanded = false;
     this.render();
+    this.stateService.update("diffChanges", undefined);
   }
 
-  /** Get the current changes (for state persistence). */
-  getChanges(): DiffChange[] {
-    return this.changes;
+  private restoreState(): void {
+    const previousState = this.stateService.restore();
+    if (previousState?.diffChanges) {
+      this.changes = previousState.diffChanges;
+      this.render();
+    }
   }
 
   private render(): void {
@@ -158,18 +165,14 @@ export class DiffSummary {
     const acceptAllBtn = this.container.querySelector(".accept-all");
     acceptAllBtn?.addEventListener("click", () => {
       this.vscode.postMessage({ type: "acceptAllDiffs" });
-      this.changes = [];
-      this.render();
-      this.onSaveState();
+      this.setChanges([]);
     });
 
     // Discard all changes
     const rollbackAllBtn = this.container.querySelector(".rollback-all");
     rollbackAllBtn?.addEventListener("click", () => {
       this.vscode.postMessage({ type: "rollbackAllDiffs" });
-      this.changes = [];
-      this.render();
-      this.onSaveState();
+      this.setChanges([]);
     });
 
     // Per-file review
@@ -185,9 +188,7 @@ export class DiffSummary {
       btn.addEventListener("click", () => {
         const path = (btn as HTMLElement).dataset.path;
         this.vscode.postMessage({ type: "acceptDiff", path });
-        this.changes = this.changes.filter((c) => c.path !== path);
-        this.render();
-        this.onSaveState();
+        this.setChanges(this.changes.filter((c) => c.path !== path));
       });
     });
 
@@ -198,9 +199,7 @@ export class DiffSummary {
         btn.addEventListener("click", () => {
           const path = (btn as HTMLElement).dataset.path;
           this.vscode.postMessage({ type: "rollbackDiff", path });
-          this.changes = this.changes.filter((c) => c.path !== path);
-          this.render();
-          this.onSaveState();
+          this.setChanges(this.changes.filter((c) => c.path !== path));
         });
       });
   }

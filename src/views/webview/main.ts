@@ -18,7 +18,6 @@ import { AsyncSerialQueue } from "../../utils/async-queue";
 import type { WebviewContext } from "./context";
 import type {
   VsCodeApi,
-  Mention,
   ExtensionMessage,
   WebviewElements,
   WebviewEventMap,
@@ -87,8 +86,6 @@ export class WebviewController implements MessageHandler {
     this.inputPanel = root.inputPanel;
     this.sessionToolbar = root.sessionToolbar;
     this.auxiliaryPanels = root.auxiliaryPanels;
-
-    this.inputPanel.onStateChange = () => this.saveState();
 
     this.permissionDialog = new PermissionDialog(
       this.ctx,
@@ -274,43 +271,7 @@ export class WebviewController implements MessageHandler {
     const previousState = this.stateService.restore();
     if (previousState) {
       this.isConnected = previousState.isConnected;
-      if (previousState.inputValue) {
-        this.elements.inputEl.innerHTML = previousState.inputValue;
-        // Re-attach listeners to mention chips
-        const chips = Array.from(
-          this.elements.inputEl.querySelectorAll(".mention-chip")
-        );
-        chips.forEach((chip) => {
-          const c = chip as HTMLElement;
-          const mention: Mention = {
-            name: c.dataset.name || "",
-            path: c.dataset.path,
-            type: c.dataset.type as Mention["type"],
-            content: c.dataset.content,
-            dataUrl: c.dataset.dataUrl,
-            range: c.dataset.range
-              ? {
-                  startLine: parseInt(c.dataset.range.split("-")[0], 10),
-                  endLine: parseInt(c.dataset.range.split("-")[1], 10),
-                }
-              : undefined,
-          };
-          const newChip = this.chipRenderer.renderMentionChip(mention, false);
-          c.replaceWith(newChip);
-        });
-      }
-      if (previousState.diffChanges) {
-        this.auxiliaryPanels.setDiffChanges(previousState.diffChanges);
-      }
     }
-  }
-
-  private saveState(): void {
-    this.stateService.save({
-      isConnected: this.isConnected,
-      inputValue: this.elements.inputEl.innerHTML || "",
-      diffChanges: this.auxiliaryPanels.getDiffChanges(),
-    });
   }
 
   // -------------------------------------------------------------------

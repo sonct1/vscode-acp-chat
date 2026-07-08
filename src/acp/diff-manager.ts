@@ -8,6 +8,17 @@ export interface FileChange {
 }
 
 export class DiffManager {
+  // TODO: Diff state is not restored after webview reload.
+  //
+  // Chain of events:
+  // 1. Webview reload → DiffSummary constructor restores diffChanges from vscode.getState() ✓
+  // 2. Webview sends "ready" → Extension replies with "agentChanged"
+  // 3. Webview handles "agentChanged" → resetChatState() → clearDiff() → wipes restored diff ✗
+  //
+  // Root cause: "agentChanged" is sent on every webview ready (in ChatView.onDidReceiveMessage),
+  // but the webview treats it as an "agent switch", triggering a full chat state reset.
+  // Need to distinguish "initial sync" from "real agent switch", or rethink the
+  // agentChanged semantics. To be addressed in a future architecture refactor.
   private changes: Map<string, FileChange> = new Map();
   private onDidChangeCallbacks: Array<(changes: FileChange[]) => void> = [];
   private fileWatcher: vscode.FileSystemWatcher;
