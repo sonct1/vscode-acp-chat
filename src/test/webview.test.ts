@@ -3,11 +3,8 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
 import { JSDOM, DOMWindow } from "jsdom";
-import {
-  getElements,
-  WebviewController,
-  initWebview,
-} from "../views/webview/main";
+import { WebviewController, initWebview } from "../views/webview/main";
+import { getRequiredElement } from "../views/webview/widget/dom";
 import { StatePersistenceService } from "../views/webview/state-persistence";
 import { renderDiff } from "../views/webview/widget/diff-render";
 import type {
@@ -117,6 +114,64 @@ function createWebviewHTML(): string {
 </html>`;
 }
 
+function getElements(doc: Document): WebviewElements {
+  const messageList = {
+    containerEl: getRequiredElement(doc, "messages-container"),
+    messagesEl: getRequiredElement(doc, "messages"),
+    typingIndicatorEl: getRequiredElement(doc, "typing-indicator"),
+    welcomeView: getRequiredElement(doc, "welcome-view"),
+  };
+
+  const sessionToolbar = {
+    modeDropdown: getRequiredElement(doc, "mode-dropdown"),
+    modelDropdown: getRequiredElement(doc, "model-dropdown"),
+    configOptionsContainer: getRequiredElement(doc, "config-options-container"),
+    contextUsageRing: getRequiredElement<HTMLDivElement>(
+      doc,
+      "context-usage-ring"
+    ),
+  };
+
+  const inputPanel = {
+    inputEl: getRequiredElement(doc, "input"),
+    commandAutocomplete: getRequiredElement(doc, "command-autocomplete"),
+    attachImageBtn: getRequiredElement<HTMLButtonElement>(doc, "attach-image"),
+    imagePreviewPopover: getRequiredElement(doc, "image-preview-popover"),
+    sendBtn: getRequiredElement<HTMLButtonElement>(doc, "send"),
+    stopBtn: getRequiredElement<HTMLButtonElement>(doc, "stop"),
+    toolbar: sessionToolbar,
+  };
+
+  const auxiliaryPanels = {
+    planContainer: getRequiredElement(doc, "agent-plan-container"),
+    diffSummaryContainer: getRequiredElement(doc, "diff-summary-container"),
+  };
+
+  return {
+    messageList,
+    inputPanel,
+    sessionToolbar,
+    auxiliaryPanels,
+
+    messagesContainerEl: messageList.containerEl,
+    messagesEl: messageList.messagesEl,
+    inputEl: inputPanel.inputEl,
+    attachImageBtn: inputPanel.attachImageBtn,
+    imagePreviewPopover: inputPanel.imagePreviewPopover,
+    sendBtn: inputPanel.sendBtn,
+    stopBtn: inputPanel.stopBtn,
+    modeDropdown: sessionToolbar.modeDropdown,
+    modelDropdown: sessionToolbar.modelDropdown,
+    configOptionsContainer: sessionToolbar.configOptionsContainer,
+    contextUsageRing: sessionToolbar.contextUsageRing,
+    welcomeView: messageList.welcomeView,
+    commandAutocomplete: inputPanel.commandAutocomplete,
+    planContainer: auxiliaryPanels.planContainer,
+    typingIndicatorEl: messageList.typingIndicatorEl,
+    diffSummaryContainer: auxiliaryPanels.diffSummaryContainer,
+  };
+}
+
 suite("Webview", () => {
   function setupController() {
     const dom = new JSDOM(createWebviewHTML(), {
@@ -131,7 +186,6 @@ suite("Webview", () => {
     (global as any).NodeFilter = window.NodeFilter;
     const controller = new WebviewController(
       mockVsCode,
-      elements,
       doc,
       window as unknown as Window
     );
@@ -510,56 +564,6 @@ suite("Webview", () => {
     });
   });
 
-  suite("getElements", () => {
-    let dom: JSDOM;
-    let document: Document;
-
-    setup(() => {
-      dom = new JSDOM(createWebviewHTML());
-      document = dom.window.document;
-    });
-
-    teardown(() => {
-      dom.window.close();
-    });
-
-    test("returns all required elements", () => {
-      const elements = getElements(document);
-      assert.ok(elements.messagesEl);
-      assert.ok(elements.inputEl);
-      assert.ok(elements.sendBtn);
-      assert.ok(elements.stopBtn);
-      assert.ok(elements.modeDropdown);
-      assert.ok(elements.modelDropdown);
-      assert.ok(elements.configOptionsContainer);
-      assert.ok(elements.welcomeView);
-      assert.ok(elements.commandAutocomplete);
-      assert.ok(elements.typingIndicatorEl);
-    });
-
-    test("returns correct element types", () => {
-      const elements = getElements(document);
-      assert.strictEqual(elements.inputEl.tagName, "DIV");
-      assert.strictEqual(elements.sendBtn.tagName, "BUTTON");
-    });
-
-    test("groups elements by top-level components", () => {
-      const elements = getElements(document);
-      // Guard the compatibility aliases while controller code migrates from
-      // flat DOM handles to component-owned element groups.
-      assert.strictEqual(elements.messageList.messagesEl, elements.messagesEl);
-      assert.strictEqual(elements.inputPanel.inputEl, elements.inputEl);
-      assert.strictEqual(
-        elements.sessionToolbar.modeDropdown,
-        elements.modeDropdown
-      );
-      assert.strictEqual(
-        elements.auxiliaryPanels.planContainer,
-        elements.planContainer
-      );
-    });
-  });
-
   suite("WebviewController", () => {
     let dom: JSDOM;
     let document: Document;
@@ -672,7 +676,6 @@ suite("Webview", () => {
 
       controller = new WebviewController(
         mockVsCode,
-        elements,
         document,
         window as unknown as Window
       );
@@ -3106,7 +3109,6 @@ suite("Webview", () => {
         mockVsCode.setState({ isConnected: false, inputValue: "saved text" });
         new WebviewController(
           mockVsCode,
-          elements,
           document,
           window as unknown as Window
         );
@@ -3117,7 +3119,6 @@ suite("Webview", () => {
         mockVsCode.setState({ isConnected: true, inputValue: "" });
         const restoredController = new WebviewController(
           mockVsCode,
-          elements,
           document,
           window as unknown as Window
         );
@@ -3724,12 +3725,7 @@ suite("Webview", () => {
       });
 
       const elements = getElements(doc);
-      new WebviewController(
-        mockVsCode,
-        elements,
-        doc,
-        win as unknown as Window
-      );
+      new WebviewController(mockVsCode, doc, win as unknown as Window);
 
       assert.strictEqual(elements.diffSummaryContainer.style.display, "block");
       assert.ok(

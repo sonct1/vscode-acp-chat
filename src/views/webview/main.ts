@@ -13,15 +13,9 @@ import { WebviewRootComponent } from "./component/webview-root";
 import { MessageRouter, type MessageHandler } from "./message-router";
 import { StatePersistenceService } from "./state-persistence";
 import { EventBus } from "./event-bus";
-import { getRequiredElement } from "./widget/dom";
 import { AsyncSerialQueue } from "../../utils/async-queue";
 import type { WebviewContext } from "./context";
-import type {
-  VsCodeApi,
-  ExtensionMessage,
-  WebviewElements,
-  WebviewEventMap,
-} from "./types";
+import type { VsCodeApi, ExtensionMessage, WebviewEventMap } from "./types";
 
 declare function acquireVsCodeApi(): VsCodeApi;
 
@@ -39,7 +33,6 @@ declare function acquireVsCodeApi(): VsCodeApi;
  */
 export class WebviewController implements MessageHandler {
   private ctx: WebviewContext;
-  private elements: WebviewElements;
   private messageRouter: MessageRouter;
   private stateService: StatePersistenceService;
   private incomingNotifier = new AsyncSerialQueue();
@@ -53,12 +46,7 @@ export class WebviewController implements MessageHandler {
   private permissionDialog: PermissionDialog;
   private isConnected = false;
 
-  constructor(
-    vscode: VsCodeApi,
-    elements: WebviewElements,
-    doc: Document,
-    win: Window
-  ) {
+  constructor(vscode: VsCodeApi, doc: Document, win: Window) {
     this.messageRouter = new MessageRouter();
     this.stateService = new StatePersistenceService(vscode);
 
@@ -80,7 +68,6 @@ export class WebviewController implements MessageHandler {
     };
 
     const root = new WebviewRootComponent(this.ctx);
-    this.elements = root.elements;
     this.chipRenderer = root.chipRenderer;
     this.messageList = root.messageList;
     this.inputPanel = root.inputPanel;
@@ -310,69 +297,6 @@ export class WebviewController implements MessageHandler {
 }
 
 /**
- * Backward-compatible helper: look up DOM elements using the flat alias map.
- * Kept for the incremental test migration; remove when getElements moves
- * out of the public API.
- */
-export function getElements(doc: Document): WebviewElements {
-  const messageList = {
-    containerEl: getRequiredElement(doc, "messages-container"),
-    messagesEl: getRequiredElement(doc, "messages"),
-    typingIndicatorEl: getRequiredElement(doc, "typing-indicator"),
-    welcomeView: getRequiredElement(doc, "welcome-view"),
-  };
-
-  const sessionToolbar = {
-    modeDropdown: getRequiredElement(doc, "mode-dropdown"),
-    modelDropdown: getRequiredElement(doc, "model-dropdown"),
-    configOptionsContainer: getRequiredElement(doc, "config-options-container"),
-    contextUsageRing: getRequiredElement<HTMLDivElement>(
-      doc,
-      "context-usage-ring"
-    ),
-  };
-
-  const inputPanel = {
-    inputEl: getRequiredElement(doc, "input"),
-    commandAutocomplete: getRequiredElement(doc, "command-autocomplete"),
-    attachImageBtn: getRequiredElement<HTMLButtonElement>(doc, "attach-image"),
-    imagePreviewPopover: getRequiredElement(doc, "image-preview-popover"),
-    sendBtn: getRequiredElement<HTMLButtonElement>(doc, "send"),
-    stopBtn: getRequiredElement<HTMLButtonElement>(doc, "stop"),
-    toolbar: sessionToolbar,
-  };
-
-  const auxiliaryPanels = {
-    planContainer: getRequiredElement(doc, "agent-plan-container"),
-    diffSummaryContainer: getRequiredElement(doc, "diff-summary-container"),
-  };
-
-  return {
-    messageList,
-    inputPanel,
-    sessionToolbar,
-    auxiliaryPanels,
-
-    messagesContainerEl: messageList.containerEl,
-    messagesEl: messageList.messagesEl,
-    inputEl: inputPanel.inputEl,
-    attachImageBtn: inputPanel.attachImageBtn,
-    imagePreviewPopover: inputPanel.imagePreviewPopover,
-    sendBtn: inputPanel.sendBtn,
-    stopBtn: inputPanel.stopBtn,
-    modeDropdown: sessionToolbar.modeDropdown,
-    modelDropdown: sessionToolbar.modelDropdown,
-    configOptionsContainer: sessionToolbar.configOptionsContainer,
-    contextUsageRing: sessionToolbar.contextUsageRing,
-    welcomeView: messageList.welcomeView,
-    commandAutocomplete: inputPanel.commandAutocomplete,
-    planContainer: auxiliaryPanels.planContainer,
-    typingIndicatorEl: messageList.typingIndicatorEl,
-    diffSummaryContainer: auxiliaryPanels.diffSummaryContainer,
-  };
-}
-
-/**
  * Backward-compatible entry point.
  */
 export function initWebview(
@@ -380,8 +304,7 @@ export function initWebview(
   doc: Document,
   win: Window
 ): WebviewController {
-  const elements = getElements(doc);
-  return new WebviewController(vscode, elements, doc, win);
+  return new WebviewController(vscode, doc, win);
 }
 
 if (typeof acquireVsCodeApi !== "undefined") {
