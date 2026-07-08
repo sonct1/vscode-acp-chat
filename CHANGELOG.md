@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.5](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.4...v1.18.5) (2026-07-08)
+
+### Bug Fixes
+
+- **agents:** add -y flag to npx to skip interactive install prompt ([a356094](https://github.com/pengjiantao/vscode-acp-chat/commit/a35609462a96a27bb45c0c76acc635fd37c97b2f))
+- replace autocomplete query when inserting chip ([37fef01](https://github.com/pengjiantao/vscode-acp-chat/commit/37fef0192afeda5681409d1b21ad0e2ea9898e1a))
+
+### Code Refactoring
+
+- remove unused getElements from production code ([9bcace4](https://github.com/pengjiantao/vscode-acp-chat/commit/9bcace442aa5dfd7f69a556d032ceb1e153238b1))
+- remove utility methods from WebviewContext, use direct imports ([4b79ff2](https://github.com/pengjiantao/vscode-acp-chat/commit/4b79ff29da5cb1951244c957d0892003a9cf6898))
+- simplify newChat/clearChat by removing unnecessary message round-trip ([227bcc1](https://github.com/pengjiantao/vscode-acp-chat/commit/227bcc1dd39f297b232a92b9e9004b5f25a55485))
+- **webview:** decompose WebviewController into component classes ([7f8af89](https://github.com/pengjiantao/vscode-acp-chat/commit/7f8af8949196fa53e24c4ae25fbe7f4e6892ac50))
+- **webview:** introduce typed EventBus for intra-component communication ([a399583](https://github.com/pengjiantao/vscode-acp-chat/commit/a3995831143a34f27a3c24be1221cc9c18e6225e))
+- **webview:** introduce WebviewContext, MessageHandler registration, and block widget hierarchy ([802ac59](https://github.com/pengjiantao/vscode-acp-chat/commit/802ac59c5d9487478561513b6cc53592ac6022f8))
+- **webview:** move event wiring to components and eliminate duplicate initialization ([7aa4330](https://github.com/pengjiantao/vscode-acp-chat/commit/7aa43302a184a9d123accc5da8f82c45a63b8a5f))
+- **webview:** move state persistence into owning components ([c726de8](https://github.com/pengjiantao/vscode-acp-chat/commit/c726de8a5955d222e41003e23cdb97d364b7cbd1))
+
 ### [1.18.4](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.3...v1.18.4) (2026-07-07)
 
 ### Bug Fixes
