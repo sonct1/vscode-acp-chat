@@ -1,6 +1,5 @@
 import type { WebviewContext } from "../context";
 import type { MessageHandler } from "../message-router";
-import type { ChipRendererComponent } from "./chip-renderer";
 import type { AvailableCommand, ExtensionMessage, Mention } from "../types";
 
 interface FileResult {
@@ -33,9 +32,42 @@ export class AutocompleteComponent implements MessageHandler {
       inputEl: HTMLElement;
       commandAutocomplete: HTMLElement;
     },
-    private chipRenderer: ChipRendererComponent
+    private onSelect?: (result: string | Mention) => void
   ) {
     ctx.messageRouter.register("fileSearchResults", this);
+    this.setupEventListeners();
+  }
+
+  private setupEventListeners(): void {
+    const { commandAutocomplete } = this.elements;
+
+    commandAutocomplete.addEventListener("mousedown", (e) => {
+      const item = (e.target as HTMLElement).closest(".command-item");
+      if (item) {
+        e.preventDefault();
+      }
+    });
+
+    commandAutocomplete.addEventListener("click", (e) => {
+      const item = (e.target as HTMLElement).closest(".command-item");
+      if (item) {
+        e.stopPropagation();
+        const index = parseInt(item.getAttribute("data-index") || "0", 10);
+        const result = this.selectAt(index);
+        if (result && this.onSelect) {
+          this.onSelect(result);
+        }
+      }
+    });
+
+    commandAutocomplete.addEventListener("mouseover", (e) => {
+      const item = (e.target as HTMLElement).closest(".command-item");
+      if (item) {
+        const index = parseInt(item.getAttribute("data-index") || "0", 10);
+        this.selectedIndex = index;
+        this.updateSelection();
+      }
+    });
   }
 
   // -------------------------------------------------------------------

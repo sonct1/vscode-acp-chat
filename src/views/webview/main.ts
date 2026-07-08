@@ -9,10 +9,11 @@ import { InputPanelComponent } from "./component/input-panel";
 import { MessageListComponent } from "./component/message-list";
 import { SessionToolbarComponent } from "./component/session-toolbar";
 import { ChipRendererComponent } from "./component/chip-renderer";
-import { createWebviewRoot } from "./component/webview-root";
+import { WebviewRootComponent } from "./component/webview-root";
 import { MessageRouter, type MessageHandler } from "./message-router";
 import { StatePersistenceService } from "./state-persistence";
 import { EventBus } from "./event-bus";
+import { getRequiredElement } from "./widget/dom";
 import { AsyncSerialQueue } from "../../utils/async-queue";
 import type { WebviewContext } from "./context";
 import type {
@@ -79,26 +80,15 @@ export class WebviewController implements MessageHandler {
         this.messageList.scrollToBottom(force ?? false),
     };
 
-    this.chipRenderer = new ChipRendererComponent(this.ctx);
-    this.elements = elements;
+    const root = new WebviewRootComponent(this.ctx);
+    this.elements = root.elements;
+    this.chipRenderer = root.chipRenderer;
+    this.messageList = root.messageList;
+    this.inputPanel = root.inputPanel;
+    this.sessionToolbar = root.sessionToolbar;
+    this.auxiliaryPanels = root.auxiliaryPanels;
 
-    this.messageList = new MessageListComponent(this.ctx, {
-      elements: this.elements.messageList,
-      chipRenderer: this.chipRenderer,
-    });
-
-    this.inputPanel = new InputPanelComponent(this.ctx, {
-      elements: this.elements.inputPanel,
-      chipRenderer: this.chipRenderer,
-    });
-
-    this.sessionToolbar = new SessionToolbarComponent(this.ctx, {
-      elements: this.elements.sessionToolbar,
-    });
-
-    this.auxiliaryPanels = new AuxiliaryPanelsComponent(this.ctx, {
-      elements: this.elements.auxiliaryPanels,
-    });
+    this.inputPanel.onStateChange = () => this.saveState();
 
     this.permissionDialog = new PermissionDialog(
       this.ctx,
@@ -328,120 +318,6 @@ export class WebviewController implements MessageHandler {
   // -------------------------------------------------------------------
 
   private setupEventListeners(): void {
-    const { sendBtn, stopBtn, inputEl, commandAutocomplete } = this.elements;
-
-    sendBtn.addEventListener("click", () => this.inputPanel.send());
-    stopBtn.addEventListener("click", () => {
-      this.ctx.vscode.postMessage({ type: "stop" });
-    });
-
-    inputEl.addEventListener("keydown", (e) => {
-      // Let autocomplete handle keys first
-      if (this.inputPanel.autocomplete.handleKeyDown(e)) {
-        // If Enter/Tab was pressed with a selection, insert the chip
-        if (
-          (e.key === "Tab" || e.key === "Enter") &&
-          this.inputPanel.autocomplete.isActive()
-        ) {
-          const result = this.inputPanel.autocomplete.selectCurrent();
-          if (result) {
-            if (typeof result === "string") {
-              this.inputPanel.insertCommandChip(result);
-            } else {
-              this.inputPanel.insertMentionChip(result);
-            }
-          }
-          this.saveState();
-          this.inputPanel.updateInputState();
-        }
-        return;
-      }
-
-      if (
-        e.key === "Enter" &&
-        !e.shiftKey &&
-        !this.inputPanel.getIsGenerating()
-      ) {
-        e.preventDefault();
-        this.inputPanel.send();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        this.inputPanel.clearInput();
-        this.inputPanel.autocomplete.hide();
-        this.saveState();
-        this.inputPanel.updateInputState();
-      }
-    });
-
-    inputEl.addEventListener("input", () => {
-      this.inputPanel.adjustHeight();
-      this.inputPanel.autocomplete.update();
-      this.saveState();
-      this.inputPanel.updateInputState();
-    });
-
-    inputEl.addEventListener("paste", (e) => {
-      const insertedText = this.inputPanel.handlePaste(
-        e as unknown as Parameters<typeof this.inputPanel.handlePaste>[0],
-        (file) =>
-          this.inputPanel.handleImageAttachment(file, (mention) =>
-            this.inputPanel.insertMentionChip(mention)
-          )
-      );
-      if (!insertedText) return;
-      this.inputPanel.autocomplete.update();
-      this.saveState();
-      this.inputPanel.updateInputState();
-    });
-
-    this.inputPanel.setupAttachImageButton((file) =>
-      this.inputPanel.handleImageAttachment(file, (mention) =>
-        this.inputPanel.insertMentionChip(mention)
-      )
-    );
-
-    commandAutocomplete.addEventListener("mousedown", (e) => {
-      const item = (e.target as HTMLElement).closest(".command-item");
-      if (item) {
-        e.preventDefault();
-      }
-    });
-
-    commandAutocomplete.addEventListener("click", (e) => {
-      const item = (e.target as HTMLElement).closest(".command-item");
-      if (item) {
-        e.stopPropagation();
-        const index = parseInt(item.getAttribute("data-index") || "0", 10);
-        const result = this.inputPanel.autocomplete.selectAt(index);
-        if (result) {
-          if (typeof result === "string") {
-            this.inputPanel.insertCommandChip(result);
-          } else {
-            this.inputPanel.insertMentionChip(result);
-          }
-        }
-        this.saveState();
-        this.inputPanel.updateInputState();
-      }
-    });
-
-    commandAutocomplete.addEventListener("mouseover", (e) => {
-      const item = (e.target as HTMLElement).closest(".command-item");
-      if (item) {
-        const index = parseInt(item.getAttribute("data-index") || "0", 10);
-        const items = commandAutocomplete.querySelectorAll(".command-item");
-        items.forEach((it, i) => {
-          if (i === index) {
-            it.classList.add("selected");
-            it.setAttribute("aria-selected", "true");
-          } else {
-            it.classList.remove("selected");
-            it.setAttribute("aria-selected", "false");
-          }
-        });
-      }
-    });
-
     this.ctx.win.addEventListener(
       "message",
       (e: MessageEvent<ExtensionMessage>) =>
@@ -478,27 +354,61 @@ export class WebviewController implements MessageHandler {
  * out of the public API.
  */
 export function getElements(doc: Document): WebviewElements {
-  // Build a minimal context for DOM lookup only (no message routing).
-  const router = new MessageRouter();
-  const mockVscode: VsCodeApi = {
-    postMessage: () => {},
-    getState: () => undefined,
-    setState: (s) => s,
+  const messageList = {
+    containerEl: getRequiredElement(doc, "messages-container"),
+    messagesEl: getRequiredElement(doc, "messages"),
+    typingIndicatorEl: getRequiredElement(doc, "typing-indicator"),
+    welcomeView: getRequiredElement(doc, "welcome-view"),
   };
-  const ctx: WebviewContext = {
-    vscode: mockVscode,
-    doc,
-    win: (doc.defaultView ?? globalThis) as unknown as Window,
-    stateService: new StatePersistenceService(mockVscode),
-    messageRouter: router,
-    eventBus: new EventBus<WebviewEventMap>(),
-    escapeHtml,
-    renderMarkdown: (c: string) => marked.parse(c) as string,
-    getFileIconHtml,
-    getFolderIconHtml,
-    scrollToBottom: () => {},
+
+  const sessionToolbar = {
+    modeDropdown: getRequiredElement(doc, "mode-dropdown"),
+    modelDropdown: getRequiredElement(doc, "model-dropdown"),
+    configOptionsContainer: getRequiredElement(doc, "config-options-container"),
+    contextUsageRing: getRequiredElement<HTMLDivElement>(
+      doc,
+      "context-usage-ring"
+    ),
   };
-  return createWebviewRoot(ctx);
+
+  const inputPanel = {
+    inputEl: getRequiredElement(doc, "input"),
+    commandAutocomplete: getRequiredElement(doc, "command-autocomplete"),
+    attachImageBtn: getRequiredElement<HTMLButtonElement>(doc, "attach-image"),
+    imagePreviewPopover: getRequiredElement(doc, "image-preview-popover"),
+    sendBtn: getRequiredElement<HTMLButtonElement>(doc, "send"),
+    stopBtn: getRequiredElement<HTMLButtonElement>(doc, "stop"),
+    toolbar: sessionToolbar,
+  };
+
+  const auxiliaryPanels = {
+    planContainer: getRequiredElement(doc, "agent-plan-container"),
+    diffSummaryContainer: getRequiredElement(doc, "diff-summary-container"),
+  };
+
+  return {
+    messageList,
+    inputPanel,
+    sessionToolbar,
+    auxiliaryPanels,
+
+    messagesContainerEl: messageList.containerEl,
+    messagesEl: messageList.messagesEl,
+    inputEl: inputPanel.inputEl,
+    attachImageBtn: inputPanel.attachImageBtn,
+    imagePreviewPopover: inputPanel.imagePreviewPopover,
+    sendBtn: inputPanel.sendBtn,
+    stopBtn: inputPanel.stopBtn,
+    modeDropdown: sessionToolbar.modeDropdown,
+    modelDropdown: sessionToolbar.modelDropdown,
+    configOptionsContainer: sessionToolbar.configOptionsContainer,
+    contextUsageRing: sessionToolbar.contextUsageRing,
+    welcomeView: messageList.welcomeView,
+    commandAutocomplete: inputPanel.commandAutocomplete,
+    planContainer: auxiliaryPanels.planContainer,
+    typingIndicatorEl: messageList.typingIndicatorEl,
+    diffSummaryContainer: auxiliaryPanels.diffSummaryContainer,
+  };
 }
 
 /**

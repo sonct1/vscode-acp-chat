@@ -4,6 +4,7 @@ import { AuxiliaryPanelsComponent } from "./auxiliary-panels";
 import { InputPanelComponent } from "./input-panel";
 import { MessageListComponent } from "./message-list";
 import { ChipRendererComponent } from "./chip-renderer";
+import { SessionToolbarComponent } from "./session-toolbar";
 
 /**
  * Top-level DOM composition for the webview. It builds component-owned element
@@ -15,6 +16,7 @@ import { ChipRendererComponent } from "./chip-renderer";
 export class WebviewRootComponent {
   readonly messageList: MessageListComponent;
   readonly inputPanel: InputPanelComponent;
+  readonly sessionToolbar: SessionToolbarComponent;
   readonly auxiliaryPanels: AuxiliaryPanelsComponent;
   readonly chipRenderer: ChipRendererComponent;
   readonly elements: WebviewElements;
@@ -27,13 +29,16 @@ export class WebviewRootComponent {
     this.inputPanel = new InputPanelComponent(ctx, {
       chipRenderer: this.chipRenderer,
     });
+    this.sessionToolbar = new SessionToolbarComponent(ctx, {
+      elements: this.inputPanel.elements.toolbar,
+    });
     this.auxiliaryPanels = new AuxiliaryPanelsComponent(ctx);
 
     // Keep this alias map so existing code can consume flat fields while
     // the migration to component-owned elements proceeds.
     const messageList = this.messageList.elements;
     const inputPanel = this.inputPanel.elements;
-    const sessionToolbar = inputPanel.toolbar;
+    const sessionToolbar = this.sessionToolbar.elements;
     const auxiliaryPanels = this.auxiliaryPanels.elements;
 
     this.elements = {
@@ -60,8 +65,4 @@ export class WebviewRootComponent {
       diffSummaryContainer: auxiliaryPanels.diffSummaryContainer,
     };
   }
-}
-
-export function createWebviewRoot(ctx: WebviewContext): WebviewElements {
-  return new WebviewRootComponent(ctx).elements;
 }

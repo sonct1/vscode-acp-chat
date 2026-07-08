@@ -267,7 +267,7 @@ export function ansiToHtml(text: string): string {
     return html;
   };
 
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const remaining = text.slice(i);
     const oscMatch = remaining.match(OSC_PREFIX_REGEX);
     if (oscMatch) {

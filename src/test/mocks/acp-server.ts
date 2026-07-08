@@ -237,8 +237,7 @@ export class MockACPServer {
 
     // Store the user message in history
     const promptItems = params?.prompt as
-      | Array<{ type: string; text?: string }>
-      | undefined;
+      Array<{ type: string; text?: string }> | undefined;
     if (promptItems) {
       for (const item of promptItems) {
         if (item.type === "text" && item.text) {

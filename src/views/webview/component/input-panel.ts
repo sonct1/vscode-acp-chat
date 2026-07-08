@@ -27,8 +27,7 @@ export class InputPanelComponent implements MessageHandler {
 
   private isGenerating = false;
 
-  /** Callback to insert a mention chip into the input element. */
-  onInsertMentionChip?: (mention: Mention) => void;
+  onStateChange?: () => void;
 
   constructor(
     private ctx: WebviewContext,
@@ -69,11 +68,13 @@ export class InputPanelComponent implements MessageHandler {
         inputEl: this.elements.inputEl,
         commandAutocomplete: this.elements.commandAutocomplete,
       },
-      this.chipRenderer
+      (result) => this.handleAutocompleteSelection(result)
     );
 
     // Register for addMention messages.
     ctx.messageRouter.register("addMention", this);
+
+    this.setupEventListeners();
   }
 
   // -------------------------------------------------------------------
@@ -96,7 +97,77 @@ export class InputPanelComponent implements MessageHandler {
     this.autocomplete.setAvailableCommands(commands);
   }
 
-  setupAttachImageButton(onFile: (file: File) => void): void {
+  private handleAutocompleteSelection(result: string | Mention): void {
+    if (typeof result === "string") {
+      this.insertCommandChip(result);
+    } else {
+      this.insertMentionChip(result);
+    }
+    this.onStateChange?.();
+    this.updateInputState();
+  }
+
+  private setupEventListeners(): void {
+    const { sendBtn, stopBtn, inputEl } = this.elements;
+
+    sendBtn.addEventListener("click", () => this.send());
+    stopBtn.addEventListener("click", () => {
+      this.ctx.vscode.postMessage({ type: "stop" });
+    });
+
+    inputEl.addEventListener("keydown", (e) => {
+      // Let autocomplete handle keys first
+      if (this.autocomplete.handleKeyDown(e)) {
+        // If Enter/Tab was pressed with a selection, insert the chip
+        if (
+          (e.key === "Tab" || e.key === "Enter") &&
+          this.autocomplete.isActive()
+        ) {
+          const result = this.autocomplete.selectCurrent();
+          if (result) {
+            this.handleAutocompleteSelection(result);
+          }
+        }
+        return;
+      }
+
+      if (e.key === "Enter" && !e.shiftKey && !this.getIsGenerating()) {
+        e.preventDefault();
+        this.send();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.clearInput();
+        this.autocomplete.hide();
+        this.onStateChange?.();
+        this.updateInputState();
+      }
+    });
+
+    inputEl.addEventListener("input", () => {
+      this.adjustHeight();
+      this.autocomplete.update();
+      this.onStateChange?.();
+      this.updateInputState();
+    });
+
+    inputEl.addEventListener("paste", (e) => {
+      const insertedText = this.handlePaste(
+        e as unknown as Parameters<typeof this.handlePaste>[0],
+        (file) =>
+          this.handleImageAttachment(file, (mention) =>
+            this.insertMentionChip(mention)
+          )
+      );
+      if (!insertedText) return;
+      this.autocomplete.update();
+      this.onStateChange?.();
+      this.updateInputState();
+    });
+
+    this.setupAttachImageButton();
+  }
+
+  private setupAttachImageButton(): void {
     this.elements.attachImageBtn.addEventListener("click", () => {
       const input = this.ctx.doc.createElement("input");
       input.type = "file";
@@ -104,7 +175,11 @@ export class InputPanelComponent implements MessageHandler {
       input.multiple = true;
       input.onchange = () => {
         if (input.files) {
-          Array.from(input.files).forEach((file) => onFile(file));
+          Array.from(input.files).forEach((file) => {
+            this.handleImageAttachment(file, (mention) =>
+              this.insertMentionChip(mention)
+            );
+          });
         }
       };
       input.click();

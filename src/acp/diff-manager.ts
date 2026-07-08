@@ -94,11 +94,9 @@ export class DiffManager {
             });
           } catch (e) {
             // Ignore if file is already gone
-            if (
-              !(
-                e instanceof vscode.FileSystemError && e.code === "FileNotFound"
-              )
-            ) {
+            if (!(
+              e instanceof vscode.FileSystemError && e.code === "FileNotFound"
+            )) {
               throw e;
             }
           }

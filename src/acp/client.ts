@@ -223,10 +223,7 @@ function flattenSelectOptions(
 }
 
 export type ACPConnectionState =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "error";
+  "disconnected" | "connecting" | "connected" | "error";
 
 type StateChangeCallback = (state: ACPConnectionState) => void;
 type SessionUpdateCallback = (
