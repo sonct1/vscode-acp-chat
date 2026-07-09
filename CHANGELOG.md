@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.7](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.6...v1.18.7) (2026-07-09)
+
+### Bug Fixes
+
+- select current session in Load History QuickPick ([bfdfe03](https://github.com/pengjiantao/vscode-acp-chat/commit/bfdfe035525ada74998196d552c8808af6bdcee6))
+
 ### [1.18.6](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.5...v1.18.6) (2026-07-09)
 
 ### Bug Fixes
