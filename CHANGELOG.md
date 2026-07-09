@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.18.6](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.5...v1.18.6) (2026-07-09)
+
+### Bug Fixes
+
+- add zod as explicit dependency to fix npm ci peer dep resolution ([245c7b8](https://github.com/pengjiantao/vscode-acp-chat/commit/245c7b81ff20f0d8975f8dedf0da71b230a16d7c))
+
 ### [1.18.5](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.4...v1.18.5) (2026-07-08)
 
 ### Bug Fixes
