@@ -319,7 +319,8 @@
     "@baybreezy/file-extension-icon": "^0.0.5",
     "@vscode/codicons": "^0.0.45",
     "highlight.js": "^11.11.1",
-    "marked": "^18.0.5"
+    "marked": "^18.0.5",
+    "zod": "^3.25.0"
   },
   "lint-staged": {
     "*.{ts,js,mjs}": [
