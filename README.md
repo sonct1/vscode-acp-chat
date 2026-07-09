@@ -3,9 +3,10 @@
 > AI coding agents in VS Code via the Agent Client Protocol (ACP)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/fiyqkrc.vscode-acp-chat?style=flat-square)](https://marketplace.visualstudio.com/items?itemName=fiyqkrc.vscode-acp-chat)
 
 [VSCode ACP Chat](https://github.com/pengjiantao/vscode-acp-chat) allows you to chat with Claude, OpenCode, and other ACP-compatible AI agents directly in your editor. No context switching, no copy-pasting code. If you encounter any problems, please report them to [Issues](https://github.com/pengjiantao/vscode-acp-chat/issues).
+
+> **Note:** This is NOT an official ACP protocol or any agent's official VS Code integration. It's a community-driven project. If you find this extension helpful, please consider giving it a ⭐ on [GitHub](https://github.com/pengjiantao/vscode-acp-chat)!
 
 ![VSCode ACP Chat Sidebar](screenshots/acp-sidebar.png)
 
@@ -61,7 +62,7 @@ The extension automatically detects installed agents by checking your system's `
 | -------------- | ------------------------------------------- | -------------- |
 | OpenCode       | `opencode acp`                              | Checks `$PATH` |
 | Claude Code    | `npx @agentclientprotocol/claude-agent-acp` | Checks `$PATH` |
-| Codex CLI      | `npx @zed-industries/codex-acp`             | Checks `$PATH` |
+| Codex CLI      | `npx @agentclientprotocol/codex-acp`        | Checks `$PATH` |
 | CodeBuddy Code | `codebuddy --acp`                           | Checks `$PATH` |
 | Gemini CLI     | `gemini --acp`                              | Checks `$PATH` |
 | Goose          | `goose acp`                                 | Checks `$PATH` |
