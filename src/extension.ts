@@ -158,6 +158,16 @@ export function activate(context: vscode.ExtensionContext) {
         quickPick.placeholder = "Select a conversation to load";
         quickPick.title = "VSCode ACP: Load History";
 
+        const currentSessionId = acpClient?.getCurrentSessionId();
+        if (currentSessionId) {
+          const activeItem = items.find(
+            (item) => item.sessionId === currentSessionId
+          );
+          if (activeItem) {
+            quickPick.activeItems = [activeItem];
+          }
+        }
+
         quickPick.onDidAccept(async () => {
           const selected = quickPick.selectedItems[0];
           if (selected && chatProvider) {
