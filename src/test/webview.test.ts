@@ -3543,7 +3543,7 @@ suite("Webview", () => {
       );
     });
 
-    test("renders selected agent select in session manager header", () => {
+    test("renders selected agent identity in session manager header", () => {
       controller.handleMessage({
         type: "feature.multi-session.state",
         enabled: true,
@@ -3581,31 +3581,24 @@ suite("Webview", () => {
         document.querySelector(".multi-session-close-overlay"),
         null
       );
-
-      const select = document.querySelector(
-        ".multi-session-agent-select"
-      ) as HTMLSelectElement;
-      assert.strictEqual(select.value, "opencode");
-      assert.deepStrictEqual(
-        [...select.options].map((option) => [option.value, option.textContent]),
-        [
-          ["claude-code", "Claude Code"],
-          ["opencode", "OpenCode"],
-        ]
+      assert.strictEqual(
+        document.querySelector(".multi-session-agent-select"),
+        null
       );
 
-      select.value = "claude-code";
-      select.dispatchEvent(new window.Event("change", { bubbles: true }));
-
-      assert.ok(
-        mockVsCode
-          ._getMessages()
-          .some(
-            (message: any) =>
-              message.type === "feature.multi-session.selectAgent" &&
-              message.agentId === "claude-code"
-          )
+      const currentAgent = document.querySelector(
+        ".multi-session-agent-current"
+      ) as HTMLElement;
+      assert.ok(currentAgent);
+      assert.strictEqual(
+        currentAgent.getAttribute("aria-label"),
+        "Selected agent: OpenCode"
       );
+      assert.strictEqual(
+        currentAgent.querySelector(".multi-session-agent-name")?.textContent,
+        "OpenCode"
+      );
+      assert.ok(currentAgent.querySelector(".codicon-code"));
     });
 
     test("keeps the prompt cleared after sending in an active multi-session", async () => {

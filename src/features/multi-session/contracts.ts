@@ -99,7 +99,6 @@ export interface MultiSessionDeltaMessage {
 export type MultiSessionHostMessage =
   | { type: "feature.multi-session.ready" }
   | { type: "feature.multi-session.new" }
-  | { type: "feature.multi-session.selectAgent"; agentId: string }
   | { type: "feature.multi-session.activate"; localSessionId: string }
   | { type: "feature.multi-session.stop"; localSessionId?: string }
   | { type: "feature.multi-session.close"; localSessionId: string }

@@ -29,7 +29,7 @@ export class MultiSessionWebviewController {
   private title: HTMLElement;
   private status: HTMLElement;
   private sessionsButton: HTMLButtonElement;
-  private agentSelect: HTMLSelectElement;
+  private agentIdentity: HTMLElement;
   private previousFocus: HTMLElement | undefined;
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
@@ -60,9 +60,9 @@ export class MultiSessionWebviewController {
     this.sessionsButton = this.header.querySelector(
       ".multi-session-open"
     ) as HTMLButtonElement;
-    this.agentSelect = this.overlay.querySelector(
-      ".multi-session-agent-select"
-    ) as HTMLSelectElement;
+    this.agentIdentity = this.overlay.querySelector(
+      ".multi-session-agent-current"
+    ) as HTMLElement;
     // The host owns the feature flag. Keep the feature UI hidden until the
     // initial state handshake confirms that multi-session is enabled.
     this.header.hidden = true;
@@ -246,7 +246,7 @@ export class MultiSessionWebviewController {
     list.innerHTML = "";
     list.setAttribute("role", "list");
 
-    this.renderAgentSelect();
+    this.renderAgentIdentity();
 
     const ordered = [...this.sessions].sort(compareSessions);
     for (const session of ordered) {
@@ -358,7 +358,7 @@ export class MultiSessionWebviewController {
     overlay.setAttribute("aria-label", "Session manager");
     overlay.setAttribute("aria-modal", "true");
     overlay.tabIndex = -1;
-    overlay.innerHTML = `<div class="multi-session-overlay-head"><div><strong>Sessions</strong><span class="multi-session-overlay-subtitle">Open chats in this workspace</span></div><div class="multi-session-overlay-actions"><select id="multi-session-agent-select" class="multi-session-agent-select" aria-label="Select agent"></select></div></div><div class="multi-session-list"></div>`;
+    overlay.innerHTML = `<div class="multi-session-overlay-head"><div><strong>Sessions</strong><span class="multi-session-overlay-subtitle">Open chats in this workspace</span></div><div class="multi-session-overlay-actions"><span class="multi-session-agent-current" aria-label="Selected agent"></span></div></div><div class="multi-session-list"></div>`;
     overlay.addEventListener("keydown", (event) => {
       if (event.key === "Tab") {
         this.trapOverlayFocus(event);
@@ -368,18 +368,6 @@ export class MultiSessionWebviewController {
       event.preventDefault();
       this.setManagerOpen(false);
       this.vscode.postMessage({ type: "feature.multi-session.hideManager" });
-    });
-    const agentSelect = overlay.querySelector(
-      ".multi-session-agent-select"
-    ) as HTMLSelectElement;
-    agentSelect.addEventListener("change", () => {
-      const agentId = agentSelect.value;
-      if (!agentId || agentId === this.selectedAgentId) return;
-      this.selectedAgentId = agentId;
-      this.vscode.postMessage({
-        type: "feature.multi-session.selectAgent",
-        agentId,
-      });
     });
     return overlay;
   }
@@ -451,22 +439,43 @@ export class MultiSessionWebviewController {
     }
   }
 
-  private renderAgentSelect(): void {
-    const selected = this.selectedAgentId;
-    this.agentSelect.textContent = "";
+  private renderAgentIdentity(): void {
+    const agent = this.getSelectedAgent();
+    this.agentIdentity.textContent = "";
+    this.agentIdentity.hidden = !agent;
+    if (!agent) return;
 
-    for (const agent of this.agents) {
-      const option = this.doc.createElement("option");
-      option.value = agent.id;
-      option.textContent = agent.name;
-      option.selected = agent.id === selected;
-      this.agentSelect.append(option);
+    this.agentIdentity.setAttribute(
+      "aria-label",
+      `Selected agent: ${agent.name}`
+    );
+    this.agentIdentity.title = agent.name;
+
+    const icon = this.doc.createElement("span");
+    icon.className = `codicon ${agentIconClass(agent.id)}`;
+    icon.setAttribute("aria-hidden", "true");
+
+    const name = this.doc.createElement("span");
+    name.className = "multi-session-agent-name";
+    name.textContent = agent.name;
+
+    this.agentIdentity.append(icon, name);
+  }
+
+  private getSelectedAgent(): MultiSessionAgentOption | undefined {
+    const selected = this.selectedAgentId
+      ? this.agents.find((agent) => agent.id === this.selectedAgentId)
+      : undefined;
+    if (selected) return selected;
+
+    const activeSession = this.sessions.find(
+      (session) => session.localSessionId === this.activeLocalSessionId
+    );
+    if (activeSession) {
+      return { id: activeSession.agentId, name: activeSession.agentName };
     }
 
-    this.agentSelect.disabled = this.agents.length === 0;
-    if (selected && this.agentSelect.value !== selected) {
-      this.agentSelect.value = selected;
-    }
+    return this.agents[0];
   }
 
   private activateSession(session: MultiSessionListItem): void {
@@ -711,6 +720,27 @@ function describeSessionManagerButton(
 
 function buildSessionMeta(session: MultiSessionListItem): string {
   return [formatStatus(session.status), session.agentName].join(" · ");
+}
+
+function agentIconClass(agentId: string): string {
+  const iconByAgent: Record<string, string> = {
+    opencode: "codicon-code",
+    "claude-code": "codicon-sparkle",
+    codex: "codicon-openai",
+    gemini: "codicon-sparkle-filled",
+    goose: "codicon-github-alt",
+    amp: "codicon-zap",
+    aider: "codicon-tools",
+    augment: "codicon-copilot",
+    kimi: "codicon-color-mode",
+    "mistral-vibe": "codicon-flame",
+    openhands: "codicon-hubot",
+    "qwen-code": "codicon-symbol-color",
+    kiro: "codicon-rocket",
+    cursor: "codicon-cursor",
+    codebuddy: "codicon-comment-discussion-sparkle",
+  };
+  return iconByAgent[agentId] ?? "codicon-agent";
 }
 
 function statusIcon(doc: Document, status: string): HTMLElement {

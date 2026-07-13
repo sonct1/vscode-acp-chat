@@ -30,12 +30,13 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-open-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:999px;font-size:10px;line-height:16px;color:var(--vscode-badge-foreground);background:var(--vscode-badge-background)}
 .multi-session-open-badge.permission{color:var(--vscode-foreground);background:var(--vscode-inputValidation-warningBackground,transparent);border:1px solid var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow))}
 .multi-session-overlay{position:fixed;inset:0;background:var(--vscode-sideBar-background);z-index:1000;display:flex;flex-direction:column;outline:none}
-.multi-session-overlay-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:10px 12px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}
+.multi-session-overlay-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:8px 12px 10px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}
 .multi-session-overlay-head strong{display:block;font-size:13px;font-weight:600;line-height:1.3;color:var(--vscode-foreground)}
 .multi-session-overlay-subtitle{display:block;margin-top:2px;font-size:11px;color:var(--vscode-descriptionForeground)}
-.multi-session-overlay-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.multi-session-agent-select{height:28px;max-width:180px;padding:3px 24px 3px 8px;border:1px solid var(--vscode-dropdown-border,var(--vscode-panel-border));border-radius:var(--border-radius-small,3px);color:var(--vscode-dropdown-foreground,var(--vscode-foreground));background:var(--vscode-dropdown-background,var(--vscode-editor-background));font:inherit;font-size:12px;line-height:1.2}
-.multi-session-agent-select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
+.multi-session-overlay-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;min-width:0}
+.multi-session-agent-current{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;min-height:22px;max-width:180px;color:var(--vscode-descriptionForeground);font-size:12px;line-height:1.2;white-space:nowrap}
+.multi-session-agent-current .codicon{font-size:14px;color:var(--vscode-icon-foreground,var(--vscode-descriptionForeground));opacity:.9}
+.multi-session-agent-name{overflow:hidden;text-overflow:ellipsis;color:var(--vscode-foreground)}
 .multi-session-list{overflow:auto;padding:4px 0}
 .multi-session-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;border-bottom:1px solid var(--vscode-panel-border);min-height:52px}
 .multi-session-item:hover{background:rgba(127,127,127,.08);background:color-mix(in srgb,var(--vscode-foreground) 7%,transparent)}
@@ -57,6 +58,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-badge-diff{color:var(--vscode-descriptionForeground)}
 .multi-session-actions{display:flex;align-items:center;justify-content:flex-end;gap:2px;flex-wrap:wrap;padding:8px 8px 8px 0}
 @keyframes multi-session-spin{to{transform:rotate(360deg)}}
-@media(max-width:420px){.multi-session-item{grid-template-columns:1fr}.multi-session-item-main{grid-template-columns:16px minmax(0,1fr);padding-bottom:4px}.multi-session-badges{grid-column:2;justify-content:flex-start}.multi-session-actions{justify-content:flex-start;padding:0 8px 8px 36px}.multi-session-overlay-head{align-items:center}.multi-session-overlay-subtitle{display:none}.multi-session-agent-select{max-width:150px}}
+@media(max-width:420px){.multi-session-item{grid-template-columns:1fr}.multi-session-item-main{grid-template-columns:16px minmax(0,1fr);padding-bottom:4px}.multi-session-badges{grid-column:2;justify-content:flex-start}.multi-session-actions{justify-content:flex-start;padding:0 8px 8px 36px}.multi-session-overlay-head{align-items:center}.multi-session-overlay-subtitle{display:none}.multi-session-agent-current{max-width:150px}}
 @media(prefers-reduced-motion:reduce){.multi-session-status.busy::before,.multi-session-spinner{animation:none}.multi-session-status-icon.codicon-modifier-spin{animation:none!important}}
 `;

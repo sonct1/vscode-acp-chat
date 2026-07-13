@@ -230,10 +230,7 @@ suite("multi-session feature", () => {
   test("switching the selected agent updates draft sessions and state", async () => {
     const { controller, messages } = createController();
 
-    await controller.handleMessage({
-      type: "feature.multi-session.selectAgent",
-      agentId: "opencode",
-    });
+    await controller.switchAgent("opencode");
 
     const state = [...messages]
       .reverse()

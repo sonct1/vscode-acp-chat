@@ -188,9 +188,6 @@ export class MultiSessionHostController implements vscode.Disposable {
       case "feature.multi-session.new":
         await this.newChat();
         return true;
-      case "feature.multi-session.selectAgent":
-        await this.switchAgent(message.agentId);
-        return true;
       case "feature.multi-session.activate":
         this.activate(message.localSessionId);
         return true;
