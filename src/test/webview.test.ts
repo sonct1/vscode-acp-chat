@@ -3573,8 +3573,14 @@ suite("Webview", () => {
         managerOpen: true,
       } as any);
 
-      assert.strictEqual(document.querySelector(".multi-session-new-overlay"), null);
-      assert.strictEqual(document.querySelector(".multi-session-close-overlay"), null);
+      assert.strictEqual(
+        document.querySelector(".multi-session-new-overlay"),
+        null
+      );
+      assert.strictEqual(
+        document.querySelector(".multi-session-close-overlay"),
+        null
+      );
 
       const select = document.querySelector(
         ".multi-session-agent-select"
@@ -3622,15 +3628,30 @@ suite("Webview", () => {
             diffCount: 0,
             conflictedDiffCount: 0,
           },
+          {
+            localSessionId: "local-b",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "B",
+            status: "idle",
+            createdAt: 2,
+            updatedAt: 2,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
         ],
         aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        managerOpen: true,
       } as any);
 
       elements.inputEl.innerHTML = "hello";
       elements.inputEl.dispatchEvent(new window.Event("input"));
-      (document.querySelector(".multi-session-open") as HTMLButtonElement).click();
       (
-        document.querySelector(".multi-session-new-overlay") as HTMLButtonElement
+        document.querySelector(
+          '.multi-session-item[data-session-id="local-b"] .multi-session-item-main'
+        ) as HTMLButtonElement
       ).click();
       assert.strictEqual(
         (mockVsCode.getState() as any).multiSession.drafts["local-a"],
@@ -3698,54 +3719,6 @@ suite("Webview", () => {
       } as any);
 
       assert.strictEqual(elements.inputEl.textContent, "");
-    });
-
-    test("shows a loading indicator immediately after clicking new chat", () => {
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-      } as any);
-
-      const openButton = document.querySelector(
-        ".multi-session-open"
-      ) as HTMLButtonElement;
-      const newButton = document.querySelector(
-        ".multi-session-new-overlay"
-      ) as HTMLButtonElement;
-      const loading = document.querySelector(
-        ".multi-session-loading"
-      ) as HTMLElement;
-
-      assert.strictEqual(loading.hidden, true);
-      assert.strictEqual(document.querySelector(".multi-session-new"), null);
-      openButton.click();
-      newButton.click();
-
-      assert.strictEqual(loading.hidden, false);
-      assert.ok(loading.textContent?.includes("Initializing chat"));
-      assert.ok(
-        mockVsCode
-          ._getMessages()
-          .some((message: any) => message.type === "feature.multi-session.new")
-      );
     });
 
     test("shows a loading indicator while the active session is starting", () => {
@@ -4031,10 +4004,7 @@ suite("Webview", () => {
       ) as HTMLElement;
 
       assert.strictEqual(overlay.hidden, false);
-      assert.strictEqual(
-        document.activeElement?.classList.contains("multi-session-new-overlay"),
-        true
-      );
+      assert.strictEqual(document.activeElement, overlay);
 
       overlay.dispatchEvent(
         new window.KeyboardEvent("keydown", {

@@ -976,10 +976,12 @@ export class MultiSessionHostController implements vscode.Disposable {
       activationRevision: this.activationRevision,
       sessions,
       aggregate: { running, awaitingPermission, unread },
-      agents: getAgentsWithStatus().map((agent) => ({
-        id: agent.id,
-        name: agent.name,
-      })),
+      agents: getAgentsWithStatus()
+        .filter((agent) => agent.available || agent.id === this.defaultAgent.id)
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+        })),
       selectedAgentId: this.defaultAgent.id,
       managerOpen: this.managerOpen,
     });

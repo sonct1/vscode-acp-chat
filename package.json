@@ -98,26 +98,22 @@
       },
       {
         "command": "vscode-acp-chat.sendSelectionToChat",
-        "title": "Add Selection to Chat",
-        "category": "ACP",
+        "title": "ACP: Add Selection to Chat",
         "icon": "$(add)"
       },
       {
         "command": "vscode-acp-chat.sendTerminalSelectionToChat",
-        "title": "Add Terminal Selection to Chat",
-        "category": "ACP",
+        "title": "ACP: Add Terminal Selection to Chat",
         "icon": "$(add)"
       },
       {
         "command": "vscode-acp-chat.addFileToChat",
-        "title": "Add File to Chat",
-        "category": "ACP",
+        "title": "ACP: Add File to Chat",
         "icon": "$(file-add)"
       },
       {
         "command": "vscode-acp-chat.addFolderToChat",
-        "title": "Add Folder to Chat",
-        "category": "ACP",
+        "title": "ACP: Add Folder to Chat",
         "icon": "$(new-folder)"
       }
     ],

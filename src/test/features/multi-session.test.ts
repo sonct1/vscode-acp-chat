@@ -227,6 +227,38 @@ suite("multi-session feature", () => {
     assert.strictEqual(store.snapshot()[0].message.text, "original");
   });
 
+  test("switching the selected agent updates draft sessions and state", async () => {
+    const { controller, messages } = createController();
+
+    await controller.handleMessage({
+      type: "feature.multi-session.selectAgent",
+      agentId: "opencode",
+    });
+
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    const snapshot = [...messages]
+      .reverse()
+      .find(
+        (message) => message.type === "feature.multi-session.snapshot"
+      ) as any;
+
+    assert.strictEqual(state.selectedAgentId, "opencode");
+    assert.ok(
+      state.agents.some(
+        (agent: { id: string; name: string }) =>
+          agent.id === "opencode" && agent.name === "OpenCode"
+      )
+    );
+    assert.strictEqual(
+      controller.getStateForTest().sessions[0].agentName,
+      "OpenCode"
+    );
+    assert.strictEqual(snapshot.session.agentName, "OpenCode");
+    controller.dispose();
+  });
+
   test("new chat initializes a new agent session without cancelling running work", async () => {
     const { controller, clients, managers } = createController();
     const promptA = controller.sendActiveMessage("A");

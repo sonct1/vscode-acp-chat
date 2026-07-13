@@ -34,7 +34,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-overlay-head strong{display:block;font-size:13px;font-weight:600;line-height:1.3;color:var(--vscode-foreground)}
 .multi-session-overlay-subtitle{display:block;margin-top:2px;font-size:11px;color:var(--vscode-descriptionForeground)}
 .multi-session-overlay-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.multi-session-agent-label{font-size:11px;color:var(--vscode-descriptionForeground)}
 .multi-session-agent-select{height:28px;max-width:180px;padding:3px 24px 3px 8px;border:1px solid var(--vscode-dropdown-border,var(--vscode-panel-border));border-radius:var(--border-radius-small,3px);color:var(--vscode-dropdown-foreground,var(--vscode-foreground));background:var(--vscode-dropdown-background,var(--vscode-editor-background));font:inherit;font-size:12px;line-height:1.2}
 .multi-session-agent-select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
 .multi-session-list{overflow:auto;padding:4px 0}
@@ -58,6 +57,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-badge-diff{color:var(--vscode-descriptionForeground)}
 .multi-session-actions{display:flex;align-items:center;justify-content:flex-end;gap:2px;flex-wrap:wrap;padding:8px 8px 8px 0}
 @keyframes multi-session-spin{to{transform:rotate(360deg)}}
-@media(max-width:420px){.multi-session-item{grid-template-columns:1fr}.multi-session-item-main{grid-template-columns:16px minmax(0,1fr);padding-bottom:4px}.multi-session-badges{grid-column:2;justify-content:flex-start}.multi-session-actions{justify-content:flex-start;padding:0 8px 8px 36px}.multi-session-overlay-head{align-items:center}.multi-session-overlay-subtitle{display:none}.multi-session-agent-label{display:none}.multi-session-agent-select{max-width:150px}}
+@media(max-width:420px){.multi-session-item{grid-template-columns:1fr}.multi-session-item-main{grid-template-columns:16px minmax(0,1fr);padding-bottom:4px}.multi-session-badges{grid-column:2;justify-content:flex-start}.multi-session-actions{justify-content:flex-start;padding:0 8px 8px 36px}.multi-session-overlay-head{align-items:center}.multi-session-overlay-subtitle{display:none}.multi-session-agent-select{max-width:150px}}
 @media(prefers-reduced-motion:reduce){.multi-session-status.busy::before,.multi-session-spinner{animation:none}.multi-session-status-icon.codicon-modifier-spin{animation:none!important}}
 `;

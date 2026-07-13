@@ -358,7 +358,7 @@ export class MultiSessionWebviewController {
     overlay.setAttribute("aria-label", "Session manager");
     overlay.setAttribute("aria-modal", "true");
     overlay.tabIndex = -1;
-    overlay.innerHTML = `<div class="multi-session-overlay-head"><div><strong>Sessions</strong><span class="multi-session-overlay-subtitle">Open chats in this workspace</span></div><div class="multi-session-overlay-actions"><label class="multi-session-agent-label" for="multi-session-agent-select">Agent</label><select id="multi-session-agent-select" class="multi-session-agent-select" aria-label="Select agent"></select></div></div><div class="multi-session-list"></div>`;
+    overlay.innerHTML = `<div class="multi-session-overlay-head"><div><strong>Sessions</strong><span class="multi-session-overlay-subtitle">Open chats in this workspace</span></div><div class="multi-session-overlay-actions"><select id="multi-session-agent-select" class="multi-session-agent-select" aria-label="Select agent"></select></div></div><div class="multi-session-list"></div>`;
     overlay.addEventListener("keydown", (event) => {
       if (event.key === "Tab") {
         this.trapOverlayFocus(event);
