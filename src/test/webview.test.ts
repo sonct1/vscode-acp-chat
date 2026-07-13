@@ -21,6 +21,7 @@ import {
 } from "../views/webview/tool-render";
 import { computeLineDiff } from "../utils/diff";
 import { EventBus } from "../views/webview/event-bus";
+import { MULTI_SESSION_STYLES } from "../features/multi-session/styles";
 
 function createMockVsCodeApi(): VsCodeApi & {
   _getMessages: () => unknown[];
@@ -3136,6 +3137,10 @@ suite("Webview", () => {
 
       assert.strictEqual(header.hidden, true);
       assert.strictEqual(overlay.hidden, true);
+      assert.match(
+        MULTI_SESSION_STYLES,
+        /\.multi-session-header\[hidden\],\.multi-session-overlay\[hidden\]\{display:none!important\}/
+      );
 
       controller.handleMessage({
         type: "feature.multi-session.state",

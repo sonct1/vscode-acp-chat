@@ -1,4 +1,5 @@
 export const MULTI_SESSION_STYLES = `
+.multi-session-header[hidden],.multi-session-overlay[hidden]{display:none!important}
 .multi-session-header{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);position:sticky;top:0;z-index:20}
 .multi-session-heading{flex:1;min-width:0;display:flex;flex-direction:column}
 .multi-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
