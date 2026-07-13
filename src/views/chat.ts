@@ -438,7 +438,7 @@ export class ChatViewProvider
           break;
         case "newChat":
           if (this.features.multiSession) {
-            this.features.multiSession.newChat();
+            await this.features.multiSession.newChat();
           } else {
             await this.handleNewChat();
           }
@@ -711,11 +711,10 @@ export class ChatViewProvider
   }
 
   public newChat(): void {
-    if (this.features.multiSession) {
-      this.features.multiSession.newChat();
-      return;
-    }
-    this.handleNewChat().catch((err) => {
+    const newChat = this.features.multiSession
+      ? this.features.multiSession.newChat()
+      : this.handleNewChat();
+    newChat.catch((err) => {
       console.error("[Chat] handleNewChat failed:", err);
     });
   }

@@ -185,7 +185,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         this.sendSnapshot();
         return true;
       case "feature.multi-session.new":
-        this.newChat();
+        await this.newChat();
         return true;
       case "feature.multi-session.activate":
         this.activate(message.localSessionId);
@@ -238,7 +238,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         this.sendSnapshot();
         return true;
       case "newChat":
-        this.newChat();
+        await this.newChat();
         return true;
       case "clearChat":
         this.clearActive();
@@ -308,9 +308,22 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
   }
 
-  newChat(): void {
+  async newChat(): Promise<void> {
     const session = this.createDraft();
     this.activate(session.localSessionId);
+
+    try {
+      await this.ensureRuntime(session, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      session.status = "draft";
+      session.lastError = message;
+      this.append(session, { type: "error", text: message });
+      this.sendState();
+      if (session.localSessionId === this.activeLocalSessionId) {
+        this.sendSnapshot();
+      }
+    }
   }
 
   openManager(): void {
@@ -746,6 +759,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       session.metadata = clientMetadata(session.client!);
       await this.restoreSessionPreferences(session);
       session.status = "idle";
+      this.sendState();
       this.emitSessionMetadata(session);
       this.sendSnapshot();
     }

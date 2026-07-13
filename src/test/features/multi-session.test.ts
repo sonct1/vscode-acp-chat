@@ -227,18 +227,23 @@ suite("multi-session feature", () => {
     assert.strictEqual(store.snapshot()[0].message.text, "original");
   });
 
-  test("new chat does not cancel running session and prompts can overlap", async () => {
-    const { controller, clients } = createController();
+  test("new chat initializes a new agent session without cancelling running work", async () => {
+    const { controller, clients, managers } = createController();
     const promptA = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.strictEqual(clients.length, 1);
 
-    controller.newChat();
+    await controller.newChat();
     assert.strictEqual(clients[0].cancelCalls, 0);
+    assert.strictEqual(clients.length, 2);
+    assert.strictEqual(managers[1].newCalls, 1);
+    assert.strictEqual(clients[1].state, "connected");
+
     const promptB = controller.sendActiveMessage("B");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.strictEqual(clients.length, 2);
+    assert.strictEqual(managers[1].newCalls, 1);
     assert.strictEqual(clients[0].promptResolvers.length, 1);
     assert.strictEqual(clients[1].promptResolvers.length, 1);
     assert.strictEqual(
@@ -260,7 +265,7 @@ suite("multi-session feature", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const sessionA = controller.getStateForTest().activeLocalSessionId!;
 
-    controller.newChat();
+    await controller.newChat();
     const promptB = controller.sendActiveMessage("B");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const sessionB = controller.getStateForTest().activeLocalSessionId!;
@@ -282,7 +287,7 @@ suite("multi-session feature", () => {
     const promptA = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const sessionA = controller.getStateForTest().activeLocalSessionId!;
-    controller.newChat();
+    await controller.newChat();
     const promptB = controller.sendActiveMessage("B");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -331,7 +336,7 @@ suite("multi-session feature", () => {
     const promptA = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const sessionA = controller.getStateForTest().activeLocalSessionId!;
-    controller.newChat();
+    await controller.newChat();
 
     const permissionPromise = clients[0].permissionRequest!({
       toolCall: { toolCallId: "tool-a", title: "Write", kind: "write" },
@@ -383,7 +388,7 @@ suite("multi-session feature", () => {
       const { controller, clients } = createController();
       const promptA = controller.sendActiveMessage("A");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      controller.newChat();
+      await controller.newChat();
       await controller.sendActiveMessage("B");
       const active = controller
         .getStateForTest()
