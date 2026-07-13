@@ -22,6 +22,7 @@ interface ChatSurfaceBridge {
 export class MultiSessionWebviewController {
   private header: HTMLElement;
   private overlay: HTMLElement;
+  private loading: HTMLElement;
   private title: HTMLElement;
   private status: HTMLElement;
   private sessionsButton: HTMLButtonElement;
@@ -41,6 +42,7 @@ export class MultiSessionWebviewController {
     this.restoreState();
     this.header = this.createHeader();
     this.overlay = this.createOverlay();
+    this.loading = this.createLoading();
     this.title = this.header.querySelector(
       ".multi-session-title"
     ) as HTMLElement;
@@ -54,7 +56,8 @@ export class MultiSessionWebviewController {
     // initial state handshake confirms that multi-session is enabled.
     this.header.hidden = true;
     this.overlay.hidden = true;
-    this.doc.body.prepend(this.header, this.overlay);
+    this.loading.hidden = true;
+    this.doc.body.prepend(this.header, this.loading, this.overlay);
     this.injectStyles();
   }
 
@@ -86,18 +89,20 @@ export class MultiSessionWebviewController {
     if (!msg.enabled) {
       this.header.hidden = true;
       this.overlay.hidden = true;
+      this.loading.hidden = true;
       return;
     }
     this.header.hidden = false;
     this.managerOpen = msg.managerOpen ?? false;
     this.overlay.hidden = !this.managerOpen;
     this.sessions = msg.sessions;
-    if (!this.activeLocalSessionId && msg.activeLocalSessionId) {
+    if (msg.activeLocalSessionId) {
       this.activeLocalSessionId = msg.activeLocalSessionId;
       this.activationRevision = msg.activationRevision;
     }
     this.renderHeader(msg.aggregate.running, msg.aggregate.awaitingPermission);
     this.renderOverlay();
+    this.renderLoading();
     this.persistState();
   }
 
@@ -108,6 +113,7 @@ export class MultiSessionWebviewController {
     }
     this.activeLocalSessionId = msg.activeLocalSessionId;
     this.activationRevision = msg.activationRevision;
+    this.upsertSession(msg.session);
     this.bridge.reset();
     for (const event of msg.transcript) {
       await this.bridge.dispatch(event.message as ExtensionMessage);
@@ -148,6 +154,7 @@ export class MultiSessionWebviewController {
     this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
     this.renderHeader();
     this.renderOverlay();
+    this.renderLoading();
     this.persistState();
   }
 
@@ -176,11 +183,13 @@ export class MultiSessionWebviewController {
   }
 
   private renderHeader(running?: number, permission?: number): void {
-    const active = this.sessions.find(
-      (session) => session.localSessionId === this.activeLocalSessionId
-    );
+    const active = this.getActiveSession();
     this.title.textContent = active?.title ?? "Untitled chat";
     this.status.textContent = active ? formatStatus(active.status) : "Draft";
+    this.status.classList.toggle(
+      "busy",
+      Boolean(active && isRunningStatus(active.status))
+    );
     const count = this.sessions.length;
     const suffix = permission
       ? ` • !${permission}`
@@ -199,6 +208,9 @@ export class MultiSessionWebviewController {
     for (const session of ordered) {
       const item = this.doc.createElement("div");
       item.className = "multi-session-item";
+      if (isRunningStatus(session.status)) {
+        item.classList.add("busy");
+      }
       if (session.localSessionId === this.activeLocalSessionId) {
         item.classList.add("active");
       }
@@ -288,6 +300,16 @@ export class MultiSessionWebviewController {
     return header;
   }
 
+  private createLoading(): HTMLElement {
+    const loading = this.doc.createElement("div");
+    loading.className = "multi-session-loading";
+    loading.hidden = true;
+    loading.setAttribute("role", "status");
+    loading.setAttribute("aria-live", "polite");
+    loading.innerHTML = `<span class="multi-session-spinner" aria-hidden="true"></span><span class="multi-session-loading-text"></span>`;
+    return loading;
+  }
+
   private createOverlay(): HTMLElement {
     const overlay = this.doc.createElement("div");
     overlay.className = "multi-session-overlay";
@@ -312,6 +334,34 @@ export class MultiSessionWebviewController {
     this.managerOpen = open;
     this.overlay.hidden = !open;
     this.persistState();
+  }
+
+  private renderLoading(): void {
+    const active = this.getActiveSession();
+    const loading = Boolean(active && isSurfaceLoadingStatus(active.status));
+    this.loading.hidden = !loading;
+    if (!active || !loading) return;
+    const text = this.loading.querySelector(
+      ".multi-session-loading-text"
+    ) as HTMLElement;
+    text.textContent = loadingText(active.status, active.agentName);
+  }
+
+  private getActiveSession(): MultiSessionListItem | undefined {
+    return this.sessions.find(
+      (session) => session.localSessionId === this.activeLocalSessionId
+    );
+  }
+
+  private upsertSession(session: MultiSessionListItem): void {
+    const index = this.sessions.findIndex(
+      (item) => item.localSessionId === session.localSessionId
+    );
+    if (index >= 0) {
+      this.sessions[index] = session;
+    } else {
+      this.sessions.push(session);
+    }
   }
 
   private restoreState(): void {
@@ -383,6 +433,20 @@ function isRunningStatus(status: string): boolean {
     status === "loading_history" ||
     status === "cancelling"
   );
+}
+
+function isSurfaceLoadingStatus(status: string): boolean {
+  return (
+    status === "starting" ||
+    status === "loading_history" ||
+    status === "cancelling"
+  );
+}
+
+function loadingText(status: string, agentName: string): string {
+  if (status === "loading_history") return "Loading chat history…";
+  if (status === "cancelling") return "Stopping the active chat…";
+  return `Initializing ${agentName}…`;
 }
 
 function formatStatus(status: string): string {

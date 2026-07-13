@@ -3139,7 +3139,7 @@ suite("Webview", () => {
       assert.strictEqual(overlay.hidden, true);
       assert.match(
         MULTI_SESSION_STYLES,
-        /\.multi-session-header\[hidden\],\.multi-session-overlay\[hidden\]\{display:none!important\}/
+        /\.multi-session-header\[hidden\],\.multi-session-overlay\[hidden\],\.multi-session-loading\[hidden\]\{display:none!important\}/
       );
 
       controller.handleMessage({
@@ -3255,6 +3255,102 @@ suite("Webview", () => {
           ._getMessages()
           .some((message: any) => message.type === "feature.multi-session.resync")
       );
+    });
+
+    test("shows a loading indicator while the active session is starting", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "starting",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 1, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      const loading = document.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+      const status = document.querySelector(
+        ".multi-session-status"
+      ) as HTMLElement;
+
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Initializing Test Agent"));
+      assert.strictEqual(status.classList.contains("busy"), true);
+
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 2,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      assert.strictEqual(loading.hidden, true);
+      assert.strictEqual(status.classList.contains("busy"), false);
+    });
+
+    test("snapshot state keeps the loading indicator in sync", async () => {
+      await controller.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "loading_history",
+          createdAt: 1,
+          updatedAt: 1,
+          unreadCount: 0,
+          pendingPermissionCount: 0,
+          diffCount: 0,
+          conflictedDiffCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      const loading = document.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Loading chat history"));
     });
 
     test("clicking a session closes the local manager immediately", () => {
