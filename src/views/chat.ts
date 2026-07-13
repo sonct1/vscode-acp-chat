@@ -745,10 +745,14 @@ export class ChatViewProvider
   }
 
   private onMultiSessionStatus(summary: string): void {
-    void vscode.commands.executeCommand(
-      "vscode-acp-chat.updateMultiSessionStatus",
-      summary
-    );
+    void vscode.commands
+      .executeCommand("vscode-acp-chat.updateMultiSessionStatus", summary)
+      .then(undefined, (error) => {
+        console.debug(
+          "[Chat] Multi-session status command is unavailable:",
+          error
+        );
+      });
   }
 
   /**

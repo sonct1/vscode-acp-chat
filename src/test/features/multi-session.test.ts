@@ -412,6 +412,34 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
+  test("session manager visibility is host-authoritative and activation closes it", async () => {
+    const { controller, messages } = createController();
+
+    await controller.handleMessage({ type: "feature.multi-session.manage" });
+    let state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    assert.strictEqual(state.managerOpen, true);
+
+    const active = controller.getStateForTest().activeLocalSessionId!;
+    await controller.handleMessage({
+      type: "feature.multi-session.activate",
+      localSessionId: active,
+    });
+    state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    assert.strictEqual(state.managerOpen, false);
+
+    await controller.handleMessage({ type: "feature.multi-session.manage" });
+    await controller.handleMessage({ type: "feature.multi-session.hideManager" });
+    state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    assert.strictEqual(state.managerOpen, false);
+    controller.dispose();
+  });
+
   test("closing idle session disposes only its runtime", async () => {
     const { controller, clients } = createController();
     const prompt = controller.sendActiveMessage("A");

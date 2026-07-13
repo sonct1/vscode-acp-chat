@@ -131,7 +131,18 @@ export class WebviewController implements MessageHandler {
   ): boolean | void | Promise<boolean | void> {
     const featureResult = this.features?.multiSession.handleMessage(msg);
     if (featureResult === true) return true;
+    if (isPromiseLike(featureResult)) {
+      return featureResult.then((handled) => {
+        if (handled === true) return true;
+        return this.handleNonFeatureMessage(msg);
+      });
+    }
+    return this.handleNonFeatureMessage(msg);
+  }
 
+  private handleNonFeatureMessage(
+    msg: ExtensionMessage
+  ): boolean | void | Promise<boolean | void> {
     // 1. Handle top-level messages in this controller
     const topResult = this.handleTopLevelMessage(msg);
 
@@ -300,6 +311,16 @@ export class WebviewController implements MessageHandler {
   getTools() {
     return this.messageList.getBlockManager().getToolsSnapshot();
   }
+}
+
+function isPromiseLike<T>(
+  value: T | PromiseLike<T> | undefined
+): value is PromiseLike<T> {
+  return (
+    value !== null &&
+    value !== undefined &&
+    typeof (value as PromiseLike<T>).then === "function"
+  );
 }
 
 /**

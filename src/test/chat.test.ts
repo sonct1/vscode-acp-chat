@@ -167,6 +167,29 @@ suite("ChatViewProvider", () => {
   let memento: TestMemento;
   let acpClient: TestACPClient;
   let mockExtensionUri: vscode.Uri;
+  let previousMultiSessionEnabled: boolean | undefined;
+
+  suiteSetup(async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    previousMultiSessionEnabled = config.inspect<boolean>(
+      "multiSession.enabled"
+    )?.globalValue;
+    await config.update(
+      "multiSession.enabled",
+      false,
+      vscode.ConfigurationTarget.Global
+    );
+  });
+
+  suiteTeardown(async () => {
+    await vscode.workspace
+      .getConfiguration("vscode-acp-chat")
+      .update(
+        "multiSession.enabled",
+        previousMultiSessionEnabled,
+        vscode.ConfigurationTarget.Global
+      );
+  });
 
   setup(async () => {
     memento = new TestMemento();

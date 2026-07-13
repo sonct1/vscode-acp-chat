@@ -66,12 +66,10 @@ export class MultiSessionWebviewController {
       return true;
     }
     if (msg.type === "feature.multi-session.snapshot") {
-      void this.applySnapshot(msg as MultiSessionSnapshot);
-      return true;
+      return this.applySnapshot(msg as MultiSessionSnapshot).then(() => true);
     }
     if (msg.type === "feature.multi-session.delta") {
-      void this.applyDelta(msg as MultiSessionDeltaMessage);
-      return true;
+      return this.applyDelta(msg as MultiSessionDeltaMessage).then(() => true);
     }
     if (msg.type === "feature.multi-session.openManager") {
       this.setManagerOpen(true);
@@ -91,6 +89,7 @@ export class MultiSessionWebviewController {
       return;
     }
     this.header.hidden = false;
+    this.managerOpen = msg.managerOpen ?? false;
     this.overlay.hidden = !this.managerOpen;
     this.sessions = msg.sessions;
     if (!this.activeLocalSessionId && msg.activeLocalSessionId) {
@@ -103,7 +102,10 @@ export class MultiSessionWebviewController {
   }
 
   private async applySnapshot(msg: MultiSessionSnapshot): Promise<void> {
-    this.saveActiveSurfaceState();
+    const previousSessionId = this.activeLocalSessionId;
+    if (previousSessionId && previousSessionId !== msg.activeLocalSessionId) {
+      this.saveActiveSurfaceState();
+    }
     this.activeLocalSessionId = msg.activeLocalSessionId;
     this.activationRevision = msg.activationRevision;
     this.bridge.reset();
@@ -115,6 +117,13 @@ export class MultiSessionWebviewController {
       await this.bridge.dispatch({
         ...(msg.metadata as ExtensionMessage),
         type: "sessionMetadata",
+      });
+    } else {
+      await this.bridge.dispatch({
+        type: "sessionMetadata",
+        modes: null,
+        models: null,
+        genericConfigOptions: [],
       });
     }
     if (msg.contextUsage) {
@@ -131,6 +140,9 @@ export class MultiSessionWebviewController {
       type: "diffSummary",
       changes: msg.diffChanges ?? [],
     });
+    for (const permission of msg.pendingPermissions ?? []) {
+      await this.bridge.dispatch(permission as ExtensionMessage);
+    }
     this.bridge.setGenerating(msg.isGenerating);
     this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
     this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
@@ -262,12 +274,16 @@ export class MultiSessionWebviewController {
     header.innerHTML = `<button class="multi-session-open"></button><div class="multi-session-heading"><strong class="multi-session-title"></strong><span class="multi-session-status"></span></div><button class="multi-session-new">+ New chat</button>`;
     header
       .querySelector(".multi-session-open")
-      ?.addEventListener("click", () => this.setManagerOpen(true));
+      ?.addEventListener("click", () => {
+        this.setManagerOpen(true);
+        this.vscode.postMessage({ type: "feature.multi-session.manage" });
+      });
     header
       .querySelector(".multi-session-new")
       ?.addEventListener("click", () => {
         this.saveActiveSurfaceState();
         this.vscode.postMessage({ type: "feature.multi-session.new" });
+        this.setManagerOpen(false);
       });
     return header;
   }
@@ -278,12 +294,16 @@ export class MultiSessionWebviewController {
     overlay.innerHTML = `<div class="multi-session-overlay-head"><strong>Sessions</strong><div><button class="multi-session-new-overlay">+ New chat</button><button class="multi-session-close-overlay">Close</button></div></div><div class="multi-session-list"></div>`;
     overlay
       .querySelector(".multi-session-close-overlay")
-      ?.addEventListener("click", () => this.setManagerOpen(false));
+      ?.addEventListener("click", () => {
+        this.setManagerOpen(false);
+        this.vscode.postMessage({ type: "feature.multi-session.hideManager" });
+      });
     overlay
       .querySelector(".multi-session-new-overlay")
       ?.addEventListener("click", () => {
         this.saveActiveSurfaceState();
         this.vscode.postMessage({ type: "feature.multi-session.new" });
+        this.setManagerOpen(false);
       });
     return overlay;
   }
@@ -298,7 +318,6 @@ export class MultiSessionWebviewController {
     const state = this.vscode.getState<MultiSessionWebviewState>();
     this.drafts = state?.multiSession?.drafts ?? {};
     this.scrollTop = state?.multiSession?.scrollTop ?? {};
-    this.managerOpen = state?.multiSession?.managerOpen ?? false;
     this.activeLocalSessionId = state?.multiSession?.activeLocalSessionId;
   }
 
@@ -315,7 +334,6 @@ export class MultiSessionWebviewController {
         activeLocalSessionId: this.activeLocalSessionId,
         drafts: this.drafts,
         scrollTop: this.scrollTop,
-        managerOpen: this.managerOpen,
       },
     });
   }

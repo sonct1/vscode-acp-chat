@@ -139,7 +139,7 @@
         },
         "vscode-acp-chat.multiSession.enabled": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Enable concurrent multi-session chat. When disabled, the legacy single-session workflow is used."
         },
         "vscode-acp-chat.multiSession.maxConcurrentSessions": {

@@ -8,7 +8,6 @@ export interface MultiSessionDraftState {
   activeLocalSessionId?: string;
   drafts?: Record<string, string>;
   scrollTop?: Record<string, number>;
-  managerOpen?: boolean;
 }
 
 export type MultiSessionWebviewState = WebviewState & {

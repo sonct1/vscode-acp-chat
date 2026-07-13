@@ -3148,6 +3148,167 @@ suite("Webview", () => {
       assert.strictEqual(header.hidden, false);
       assert.strictEqual(overlay.hidden, true);
     });
+
+    test("does not restore the session manager overlay from webview state", () => {
+      mockVsCode.setState({
+        isConnected: false,
+        inputValue: "",
+        multiSession: { managerOpen: true },
+      } as any);
+
+      const restoredController = new WebviewController(
+        mockVsCode,
+        document,
+        window as unknown as Window
+      );
+      const overlay = [...document.querySelectorAll(".multi-session-overlay")]
+        .at(-1) as HTMLElement;
+
+      restoredController.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activationRevision: 0,
+        sessions: [],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      assert.strictEqual(overlay.hidden, true);
+      assert.strictEqual(
+        (mockVsCode.getState() as any).multiSession.managerOpen,
+        undefined
+      );
+    });
+
+    test("serializes multi-session snapshot replay before following deltas", async () => {
+      await controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "running",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 1, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      await controller.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "running",
+          createdAt: 1,
+          updatedAt: 1,
+          unreadCount: 0,
+          pendingPermissionCount: 0,
+          diffCount: 0,
+          conflictedDiffCount: 0,
+        },
+        transcript: [
+          { seq: 1, createdAt: 1, message: { type: "streamStart" } },
+          { seq: 2, createdAt: 2, message: { type: "streamChunk", text: "A" } },
+        ],
+        lastSeq: 2,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: true,
+      } as any);
+
+      await controller.handleMessage({
+        type: "feature.multi-session.delta",
+        localSessionId: "local-a",
+        activationRevision: 1,
+        event: {
+          seq: 3,
+          createdAt: 3,
+          message: { type: "streamChunk", text: "B" },
+        },
+      } as any);
+
+      const assistant = elements.messagesEl.querySelector(".message.assistant");
+      assert.ok(assistant?.textContent?.includes("AB"));
+      assert.ok(
+        !mockVsCode
+          ._getMessages()
+          .some((message: any) => message.type === "feature.multi-session.resync")
+      );
+    });
+
+    test("clicking a session closes the local manager immediately", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+          {
+            localSessionId: "local-b",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "B",
+            status: "idle",
+            createdAt: 2,
+            updatedAt: 2,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        managerOpen: true,
+      } as any);
+
+      const overlay = document.querySelector(
+        ".multi-session-overlay"
+      ) as HTMLElement;
+      const item = [...document.querySelectorAll(".multi-session-item")].find(
+        (el) => el.textContent?.includes("B")
+      ) as HTMLElement;
+
+      assert.strictEqual(overlay.hidden, false);
+      item.click();
+
+      assert.strictEqual(overlay.hidden, true);
+      assert.ok(
+        mockVsCode._getMessages().some(
+          (message: any) =>
+            message.type === "feature.multi-session.activate" &&
+            message.localSessionId === "local-b"
+        )
+      );
+    });
   });
 
   suite("initWebview", () => {

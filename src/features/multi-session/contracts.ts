@@ -78,6 +78,8 @@ export interface MultiSessionStateMessage {
     awaitingPermission: number;
     unread: number;
   };
+  /** Host-authoritative visibility for the transient session manager drawer. */
+  managerOpen?: boolean;
 }
 
 export interface MultiSessionDeltaMessage {
@@ -94,6 +96,7 @@ export type MultiSessionHostMessage =
   | { type: "feature.multi-session.stop"; localSessionId?: string }
   | { type: "feature.multi-session.close"; localSessionId: string }
   | { type: "feature.multi-session.manage" }
+  | { type: "feature.multi-session.hideManager" }
   | { type: "feature.multi-session.resync" }
   | { type: "feature.multi-session.reviewPermission"; localSessionId: string }
   | {

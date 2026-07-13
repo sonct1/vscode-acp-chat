@@ -144,6 +144,30 @@ async function waitForProviderQueues(
 }
 
 suite("History Restoration Order Integration", () => {
+  let previousMultiSessionEnabled: boolean | undefined;
+
+  suiteSetup(async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    previousMultiSessionEnabled = config.inspect<boolean>(
+      "multiSession.enabled"
+    )?.globalValue;
+    await config.update(
+      "multiSession.enabled",
+      false,
+      vscode.ConfigurationTarget.Global
+    );
+  });
+
+  suiteTeardown(async () => {
+    await vscode.workspace
+      .getConfiguration("vscode-acp-chat")
+      .update(
+        "multiSession.enabled",
+        previousMultiSessionEnabled,
+        vscode.ConfigurationTarget.Global
+      );
+  });
+
   test("serializes webview postMessage calls so streamEnd cannot overtake earlier messages", async () => {
     const memento = new MockMemento();
     const mockAcpClient = createHistoryLoadClient();

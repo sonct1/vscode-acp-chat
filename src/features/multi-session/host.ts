@@ -125,6 +125,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly catalog: SessionCatalogService;
   private documentSync?: DocumentSyncManager;
   private activeDocumentSyncSessionId: string | undefined;
+  private managerOpen = false;
   private disposed = false;
 
   private readonly globalState: vscode.Memento;
@@ -166,7 +167,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   static isEnabled(): boolean {
     return vscode.workspace
       .getConfiguration("vscode-acp-chat")
-      .get<boolean>("multiSession.enabled", false);
+      .get<boolean>("multiSession.enabled", true);
   }
 
   attachView(view: vscode.WebviewView): void {
@@ -197,6 +198,9 @@ export class MultiSessionHostController implements vscode.Disposable {
         return true;
       case "feature.multi-session.manage":
         this.openManager();
+        return true;
+      case "feature.multi-session.hideManager":
+        this.closeManager();
         return true;
       case "feature.multi-session.resync":
         this.sendSnapshot();
@@ -310,8 +314,14 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   openManager(): void {
+    this.managerOpen = true;
     this.sendState();
-    this.post({ type: "feature.multi-session.openManager" });
+  }
+
+  closeManager(): void {
+    if (!this.managerOpen) return;
+    this.managerOpen = false;
+    this.sendState();
   }
 
   clearActive(): void {
@@ -873,6 +883,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (!session) return;
     this.activeLocalSessionId = localSessionId;
     this.activationRevision += 1;
+    this.managerOpen = false;
     session.unreadCount = 0;
     this.rebindDocumentSync(session);
     this.sendState();
@@ -925,6 +936,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       activationRevision: this.activationRevision,
       sessions,
       aggregate: { running, awaitingPermission, unread },
+      managerOpen: this.managerOpen,
     });
     this.statusChanged(
       running || awaitingPermission
