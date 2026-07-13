@@ -11,6 +11,10 @@ import { MessageRouter, type MessageHandler } from "./message-router";
 import { StatePersistenceService } from "./state-persistence";
 import { EventBus } from "./event-bus";
 import { AsyncSerialQueue } from "../../utils/async-queue";
+import {
+  registerWebviewFeatures,
+  type RegisteredWebviewFeatures,
+} from "../../features/register-webview";
 import type { WebviewContext } from "./context";
 import type { VsCodeApi, ExtensionMessage, WebviewEventMap } from "./types";
 
@@ -33,6 +37,7 @@ export class WebviewController implements MessageHandler {
   private messageRouter: MessageRouter;
   private stateService: StatePersistenceService;
   private incomingNotifier = new AsyncSerialQueue();
+  private features?: RegisteredWebviewFeatures;
 
   readonly messageList: MessageListComponent;
   readonly inputPanel: InputPanelComponent;
@@ -91,6 +96,9 @@ export class WebviewController implements MessageHandler {
     // Component handlers self-register in their constructors.
     // The window listener dispatches through the router AND calls the
     // controller directly for top-level messages.
+    eventBus.on("beforeSend", () => this.beforeMultiSessionSend());
+
+    this.features = registerWebviewFeatures(this);
 
     this.restoreState();
     this.setupEventListeners();
@@ -121,6 +129,9 @@ export class WebviewController implements MessageHandler {
   handleMessage(
     msg: ExtensionMessage
   ): boolean | void | Promise<boolean | void> {
+    const featureResult = this.features?.multiSession.handleMessage(msg);
+    if (featureResult === true) return true;
+
     // 1. Handle top-level messages in this controller
     const topResult = this.handleTopLevelMessage(msg);
 
@@ -262,7 +273,7 @@ export class WebviewController implements MessageHandler {
     );
   }
 
-  private resetChatState(): void {
+  resetChatState(): void {
     this.messageList.clear();
     this.inputPanel.autocomplete.hide();
     this.auxiliaryPanels.hidePlan();
@@ -272,6 +283,18 @@ export class WebviewController implements MessageHandler {
 
   getIsConnected(): boolean {
     return this.isConnected;
+  }
+
+  getVsCodeApi(): VsCodeApi {
+    return this.ctx.vscode;
+  }
+
+  getDocument(): Document {
+    return this.ctx.doc;
+  }
+
+  beforeMultiSessionSend(): void {
+    this.features?.multiSession.beforeSend();
   }
 
   getTools() {

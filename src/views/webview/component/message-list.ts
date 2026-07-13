@@ -290,6 +290,14 @@ export class MessageListComponent implements MessageHandler {
     return this.isGenerating;
   }
 
+  getScrollTop(): number {
+    return this.elements.messagesEl.scrollTop;
+  }
+
+  setScrollTop(value: number): void {
+    this.elements.messagesEl.scrollTop = value;
+  }
+
   addMessage(
     text: string,
     type: MessageType,

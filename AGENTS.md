@@ -83,6 +83,16 @@ Default coding flow:
 - Run the smallest relevant verification.
 - Do not read broad docs unless the task touches product scope, feature scope, architecture, API contract, operations, or implementation plan.
 
+Build and local installation after code changes:
+
+- After changing extension or webview code, always build, package, and install the new extension version into VS Code before reporting completion.
+- Run the relevant quality checks first, then build the production bundle with `npm run package`.
+- Create a VSIX with `npx vsce package --out <temporary-or-versioned-path>.vsix`.
+- Install it with `code --install-extension <path>.vsix --force`.
+- Do not commit generated VSIX files. Remove temporary VSIX files after successful installation when safe, or place them in a git-ignored path.
+- Report the exact build, packaging, and installation commands and their outcomes. If `code` or VSIX packaging is unavailable, report the blocker explicitly instead of claiming the installed extension is current.
+- Tell the user to run `Developer: Reload Window` when reloading is required for the newly installed extension to take effect.
+
 Docs routing:
 
 - Service overview/local setup: `README.md`

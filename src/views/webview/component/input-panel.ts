@@ -191,11 +191,24 @@ export class InputPanelComponent implements MessageHandler {
     return this.isGenerating;
   }
 
+  getInputHtml(): string {
+    return this.elements.inputEl.innerHTML || "";
+  }
+
+  setInputHtml(value: string): void {
+    this.elements.inputEl.innerHTML = value;
+    this.adjustHeight();
+    this.updateInputState();
+    this.saveState();
+  }
+
   send(): void {
     if (this.isGenerating) return;
 
     const msg = this.collectMessage();
     if (!msg) return;
+
+    this.ctx.eventBus.emit("beforeSend", undefined);
 
     this.ctx.vscode.postMessage({
       type: "sendMessage",

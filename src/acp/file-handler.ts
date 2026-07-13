@@ -8,12 +8,20 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { DiffManager } from "./diff-manager";
 
+export interface FileWriteCoordinator {
+  serialize<T>(path: string, task: () => Promise<T>): Promise<T>;
+  didWrite?(path: string, oldText: string | null, newText: string): void;
+}
+
 export class FileHandler {
   private lastFileContents: Map<string, string | null> = new Map();
   private textDecoder = new TextDecoder();
   private textEncoder = new TextEncoder();
 
-  constructor(private diffManager: DiffManager) {}
+  constructor(
+    private diffManager: DiffManager,
+    private readonly writeCoordinator?: FileWriteCoordinator
+  ) {}
 
   /**
    * Return the pre-write snapshot for `path` and remove it from the cache.
@@ -113,6 +121,15 @@ export class FileHandler {
   async handleWriteTextFile(
     params: WriteTextFileRequest
   ): Promise<WriteTextFileResponse> {
+    const write = () => this.writeTextFile(params);
+    return this.writeCoordinator
+      ? this.writeCoordinator.serialize(params.path, write)
+      : write();
+  }
+
+  private async writeTextFile(
+    params: WriteTextFileRequest
+  ): Promise<WriteTextFileResponse> {
     try {
       const uri = vscode.Uri.file(params.path);
 
@@ -164,6 +181,11 @@ export class FileHandler {
       await vscode.workspace.fs.writeFile(uri, content);
 
       this.diffManager.recordChange(params.path, oldContent, params.content);
+      this.writeCoordinator?.didWrite?.(
+        params.path,
+        oldContent,
+        params.content
+      );
 
       return {};
     } catch (error) {

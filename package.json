@@ -73,6 +73,12 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "vscode-acp-chat.manageSessions",
+        "title": "Manage Chat Sessions",
+        "category": "ACP",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "vscode-acp-chat.loadHistory",
         "title": "Load History",
         "category": "ACP",
@@ -130,6 +136,17 @@
           "type": "boolean",
           "default": true,
           "description": "Enable the collective diff summary for file modifications."
+        },
+        "vscode-acp-chat.multiSession.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable concurrent multi-session chat. When disabled, the legacy single-session workflow is used."
+        },
+        "vscode-acp-chat.multiSession.maxConcurrentSessions": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "Maximum number of started local ACP sessions/processes allowed concurrently. Draft sessions do not count toward this limit."
         },
         "vscode-acp-chat.passMcpServers": {
           "type": "boolean",
@@ -234,14 +251,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "vscode-acp-chat.clearChat",
+          "command": "vscode-acp-chat.manageSessions",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@2"
         },
         {
-          "command": "vscode-acp-chat.loadHistory",
+          "command": "vscode-acp-chat.clearChat",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@3"
+        },
+        {
+          "command": "vscode-acp-chat.loadHistory",
+          "when": "view == vscode-acp-chat.chatView",
+          "group": "navigation@4"
         }
       ],
       "commandPalette": [
@@ -251,6 +273,10 @@
         },
         {
           "command": "vscode-acp-chat.newChat",
+          "when": "true"
+        },
+        {
+          "command": "vscode-acp-chat.manageSessions",
           "when": "true"
         },
         {

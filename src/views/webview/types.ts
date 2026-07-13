@@ -245,6 +245,8 @@ export interface ExtensionMessage {
  * site, giving full compile-time safety.
  */
 export interface WebviewEventMap {
+  /** Fired just before a user message is posted to the extension host. */
+  beforeSend: undefined;
   /** Fired after a user message has been posted to the extension host. */
   messageSent: { text: string; images: string[]; mentions: Mention[] };
 }

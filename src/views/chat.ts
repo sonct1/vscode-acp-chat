@@ -16,6 +16,10 @@ import { DocumentSyncManager } from "../acp/document-sync";
 import { extractMentions } from "../utils/mention-serializer";
 import { AsyncSerialQueue, AsyncSerialProcessor } from "../utils/async-queue";
 import {
+  registerHostFeatures,
+  type HostFeatureRegistry,
+} from "../features/register-host";
+import {
   type SessionNotification,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -40,6 +44,7 @@ interface WebviewMessage {
   type:
     | "sendMessage"
     | "ready"
+    | "feature.multi-session.new"
     | "selectMode"
     | "selectModel"
     | "selectConfigOption"
@@ -172,6 +177,7 @@ export class ChatViewProvider
   private fileHandler: FileHandler;
   private terminalHandler: TerminalHandler;
   private documentSyncManager: DocumentSyncManager;
+  private features: HostFeatureRegistry;
   private permissionQueue: Array<{
     id: string;
     params: RequestPermissionRequest;
@@ -205,6 +211,11 @@ export class ChatViewProvider
     globalState: vscode.Memento
   ) {
     this.globalState = globalState;
+    this.features = registerHostFeatures({
+      globalState,
+      postMessage: (message) => this.postMessage(message),
+      onStatusChanged: (summary) => this.onMultiSessionStatus(summary),
+    });
     this.diffManager = new DiffManager();
     this.fileHandler = new FileHandler(this.diffManager);
     this.terminalHandler = new TerminalHandler();
@@ -322,6 +333,9 @@ export class ChatViewProvider
   }
 
   public provideTextDocumentContent(uri: vscode.Uri): string {
+    if (this.features.multiSession) {
+      return this.features.multiSession.provideTextDocumentContent(uri);
+    }
     const path = uri.path;
     const changes = this.diffManager.getPendingChanges();
     const change = changes.find((c) => c.path === path);
@@ -334,6 +348,7 @@ export class ChatViewProvider
     _token: vscode.CancellationToken
   ): void {
     this.view = webviewView;
+    this.features.multiSession?.attachView(webviewView);
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -342,22 +357,45 @@ export class ChatViewProvider
 
     webviewView.webview.html = this.getHtmlContent(webviewView.webview);
 
-    this.handleConnect().catch((err) => {
-      console.error("[Chat] Auto-connect failed:", err);
-    });
+    if (!this.features.multiSession) {
+      this.handleConnect().catch((err) => {
+        console.error("[Chat] Auto-connect failed:", err);
+      });
+    }
 
     webviewView.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
+      if (await this.features.multiSession?.handleMessage(message as never)) {
+        return;
+      }
+      if (
+        await this.features.multiSession?.handleCoreMessage(message as never)
+      ) {
+        return;
+      }
       switch (message.type) {
+        case "feature.multi-session.new":
+          // Backward-compatible fallback for webviews restored while the
+          // feature flag is disabled or after an extension downgrade.
+          await this.handleNewChat();
+          break;
         case "sendMessage":
           if (
             message.text !== undefined ||
             (message.images && message.images.length > 0)
           ) {
-            await this.handleUserMessage(
-              message.text || "",
-              message.images,
-              message.mentions
-            );
+            if (this.features.multiSession) {
+              await this.features.multiSession.sendActiveMessage(
+                message.text || "",
+                message.images,
+                message.mentions
+              );
+            } else {
+              await this.handleUserMessage(
+                message.text || "",
+                message.images,
+                message.mentions
+              );
+            }
           }
           break;
         case "selectMode":
@@ -399,10 +437,18 @@ export class ChatViewProvider
           await this.handleConnect();
           break;
         case "newChat":
-          await this.handleNewChat();
+          if (this.features.multiSession) {
+            this.features.multiSession.newChat();
+          } else {
+            await this.handleNewChat();
+          }
           break;
         case "clearChat":
-          this.handleClearChat();
+          if (this.features.multiSession) {
+            this.features.multiSession.clearActive();
+          } else {
+            this.handleClearChat();
+          }
           break;
         case "copyMessage":
           if (message.text) {
@@ -551,7 +597,11 @@ export class ChatViewProvider
           }
           break;
         case "stop":
-          await this.acpClient.cancel();
+          if (this.features.multiSession) {
+            await this.features.multiSession.stop();
+          } else {
+            await this.acpClient.cancel();
+          }
           break;
         case "permissionResponse":
           if (message.requestId && message.outcome) {
@@ -604,6 +654,19 @@ export class ChatViewProvider
           }
           break;
         case "ready":
+          if (this.features.multiSession) {
+            await this.features.multiSession.handleMessage({
+              type: "feature.multi-session.ready",
+            });
+            break;
+          }
+          this.postMessage({
+            type: "feature.multi-session.state",
+            enabled: false,
+            activationRevision: 0,
+            sessions: [],
+            aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+          });
           this.postMessage({
             type: "connectionState",
             state: this.acpClient.getState(),
@@ -648,13 +711,44 @@ export class ChatViewProvider
   }
 
   public newChat(): void {
+    if (this.features.multiSession) {
+      this.features.multiSession.newChat();
+      return;
+    }
     this.handleNewChat().catch((err) => {
       console.error("[Chat] handleNewChat failed:", err);
     });
   }
 
   public clearChat(): void {
+    if (this.features.multiSession) {
+      this.features.multiSession.clearActive();
+      return;
+    }
     this.handleClearChat();
+  }
+
+  public async startChat(): Promise<void> {
+    if (this.features.multiSession) {
+      await this.features.multiSession.connectActive();
+      return;
+    }
+    await this.handleConnect();
+  }
+
+  public manageSessions(): void {
+    this.features.multiSession?.openManager();
+  }
+
+  public isMultiSessionEnabled(): boolean {
+    return this.features.multiSession !== undefined;
+  }
+
+  private onMultiSessionStatus(summary: string): void {
+    void vscode.commands.executeCommand(
+      "vscode-acp-chat.updateMultiSessionStatus",
+      summary
+    );
   }
 
   /**
@@ -662,6 +756,9 @@ export class ChatViewProvider
    * Returns an empty array when the agent doesn't support `loadSession`.
    */
   public async listSessions(): Promise<SessionInfo[]> {
+    if (this.features.multiSession) {
+      return this.features.multiSession.listSessions();
+    }
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     const cwd = workspaceFolder?.uri.fsPath || process.cwd();
     return this.sessionManager.listSessions(cwd);
@@ -671,6 +768,8 @@ export class ChatViewProvider
    * Return whether the current agent supports `session/load`.
    */
   public getSupportsLoadSession(): boolean {
+    if (this.features.multiSession)
+      return this.features.multiSession.getSupportsLoadSession();
     return this.sessionManager.supportsLoadSession;
   }
 
@@ -678,6 +777,8 @@ export class ChatViewProvider
    * Return whether the current agent supports `session/list`.
    */
   public getSupportsListSessions(): boolean {
+    if (this.features.multiSession)
+      return this.features.multiSession.getSupportsListSessions();
     return this.sessionManager.supportsListSessions;
   }
 
@@ -685,6 +786,8 @@ export class ChatViewProvider
    * Return whether the current agent supports `session/delete`.
    */
   public getSupportsDeleteSession(): boolean {
+    if (this.features.multiSession)
+      return this.features.multiSession.getSupportsDeleteSession();
     return this.sessionManager.supportsDeleteSession;
   }
 
@@ -693,6 +796,10 @@ export class ChatViewProvider
    * the local cache.
    */
   public async deleteHistorySession(sessionId: string): Promise<void> {
+    if (this.features.multiSession) {
+      await this.features.multiSession.deleteHistorySession(sessionId);
+      return;
+    }
     await this.sessionManager.deleteSession(sessionId);
   }
 
@@ -701,6 +808,10 @@ export class ChatViewProvider
    * The agent will stream the full conversation history back.
    */
   public async loadHistorySession(sessionId: string): Promise<void> {
+    if (this.features.multiSession) {
+      await this.features.multiSession.loadHistorySession(sessionId);
+      return;
+    }
     if (this.acpClient.getCurrentSessionId() === sessionId) {
       return;
     }
@@ -769,6 +880,10 @@ export class ChatViewProvider
   }
 
   public addSelection(selection: SelectionMention): void {
+    if (this.features.multiSession) {
+      this.features.multiSession.addSelection(selection);
+      return;
+    }
     this.postMessage({
       type: "addMention",
       mention: {
@@ -1185,6 +1300,7 @@ export class ChatViewProvider
   }
 
   public dispose(): void {
+    this.features.multiSession?.dispose();
     this.sessionUpdateNotifier.dispose();
     this.webviewPostNotifier.dispose();
     this.diffManager.dispose();
@@ -1489,6 +1605,10 @@ export class ChatViewProvider
   }
 
   public async switchAgent(agentId: string): Promise<void> {
+    if (this.features.multiSession) {
+      await this.features.multiSession.switchAgent(agentId);
+      return;
+    }
     await this.handleAgentChange(agentId);
   }
 

@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 import { ACPClient } from "./acp/client";
 import { ChatViewProvider } from "./views/chat";
 import { getAgentsWithStatus } from "./acp/agents";
-import { getWorkspaceRoot } from "./utils/workspace";
 
 /** VSCode ACP extension client instance. */
 let acpClient: ACPClient | undefined;
@@ -44,15 +43,36 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  // Update status bar on connection state changes
+  // Update status bar on connection state changes in legacy mode.
   acpClient.setOnStateChange((state) => {
-    updateStatusBar(state);
+    if (!chatProvider?.isMultiSessionEnabled()) {
+      updateStatusBar(state);
+    }
   });
 
-  // Watch for configuration changes to reload MCP servers or refresh agents
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "vscode-acp-chat.updateMultiSessionStatus",
+      (summary?: string) => {
+        if (!chatProvider?.isMultiSessionEnabled() || !statusBarItem) return;
+        statusBarItem.text = "$(comment-discussion) ACP";
+        statusBarItem.tooltip = summary || "ACP multi-session chat";
+        statusBarItem.backgroundColor = summary?.includes("waiting")
+          ? new vscode.ThemeColor("statusBarItem.warningBackground")
+          : undefined;
+      }
+    )
+  );
+
+  // Watch for configuration changes to reload MCP servers or refresh agents.
+  // Each isolated runtime reads MCP configuration when it connects; the
+  // singleton reload below is only needed by legacy mode.
   const mcpConfigWatcher = vscode.workspace.onDidChangeConfiguration(
     async (e) => {
-      if (e.affectsConfiguration("mcp")) {
+      if (
+        e.affectsConfiguration("mcp") &&
+        !chatProvider?.isMultiSessionEnabled()
+      ) {
         try {
           await acpClient?.reloadMcpServers();
         } catch (error) {
@@ -60,7 +80,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      if (e.affectsConfiguration("vscode-acp-chat.passMcpServers")) {
+      if (
+        e.affectsConfiguration("vscode-acp-chat.passMcpServers") &&
+        !chatProvider?.isMultiSessionEnabled()
+      ) {
         await acpClient?.reloadMcpServers();
       }
 
@@ -89,13 +112,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("vscode-acp-chat.startChat", async () => {
       await vscode.commands.executeCommand("vscode-acp-chat.chatView.focus");
 
-      if (!acpClient?.isConnected()) {
-        try {
-          await acpClient?.connect(getWorkspaceRoot());
-          vscode.window.showInformationMessage("VSCode ACP connected");
-        } catch (error) {
-          vscode.window.showErrorMessage(`Failed to connect: ${error}`);
-        }
+      try {
+        await chatProvider?.startChat();
+        vscode.window.showInformationMessage("VSCode ACP connected");
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to connect: ${error}`);
       }
     })
   );
@@ -273,6 +294,16 @@ export function activate(context: vscode.ExtensionContext) {
             `Failed to delete session: ${message}`
           );
         }
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "vscode-acp-chat.manageSessions",
+      async () => {
+        await vscode.commands.executeCommand("vscode-acp-chat.chatView.focus");
+        chatProvider?.manageSessions();
       }
     )
   );

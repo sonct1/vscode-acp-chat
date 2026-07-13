@@ -3125,6 +3125,29 @@ suite("Webview", () => {
         assert.strictEqual(restoredController.getIsConnected(), true);
       });
     });
+
+    test("keeps multi-session controls hidden until the host enables them", () => {
+      const header = document.querySelector(
+        ".multi-session-header"
+      ) as HTMLElement;
+      const overlay = document.querySelector(
+        ".multi-session-overlay"
+      ) as HTMLElement;
+
+      assert.strictEqual(header.hidden, true);
+      assert.strictEqual(overlay.hidden, true);
+
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activationRevision: 0,
+        sessions: [],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      assert.strictEqual(header.hidden, false);
+      assert.strictEqual(overlay.hidden, true);
+    });
   });
 
   suite("initWebview", () => {
