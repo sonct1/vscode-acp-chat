@@ -3257,6 +3257,49 @@ suite("Webview", () => {
       );
     });
 
+    test("shows a loading indicator immediately after clicking new chat", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      const newButton = document.querySelector(
+        ".multi-session-new"
+      ) as HTMLButtonElement;
+      const loading = document.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+
+      assert.strictEqual(loading.hidden, true);
+      newButton.click();
+
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Initializing chat"));
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some((message: any) => message.type === "feature.multi-session.new")
+      );
+    });
+
     test("shows a loading indicator while the active session is starting", () => {
       controller.handleMessage({
         type: "feature.multi-session.state",

@@ -33,6 +33,7 @@ export class MultiSessionWebviewController {
   private drafts: Record<string, string> = {};
   private scrollTop: Record<string, number> = {};
   private managerOpen = false;
+  private optimisticLoadingText: string | undefined;
 
   constructor(
     private readonly vscode: VsCodeApi,
@@ -100,6 +101,7 @@ export class MultiSessionWebviewController {
       this.activeLocalSessionId = msg.activeLocalSessionId;
       this.activationRevision = msg.activationRevision;
     }
+    this.clearOptimisticLoadingIfSettled();
     this.renderHeader(msg.aggregate.running, msg.aggregate.awaitingPermission);
     this.renderOverlay();
     this.renderLoading();
@@ -152,6 +154,7 @@ export class MultiSessionWebviewController {
     this.bridge.setGenerating(msg.isGenerating);
     this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
     this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
+    this.clearOptimisticLoadingIfSettled();
     this.renderHeader();
     this.renderOverlay();
     this.renderLoading();
@@ -294,6 +297,7 @@ export class MultiSessionWebviewController {
       .querySelector(".multi-session-new")
       ?.addEventListener("click", () => {
         this.saveActiveSurfaceState();
+        this.showOptimisticLoading("Initializing chat…");
         this.vscode.postMessage({ type: "feature.multi-session.new" });
         this.setManagerOpen(false);
       });
@@ -324,6 +328,7 @@ export class MultiSessionWebviewController {
       .querySelector(".multi-session-new-overlay")
       ?.addEventListener("click", () => {
         this.saveActiveSurfaceState();
+        this.showOptimisticLoading("Initializing chat…");
         this.vscode.postMessage({ type: "feature.multi-session.new" });
         this.setManagerOpen(false);
       });
@@ -336,15 +341,41 @@ export class MultiSessionWebviewController {
     this.persistState();
   }
 
+  private showOptimisticLoading(text: string): void {
+    this.optimisticLoadingText = text;
+    this.renderLoading();
+  }
+
   private renderLoading(): void {
     const active = this.getActiveSession();
-    const loading = Boolean(active && isSurfaceLoadingStatus(active.status));
-    this.loading.hidden = !loading;
-    if (!active || !loading) return;
+    const stateLoading = Boolean(
+      active && isSurfaceLoadingStatus(active.status)
+    );
+    const textValue = stateLoading
+      ? loadingText(active!.status, active!.agentName)
+      : this.optimisticLoadingText;
+    this.loading.hidden = !textValue;
+    if (!textValue) return;
     const text = this.loading.querySelector(
       ".multi-session-loading-text"
     ) as HTMLElement;
-    text.textContent = loadingText(active.status, active.agentName);
+    text.textContent = textValue;
+  }
+
+  private clearOptimisticLoadingIfSettled(): void {
+    if (!this.optimisticLoadingText) return;
+    const active = this.getActiveSession();
+    if (!active) return;
+    if (
+      active.lastError ||
+      active.status === "idle" ||
+      active.status === "running" ||
+      active.status === "awaiting_permission" ||
+      active.status === "error" ||
+      active.status === "closed"
+    ) {
+      this.optimisticLoadingText = undefined;
+    }
   }
 
   private getActiveSession(): MultiSessionListItem | undefined {
