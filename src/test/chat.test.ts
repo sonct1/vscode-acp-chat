@@ -1708,6 +1708,7 @@ suite("ChatViewProvider", () => {
           messageHandler = cb;
           return { dispose: () => {} };
         },
+        postMessage: async () => true,
         asWebviewUri: (uri: vscode.Uri) => uri,
         cspSource: "",
         options: {},
@@ -1726,6 +1727,24 @@ suite("ChatViewProvider", () => {
       provider.resolveWebviewView(mockView as any, {} as any, {} as any);
       return { messageHandler: messageHandler! };
     }
+
+    test("falls back to legacy new chat for stale multi-session webview messages", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+      let called = 0;
+      (provider as any).handleNewChat = async () => {
+        called += 1;
+      };
+
+      await messageHandler({ type: "feature.multi-session.new" });
+
+      assert.strictEqual(called, 1);
+      provider.dispose();
+    });
 
     test("should handle openFile with message.href and parse range correctly", async () => {
       const provider = new ChatViewProvider(
