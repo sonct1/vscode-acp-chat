@@ -54,6 +54,7 @@ class FakeSessionManager {
 class FakeClient {
   state = "disconnected";
   currentSessionId: string | null = null;
+  connectError?: Error;
   cancelCalls = 0;
   disposeCalls = 0;
   promptResolvers: Array<(value: { stopReason: string }) => void> = [];
@@ -62,6 +63,7 @@ class FakeClient {
   permissionRequest?: (params: unknown) => Promise<unknown>;
 
   async connect(): Promise<void> {
+    if (this.connectError) throw this.connectError;
     this.state = "connected";
     this.stateChange?.("connected");
   }
@@ -163,7 +165,7 @@ class FakeClient {
   }
 }
 
-function createController() {
+function createController(configureClient?: (client: FakeClient) => void) {
   const messages: Record<string, unknown>[] = [];
   const clients: FakeClient[] = [];
   const managers: FakeSessionManager[] = [];
@@ -172,6 +174,7 @@ function createController() {
     postMessage: (message) => messages.push(message),
     clientFactory: () => {
       const client = new FakeClient();
+      configureClient?.(client);
       const manager = new FakeSessionManager();
       clients.push(client);
       managers.push(manager);
@@ -437,6 +440,52 @@ suite("multi-session feature", () => {
       .reverse()
       .find((message) => message.type === "feature.multi-session.state") as any;
     assert.strictEqual(state.managerOpen, false);
+    controller.dispose();
+  });
+
+  test("start chat opens the active chat surface instead of leaving manager on screen", async () => {
+    const { controller, messages, clients } = createController();
+
+    await controller.handleMessage({ type: "feature.multi-session.manage" });
+    await controller.connectActive();
+
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    const snapshot = [...messages]
+      .reverse()
+      .find(
+        (message) => message.type === "feature.multi-session.snapshot"
+      ) as any;
+
+    assert.strictEqual(state.managerOpen, false);
+    assert.strictEqual(snapshot.isGenerating, false);
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find(
+        (session) => session.localSessionId === snapshot.activeLocalSessionId
+      )?.status,
+      "idle"
+    );
+    assert.strictEqual(clients.length, 1);
+    controller.dispose();
+  });
+
+  test("failed start chat republishes draft state instead of leaving starting visible", async () => {
+    const { controller, messages } = createController((client) => {
+      client.connectError = new Error("connect failed");
+    });
+
+    await assert.rejects(controller.connectActive(), /connect failed/);
+
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.state") as any;
+    const active = state.sessions.find(
+      (session: any) => session.localSessionId === state.activeLocalSessionId
+    );
+
+    assert.strictEqual(active.status, "draft");
+    assert.match(active.lastError, /connect failed/);
     controller.dispose();
   });
 

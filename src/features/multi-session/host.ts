@@ -338,8 +338,28 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   async connectActive(): Promise<void> {
     const session = this.getActive() ?? this.createDraft();
-    await this.ensureRuntime(session, false);
+    if (this.managerOpen) {
+      this.managerOpen = false;
+      this.sendState();
+    }
+
+    try {
+      await this.ensureRuntime(session, false);
+    } catch (error) {
+      session.lastError = error instanceof Error ? error.message : String(error);
+      this.touch(session);
+      this.sendState();
+      this.sendSnapshot();
+      throw error;
+    }
+
+    if (!session.acpSessionId && session.status === "starting") {
+      session.status = "idle";
+      this.touch(session);
+      this.sendState();
+    }
     this.rebindDocumentSync(session);
+    this.sendSnapshot();
   }
 
   async sendActiveMessage(
