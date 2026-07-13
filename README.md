@@ -140,3 +140,16 @@ This project is an enhanced fork of the original [vscode-acp](https://github.com
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
+
+# Service Documentation Skeleton
+
+This skeleton keeps durable service knowledge in `docs/`, lightweight agent routing in `AGENTS.md`, and active multi-step execution in Beads.
+
+Core split:
+
+- `AGENTS.md` — short agent behavior and docs-routing policy.
+- `README.md` — service entry point: purpose, owner, runtime, local setup, verification, and important links.
+- `docs/` — product, feature, architecture, design, contracts, engineering, operations, and implementation-plan source-of-truth.
+- `.beads/` — local Beads boundary notes; actual task graph/status should live in the Beads CLI/store when available.
+
+Do not turn documentation into a task tracker. Use `docs/features/README.md` to know what durable feature context exists, and use Beads to manage active implementation work.
