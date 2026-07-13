@@ -21,6 +21,11 @@ export interface TranscriptEvent {
   createdAt: number;
 }
 
+export interface MultiSessionAgentOption {
+  id: string;
+  name: string;
+}
+
 export interface MultiSessionListItem {
   localSessionId: string;
   acpSessionId?: string;
@@ -78,6 +83,8 @@ export interface MultiSessionStateMessage {
     awaitingPermission: number;
     unread: number;
   };
+  agents?: MultiSessionAgentOption[];
+  selectedAgentId?: string;
   /** Host-authoritative visibility for the transient session manager drawer. */
   managerOpen?: boolean;
 }
@@ -92,6 +99,7 @@ export interface MultiSessionDeltaMessage {
 export type MultiSessionHostMessage =
   | { type: "feature.multi-session.ready" }
   | { type: "feature.multi-session.new" }
+  | { type: "feature.multi-session.selectAgent"; agentId: string }
   | { type: "feature.multi-session.activate"; localSessionId: string }
   | { type: "feature.multi-session.stop"; localSessionId?: string }
   | { type: "feature.multi-session.close"; localSessionId: string }

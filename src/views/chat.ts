@@ -13,7 +13,7 @@ import {
   type SessionInfo,
 } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
-import { extractMentions } from "../utils/mention-serializer";
+import { extractMentions, type Mention } from "../utils/mention-serializer";
 import { AsyncSerialQueue, AsyncSerialProcessor } from "../utils/async-queue";
 import {
   registerHostFeatures,
@@ -126,13 +126,10 @@ function splitTrailingLineSuffix(pathText: string): {
   return { path: match[1], range: { startLine, endLine } };
 }
 
-export interface SelectionMention {
+export type SelectionMention = Mention & {
   type: "selection" | "terminal";
-  name: string;
-  path?: string;
   content: string;
-  range?: { startLine: number; endLine: number };
-}
+};
 
 type FinalToolCallUpdate = (ToolCall | ToolCallUpdate) & {
   status: "completed" | "failed";
@@ -552,7 +549,9 @@ export class ChatViewProvider
                 console.error("Failed to parse href:", message.href, err);
               }
             } else if (message.path) {
-              uri = vscode.Uri.file(message.path);
+              uri = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(message.path)
+                ? vscode.Uri.parse(message.path)
+                : vscode.Uri.file(message.path);
             }
 
             if (uri) {
@@ -882,21 +881,16 @@ export class ChatViewProvider
     }
   }
 
-  public addSelection(selection: SelectionMention): void {
+  public addMention(mention: Mention): void {
     if (this.features.multiSession) {
-      this.features.multiSession.addSelection(selection);
+      this.features.multiSession.addMention(mention);
       return;
     }
-    this.postMessage({
-      type: "addMention",
-      mention: {
-        type: selection.type,
-        name: selection.name,
-        path: selection.path,
-        content: selection.content,
-        range: selection.range,
-      },
-    });
+    this.postMessage({ type: "addMention", mention });
+  }
+
+  public addSelection(selection: SelectionMention): void {
+    this.addMention(selection);
   }
 
   private stderrBuffer = "";

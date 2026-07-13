@@ -2043,6 +2043,34 @@ suite("Webview", () => {
         currentModelId: "model-1",
       };
 
+      function openModelDropdown(): HTMLElement {
+        elements.modelDropdown
+          .querySelector(".dropdown-trigger")
+          ?.dispatchEvent(new window.MouseEvent("click"));
+        return elements.modelDropdown.querySelector(".dropdown-popover")!;
+      }
+
+      function setModelSearchQuery(popover: HTMLElement, query: string): void {
+        const input = popover.querySelector<HTMLInputElement>(
+          ".dropdown-search-input"
+        );
+        assert.ok(input, "expected model search input");
+        input.value = query;
+        input.dispatchEvent(new window.Event("input", { bubbles: true }));
+      }
+
+      function getDropdownItemIds(popover: HTMLElement): string[] {
+        return Array.from(popover.querySelectorAll(".dropdown-item")).map(
+          (item) => item.getAttribute("data-id") ?? ""
+        );
+      }
+
+      function getDropdownHeaderText(popover: HTMLElement): string[] {
+        return Array.from(popover.querySelectorAll(".dropdown-header")).map(
+          (header) => header.textContent ?? ""
+        );
+      }
+
       test("handles sessionMetadata with models", () => {
         controller.handleMessage({
           type: "sessionMetadata",
@@ -2061,15 +2089,105 @@ suite("Webview", () => {
           modes: null,
         });
 
-        // Open dropdown
-        elements.modelDropdown
-          .querySelector(".dropdown-trigger")
-          ?.dispatchEvent(new window.MouseEvent("click"));
-
-        const popover =
-          elements.modelDropdown.querySelector(".dropdown-popover")!;
+        const popover = openModelDropdown();
         const items = popover.querySelectorAll(".dropdown-item");
         assert.strictEqual(items.length, 2);
+      });
+
+      test("renders search only for the model dropdown", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          models: testModels,
+          modes: {
+            availableModes: [{ id: "code", name: "Code" }],
+            currentModeId: "code",
+          },
+        });
+
+        const modelPopover = openModelDropdown();
+        assert.ok(modelPopover.querySelector(".dropdown-search-input"));
+
+        elements.modeDropdown
+          .querySelector(".dropdown-trigger")
+          ?.dispatchEvent(new window.MouseEvent("click"));
+        const modePopover =
+          elements.modeDropdown.querySelector(".dropdown-popover")!;
+        assert.strictEqual(
+          modePopover.querySelector(".dropdown-search-input"),
+          null
+        );
+      });
+
+      test("filters models by display name", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          models: {
+            availableModels: [
+              { modelId: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+              { modelId: "openai/gpt-4.1", name: "GPT 4.1" },
+            ],
+            currentModelId: "anthropic/claude-sonnet-4",
+          },
+          modes: null,
+        });
+
+        const popover = openModelDropdown();
+        setModelSearchQuery(popover, "gpt");
+
+        assert.deepStrictEqual(getDropdownItemIds(popover), ["openai/gpt-4.1"]);
+      });
+
+      test("filters models by model id", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          models: {
+            availableModels: [
+              { modelId: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+              { modelId: "openai/gpt-4.1", name: "GPT 4.1" },
+            ],
+            currentModelId: "anthropic/claude-sonnet-4",
+          },
+          modes: null,
+        });
+
+        const popover = openModelDropdown();
+        setModelSearchQuery(popover, "anthropic");
+
+        assert.deepStrictEqual(getDropdownItemIds(popover), [
+          "anthropic/claude-sonnet-4",
+        ]);
+      });
+
+      test("shows no results when model search has no matches", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          models: testModels,
+          modes: null,
+        });
+
+        const popover = openModelDropdown();
+        setModelSearchQuery(popover, "missing");
+
+        assert.strictEqual(popover.querySelectorAll(".dropdown-item").length, 0);
+        assert.strictEqual(
+          popover.querySelector(".dropdown-empty")?.textContent,
+          "No models found"
+        );
+      });
+
+      test("filters starred model groups without orphaned headers", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          models: testModels,
+          modes: null,
+          starredModels: ["model-2"],
+        });
+
+        const popover = openModelDropdown();
+        setModelSearchQuery(popover, "Model 1");
+
+        assert.deepStrictEqual(getDropdownHeaderText(popover), ["All Models"]);
+        assert.deepStrictEqual(getDropdownItemIds(popover), ["model-1"]);
       });
 
       test("starring a model sends toggleModelStar message and renders groups after sessionMetadata update", () => {
@@ -2079,12 +2197,7 @@ suite("Webview", () => {
           modes: null,
         });
 
-        // Open dropdown
-        elements.modelDropdown
-          .querySelector(".dropdown-trigger")
-          ?.dispatchEvent(new window.MouseEvent("click"));
-        const popover =
-          elements.modelDropdown.querySelector(".dropdown-popover")!;
+        const popover = openModelDropdown();
 
         // Find star icon for model-2 and click it
         const model2Item = popover.querySelector('[data-id="model-2"]')!;
@@ -2128,6 +2241,35 @@ suite("Webview", () => {
     });
 
     suite("input handling", () => {
+      function setCaret(offset?: number): void {
+        const targetNode = elements.inputEl.firstChild ?? elements.inputEl;
+        const range = document.createRange();
+        if (targetNode.nodeType === window.Node.TEXT_NODE) {
+          range.setStart(
+            targetNode,
+            offset ?? targetNode.textContent?.length ?? 0
+          );
+        } else {
+          range.selectNodeContents(elements.inputEl);
+          range.collapse(false);
+        }
+        range.collapse(true);
+        const selection = window.getSelection();
+        assert.ok(selection);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      function pressInputKey(key: string): void {
+        elements.inputEl.dispatchEvent(
+          new window.KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      }
+
       test("Enter key sends message", () => {
         mockVsCode._clearMessages();
         elements.inputEl.innerHTML = "Test message";
@@ -2216,6 +2358,104 @@ suite("Webview", () => {
         elements.inputEl.innerHTML = "Test message";
         const event = new window.KeyboardEvent("keydown", { key: "Escape" });
         elements.inputEl.dispatchEvent(event);
+        assert.strictEqual(elements.inputEl.textContent, "");
+      });
+
+      test("ArrowUp loads the latest user message into the prompt", () => {
+        controller.handleMessage({ type: "userMessage", text: "First" });
+        controller.handleMessage({ type: "userMessage", text: "Second" });
+        elements.inputEl.textContent = "draft";
+        setCaret();
+
+        pressInputKey("ArrowUp");
+
+        assert.strictEqual(elements.inputEl.textContent, "Second");
+      });
+
+      test("ArrowUp and ArrowDown navigate user message history and restore draft", () => {
+        controller.handleMessage({ type: "userMessage", text: "First" });
+        controller.handleMessage({ type: "userMessage", text: "Second" });
+        elements.inputEl.textContent = "draft";
+        setCaret();
+
+        pressInputKey("ArrowUp");
+        assert.strictEqual(elements.inputEl.textContent, "Second");
+        pressInputKey("ArrowUp");
+        assert.strictEqual(elements.inputEl.textContent, "First");
+        pressInputKey("ArrowDown");
+        assert.strictEqual(elements.inputEl.textContent, "Second");
+        pressInputKey("ArrowDown");
+        assert.strictEqual(elements.inputEl.textContent, "draft");
+      });
+
+      test("prompt history preserves mention and command chip serialization", () => {
+        controller.handleMessage({
+          type: "availableCommands",
+          commands: [{ name: "explain", description: "Explain" }],
+        });
+        controller.handleMessage({
+          type: "userMessage",
+          text: "/explain __MENTION_0__",
+          mentions: [
+            {
+              name: "test.ts",
+              path: "/repo/test.ts",
+              type: "file",
+              content: "content",
+            },
+          ],
+        });
+        setCaret();
+
+        pressInputKey("ArrowUp");
+
+        const mentionChip = elements.inputEl.querySelector(
+          ".mention-chip"
+        ) as HTMLElement;
+        const commandChip = elements.inputEl.querySelector(
+          ".command-chip"
+        ) as HTMLElement;
+        assert.ok(mentionChip);
+        assert.ok(commandChip);
+        assert.strictEqual(mentionChip.classList.contains("readonly"), false);
+        assert.strictEqual(commandChip.classList.contains("readonly"), false);
+
+        const collected = controller.inputPanel.collectMessage();
+        assert.strictEqual(collected?.text, "/explain __MENTION_0__");
+        assert.strictEqual(collected?.mentions[0].path, "/repo/test.ts");
+      });
+
+      test("ArrowUp does not navigate when autocomplete is visible", () => {
+        controller.handleMessage({ type: "userMessage", text: "History" });
+        elements.inputEl.textContent = "/h";
+        elements.commandAutocomplete.classList.add("visible");
+        setCaret();
+
+        pressInputKey("ArrowUp");
+
+        assert.strictEqual(elements.inputEl.textContent, "/h");
+      });
+
+      test("ArrowUp and ArrowDown respect multiline caret boundaries", () => {
+        controller.handleMessage({ type: "userMessage", text: "History" });
+        elements.inputEl.textContent = "first\nsecond";
+        setCaret(elements.inputEl.textContent.indexOf("second"));
+
+        pressInputKey("ArrowUp");
+        assert.strictEqual(elements.inputEl.textContent, "first\nsecond");
+
+        setCaret("first".length);
+        pressInputKey("ArrowDown");
+        assert.strictEqual(elements.inputEl.textContent, "first\nsecond");
+      });
+
+      test("prompt history resets after chat clear", () => {
+        controller.handleMessage({ type: "userMessage", text: "History" });
+        controller.handleMessage({ type: "chatCleared" });
+        setCaret();
+
+        pressInputKey("ArrowUp");
+
         assert.strictEqual(elements.inputEl.textContent, "");
       });
     });
@@ -3154,6 +3394,52 @@ suite("Webview", () => {
       assert.strictEqual(overlay.hidden, true);
     });
 
+    test("renders the multi-session header as compact VS Code-style controls", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      const openButton = document.querySelector(
+        ".multi-session-open"
+      ) as HTMLButtonElement;
+      const status = document.querySelector(
+        ".multi-session-status"
+      ) as HTMLElement;
+
+      assert.strictEqual(
+        openButton.classList.contains("multi-session-button-ghost"),
+        true
+      );
+      assert.ok(openButton.querySelector(".codicon-arrow-left"));
+      assert.strictEqual(openButton.querySelector(".multi-session-open-label"), null);
+      assert.strictEqual(openButton.textContent?.trim(), "");
+      assert.strictEqual(document.querySelector(".multi-session-new"), null);
+      assert.ok(status.textContent?.includes("Idle · Test Agent"));
+      assert.strictEqual(
+        openButton.getAttribute("aria-label"),
+        "Back to session manager. 1 session."
+      );
+    });
+
     test("does not restore the session manager overlay from webview state", () => {
       mockVsCode.setState({
         isConnected: false,
@@ -3257,6 +3543,163 @@ suite("Webview", () => {
       );
     });
 
+    test("renders selected agent select in session manager header", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "claude-code",
+            agentName: "Claude Code",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        agents: [
+          { id: "claude-code", name: "Claude Code" },
+          { id: "opencode", name: "OpenCode" },
+        ],
+        selectedAgentId: "opencode",
+        managerOpen: true,
+      } as any);
+
+      assert.strictEqual(document.querySelector(".multi-session-new-overlay"), null);
+      assert.strictEqual(document.querySelector(".multi-session-close-overlay"), null);
+
+      const select = document.querySelector(
+        ".multi-session-agent-select"
+      ) as HTMLSelectElement;
+      assert.strictEqual(select.value, "opencode");
+      assert.deepStrictEqual(
+        [...select.options].map((option) => [option.value, option.textContent]),
+        [
+          ["claude-code", "Claude Code"],
+          ["opencode", "OpenCode"],
+        ]
+      );
+
+      select.value = "claude-code";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some(
+            (message: any) =>
+              message.type === "feature.multi-session.selectAgent" &&
+              message.agentId === "claude-code"
+          )
+      );
+    });
+
+    test("keeps the prompt cleared after sending in an active multi-session", async () => {
+      await controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      elements.inputEl.innerHTML = "hello";
+      elements.inputEl.dispatchEvent(new window.Event("input"));
+      (document.querySelector(".multi-session-open") as HTMLButtonElement).click();
+      (
+        document.querySelector(".multi-session-new-overlay") as HTMLButtonElement
+      ).click();
+      assert.strictEqual(
+        (mockVsCode.getState() as any).multiSession.drafts["local-a"],
+        "hello"
+      );
+      assert.strictEqual((mockVsCode.getState() as any).inputValue, "hello");
+
+      mockVsCode._clearMessages();
+      elements.inputEl.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: false })
+      );
+
+      assert.strictEqual(elements.inputEl.textContent, "");
+      assert.strictEqual(
+        (mockVsCode.getState() as any).multiSession.drafts["local-a"],
+        undefined
+      );
+      assert.strictEqual((mockVsCode.getState() as any).inputValue, "");
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some(
+            (message: any) =>
+              message.type === "sendMessage" && message.text === "hello"
+          )
+      );
+
+      await controller.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 2,
+          unreadCount: 0,
+          pendingPermissionCount: 0,
+          diffCount: 0,
+          conflictedDiffCount: 0,
+        },
+        transcript: [
+          {
+            seq: 1,
+            createdAt: 1,
+            message: {
+              type: "userMessage",
+              text: "hello",
+              images: [],
+              mentions: [],
+            },
+          },
+          { seq: 2, createdAt: 2, message: { type: "streamStart" } },
+          { seq: 3, createdAt: 3, message: { type: "streamEnd" } },
+        ],
+        lastSeq: 3,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      assert.strictEqual(elements.inputEl.textContent, "");
+    });
+
     test("shows a loading indicator immediately after clicking new chat", () => {
       controller.handleMessage({
         type: "feature.multi-session.state",
@@ -3281,14 +3724,19 @@ suite("Webview", () => {
         aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
       } as any);
 
+      const openButton = document.querySelector(
+        ".multi-session-open"
+      ) as HTMLButtonElement;
       const newButton = document.querySelector(
-        ".multi-session-new"
+        ".multi-session-new-overlay"
       ) as HTMLButtonElement;
       const loading = document.querySelector(
         ".multi-session-loading"
       ) as HTMLElement;
 
       assert.strictEqual(loading.hidden, true);
+      assert.strictEqual(document.querySelector(".multi-session-new"), null);
+      openButton.click();
       newButton.click();
 
       assert.strictEqual(loading.hidden, false);
@@ -3451,6 +3899,172 @@ suite("Webview", () => {
             message.type === "feature.multi-session.activate" &&
             message.localSessionId === "local-b"
         )
+      );
+    });
+
+    test("renders the session manager as accessible list rows with badges", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+          {
+            localSessionId: "local-b",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "B",
+            status: "awaiting_permission",
+            createdAt: 2,
+            updatedAt: 2,
+            unreadCount: 3,
+            pendingPermissionCount: 1,
+            diffCount: 2,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 1, unread: 3 },
+        managerOpen: true,
+      } as any);
+
+      const list = document.querySelector(".multi-session-list") as HTMLElement;
+      const activeItem = document.querySelector(
+        '.multi-session-item[data-session-id="local-a"]'
+      ) as HTMLElement;
+      const permissionItem = document.querySelector(
+        '.multi-session-item[data-session-id="local-b"]'
+      ) as HTMLElement;
+      const mainAction = activeItem.querySelector(
+        ".multi-session-item-main"
+      ) as HTMLButtonElement;
+
+      assert.strictEqual(list.getAttribute("role"), "list");
+      assert.strictEqual(mainAction.tagName, "BUTTON");
+      assert.strictEqual(
+        activeItem.querySelector(".multi-session-badge-active"),
+        null
+      );
+      assert.ok(permissionItem.querySelector(".multi-session-badge-permission"));
+      assert.ok(permissionItem.querySelector(".multi-session-badge-unread"));
+      assert.ok(permissionItem.querySelector(".multi-session-badge-diff"));
+      assert.strictEqual(
+        [...permissionItem.querySelectorAll("button")].some(
+          (buttonEl) => buttonEl.textContent?.trim() === "Open"
+        ),
+        false
+      );
+      const closeButton = activeItem.querySelector(
+        "button[aria-label='Close session A']"
+      ) as HTMLButtonElement;
+      assert.ok(closeButton.querySelector(".codicon-close"));
+      assert.strictEqual(closeButton.textContent?.trim(), "");
+    });
+
+    test("session manager traps focus and Escape restores the opener", () => {
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      } as any);
+
+      const openButton = document.querySelector(
+        ".multi-session-open"
+      ) as HTMLButtonElement;
+      openButton.focus();
+
+      controller.handleMessage({
+        type: "feature.multi-session.state",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        sessions: [
+          {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            unreadCount: 0,
+            pendingPermissionCount: 0,
+            diffCount: 0,
+            conflictedDiffCount: 0,
+          },
+        ],
+        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        managerOpen: true,
+      } as any);
+
+      const overlay = document.querySelector(
+        ".multi-session-overlay"
+      ) as HTMLElement;
+
+      assert.strictEqual(overlay.hidden, false);
+      assert.strictEqual(
+        document.activeElement?.classList.contains("multi-session-new-overlay"),
+        true
+      );
+
+      overlay.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+        })
+      );
+      assert.strictEqual(
+        (document.activeElement as HTMLElement).getAttribute("aria-label"),
+        "Close session A"
+      );
+      assert.strictEqual(document.activeElement?.textContent?.trim(), "");
+
+      overlay.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        })
+      );
+
+      assert.strictEqual(overlay.hidden, true);
+      assert.strictEqual(document.activeElement, openButton);
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some(
+            (message: any) =>
+              message.type === "feature.multi-session.hideManager"
+          )
       );
     });
   });

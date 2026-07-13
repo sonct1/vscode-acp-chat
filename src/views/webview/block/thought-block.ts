@@ -43,6 +43,10 @@ export class ThoughtBlock extends BlockWidget {
   appendContent(text: string): void {
     this.rawContent += text;
     this.contentEl.innerHTML = marked.parse(this.rawContent) as string;
+    this.ctx.eventBus.emit("markdownRendered", {
+      root: this.contentEl,
+      kind: "thought",
+    });
   }
 
   finalize(): void {

@@ -377,6 +377,65 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
+  test("addMention posts path-only file and folder mentions", () => {
+    const { controller, messages } = createController();
+
+    controller.addMention({
+      type: "file",
+      name: "example.ts",
+      path: "/workspace/example.ts",
+    });
+    controller.addMention({
+      type: "folder",
+      name: "src",
+      path: "/workspace/src",
+    });
+
+    assert.deepStrictEqual(messages.slice(-2), [
+      {
+        type: "addMention",
+        mention: {
+          type: "file",
+          name: "example.ts",
+          path: "/workspace/example.ts",
+        },
+      },
+      {
+        type: "addMention",
+        mention: {
+          type: "folder",
+          name: "src",
+          path: "/workspace/src",
+        },
+      },
+    ]);
+    controller.dispose();
+  });
+
+  test("legacy addSelection alias still posts addMention", () => {
+    const { controller, messages } = createController();
+
+    controller.addSelection({
+      type: "selection",
+      name: "example.ts:1-1",
+      path: "/workspace/example.ts",
+      content: "const value = 1;",
+      range: { startLine: 1, endLine: 1 },
+    });
+
+    assert.deepStrictEqual(messages[messages.length - 1], {
+      type: "addMention",
+      mention: {
+        type: "selection",
+        name: "example.ts:1-1",
+        path: "/workspace/example.ts",
+        content: "const value = 1;",
+        range: { startLine: 1, endLine: 1 },
+      },
+    });
+    controller.dispose();
+  });
+
   test("process limit preserves the draft session", async () => {
     const original = vscode.workspace
       .getConfiguration("vscode-acp-chat")

@@ -160,6 +160,12 @@ export class SessionToolbarComponent implements MessageHandler {
           modelId: id,
           isStarred,
         });
+      },
+      {
+        searchable: true,
+        searchPlaceholder: "Search models...",
+        searchAriaLabel: "Search models",
+        emptyMessage: "No models found",
       }
     );
   }
@@ -180,6 +186,7 @@ export class SessionToolbarComponent implements MessageHandler {
         options.push({
           id: model.modelId,
           name: model.name || model.modelId,
+          searchText: model.modelId,
           isStarred: true,
           canStar: true,
         });
@@ -192,6 +199,7 @@ export class SessionToolbarComponent implements MessageHandler {
       options.push({
         id: model.modelId,
         name: model.name || model.modelId,
+        searchText: model.modelId,
         isStarred: this.starredModels.has(model.modelId),
         canStar: true,
       });

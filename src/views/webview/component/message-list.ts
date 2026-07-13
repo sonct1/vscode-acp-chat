@@ -3,6 +3,7 @@ import type {
   ExtensionMessage,
   Mention,
   MessageListElements,
+  PromptHistoryEntry,
   UserScrollDirection,
 } from "../types";
 import type { WebviewContext } from "../context";
@@ -296,6 +297,24 @@ export class MessageListComponent implements MessageHandler {
 
   setScrollTop(value: number): void {
     this.elements.messagesEl.scrollTop = value;
+  }
+
+  getUserMessageDrafts(): PromptHistoryEntry[] {
+    return Array.from(
+      this.elements.messagesEl.querySelectorAll<HTMLElement>(
+        ".message.user .message-content-text"
+      )
+    ).flatMap((contentEl) => {
+      const clone = contentEl.cloneNode(true) as HTMLElement;
+      clone
+        .querySelectorAll<HTMLElement>(".mention-chip, .command-chip")
+        .forEach((chip) => chip.classList.remove("readonly"));
+
+      const text = clone.textContent?.trim() ?? "";
+      if (!text && clone.children.length === 0) return [];
+
+      return [{ html: clone.innerHTML, text }];
+    });
   }
 
   addMessage(

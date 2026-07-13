@@ -98,15 +98,27 @@
       },
       {
         "command": "vscode-acp-chat.sendSelectionToChat",
-        "title": "Send to ACP",
+        "title": "Add Selection to Chat",
         "category": "ACP",
-        "icon": "$(send)"
+        "icon": "$(add)"
       },
       {
         "command": "vscode-acp-chat.sendTerminalSelectionToChat",
-        "title": "Send to ACP",
+        "title": "Add Terminal Selection to Chat",
         "category": "ACP",
-        "icon": "$(send)"
+        "icon": "$(add)"
+      },
+      {
+        "command": "vscode-acp-chat.addFileToChat",
+        "title": "Add File to Chat",
+        "category": "ACP",
+        "icon": "$(file-add)"
+      },
+      {
+        "command": "vscode-acp-chat.addFolderToChat",
+        "title": "Add Folder to Chat",
+        "category": "ACP",
+        "icon": "$(new-folder)"
       }
     ],
     "viewsContainers": {
@@ -239,6 +251,18 @@
           "group": "acp@1"
         }
       ],
+      "explorer/context": [
+        {
+          "command": "vscode-acp-chat.addFileToChat",
+          "when": "explorerResourceIsFolder == false",
+          "group": "acp@1"
+        },
+        {
+          "command": "vscode-acp-chat.addFolderToChat",
+          "when": "explorerResourceIsFolder == true",
+          "group": "acp@2"
+        }
+      ],
       "view/title": [
         {
           "command": "vscode-acp-chat.selectAgent",
@@ -361,5 +385,6 @@
     "@vscode/vsce-sign@2.0.9": true,
     "esbuild@0.25.12": true,
     "keytar@7.9.0": true
-  }
+  },
+  "packageManager": "pnpm@11.0.9+sha512.34ce82e6780233cf9cad8685029a8f81d2e06196c5a9bad98879f7424940c6817c4e4524fb7d38b8553ceed48b9758b8ebaf1abd3600c232c4c8cf7366086f38"
 }

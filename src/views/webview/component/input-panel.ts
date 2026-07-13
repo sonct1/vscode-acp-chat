@@ -197,9 +197,16 @@ export class InputPanelComponent implements MessageHandler {
 
   setInputHtml(value: string): void {
     this.elements.inputEl.innerHTML = value;
+    this.rehydrateMentionChips();
     this.adjustHeight();
     this.updateInputState();
     this.saveState();
+  }
+
+  setDraftHtmlAndFocus(value: string): void {
+    this.setInputHtml(value);
+    this.focus();
+    this.moveCaretToEnd();
   }
 
   send(): void {
@@ -242,13 +249,7 @@ export class InputPanelComponent implements MessageHandler {
     this.elements.inputEl.textContent = text;
     this.adjustHeight();
     this.focus();
-
-    const range = this.ctx.doc.createRange();
-    const selection = this.ctx.win?.getSelection();
-    range.selectNodeContents(this.elements.inputEl);
-    range.collapse(false);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
+    this.moveCaretToEnd();
   }
 
   focus(): void {
@@ -354,6 +355,26 @@ export class InputPanelComponent implements MessageHandler {
     if (!previousState?.inputValue) return;
 
     this.elements.inputEl.innerHTML = previousState.inputValue;
+    this.rehydrateMentionChips();
+  }
+
+  private saveState(): void {
+    this.ctx.stateService.update(
+      "inputValue",
+      this.elements.inputEl.innerHTML || ""
+    );
+  }
+
+  private moveCaretToEnd(): void {
+    const range = this.ctx.doc.createRange();
+    const selection = this.ctx.win?.getSelection();
+    range.selectNodeContents(this.elements.inputEl);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  private rehydrateMentionChips(): void {
     const chips = Array.from(
       this.elements.inputEl.querySelectorAll(".mention-chip")
     );
@@ -363,13 +384,6 @@ export class InputPanelComponent implements MessageHandler {
       const newChip = this.chipRenderer.renderMentionChip(mention, false);
       c.replaceWith(newChip);
     });
-  }
-
-  private saveState(): void {
-    this.ctx.stateService.update(
-      "inputValue",
-      this.elements.inputEl.innerHTML || ""
-    );
   }
 
   private handleAutocompleteSelection(result: string | Mention): void {

@@ -138,6 +138,12 @@ export interface Mention {
   dataUrl?: string; // For images
 }
 
+/** User message content that can be restored into the prompt input. */
+export interface PromptHistoryEntry {
+  html: string;
+  text: string;
+}
+
 // ---------------------------------------------------------------------------
 // Extension → webview message
 // ---------------------------------------------------------------------------
@@ -249,6 +255,8 @@ export interface WebviewEventMap {
   beforeSend: undefined;
   /** Fired after a user message has been posted to the extension host. */
   messageSent: { text: string; images: string[]; mentions: Mention[] };
+  /** Fired after a Markdown block has been rendered into the DOM. */
+  markdownRendered: { root: HTMLElement; kind: "text" | "thought" };
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +268,7 @@ export interface DropdownOption {
   id: string;
   name: string;
   type?: "item" | "header" | "divider";
+  searchText?: string;
   isStarred?: boolean;
   canStar?: boolean;
 }

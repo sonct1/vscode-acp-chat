@@ -257,6 +257,66 @@ suite("ChatViewProvider", () => {
     });
   });
 
+  suite("Mention insertion API", () => {
+    test("addMention posts generic path-only mention", () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      provider.addMention({
+        type: "file",
+        name: "example.ts",
+        path: "/workspace/example.ts",
+      });
+
+      assert.deepStrictEqual(messages, [
+        {
+          type: "addMention",
+          mention: {
+            type: "file",
+            name: "example.ts",
+            path: "/workspace/example.ts",
+          },
+        },
+      ]);
+      provider.dispose();
+    });
+
+    test("addSelection remains a backward-compatible alias", () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+      provider.addSelection({
+        type: "selection",
+        name: "example.ts:1-2",
+        path: "/workspace/example.ts",
+        content: "const value = 1;",
+        range: { startLine: 1, endLine: 2 },
+      });
+
+      assert.deepStrictEqual(messages[0], {
+        type: "addMention",
+        mention: {
+          type: "selection",
+          name: "example.ts:1-2",
+          path: "/workspace/example.ts",
+          content: "const value = 1;",
+          range: { startLine: 1, endLine: 2 },
+        },
+      });
+      provider.dispose();
+    });
+  });
+
   suite("Mode/Model Persistence with Validation", () => {
     test("should validate and restore saved mode against available modes", async () => {
       await memento.update("vscode-acp-chat.agentPreferences.v1", {
@@ -1767,6 +1827,28 @@ suite("ChatViewProvider", () => {
 
       assert.strictEqual(called, 1);
       provider.dispose();
+    });
+
+    test("should handle openFile with non-file message.path URI", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      await messageHandler({
+        type: "openFile",
+        path: "vscode-remote://ssh-remote+host/workspace/example.ts",
+      });
+      provider.dispose();
+
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      assert.strictEqual(showTextDocumentCalls[0].uri.scheme, "vscode-remote");
+      assert.strictEqual(
+        showTextDocumentCalls[0].uri.authority,
+        "ssh-remote+host"
+      );
     });
 
     test("should handle openFile with message.href and parse range correctly", async () => {

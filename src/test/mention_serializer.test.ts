@@ -24,6 +24,20 @@ suite("Mention Serializer", () => {
       );
     });
 
+    test("should serialize a folder mention as a path-only reference", () => {
+      const mention: Mention = {
+        name: "src",
+        path: "/path/src",
+        type: "folder",
+      };
+      const result = serializeMention(mention);
+      assert.strictEqual(
+        result,
+        '<mention type="folder" name="src" path="/path/src" />'
+      );
+      assert.ok(!result.includes("CDATA"));
+    });
+
     test("should serialize a selection mention with content", () => {
       const mention: Mention = {
         name: "example.ts:1-5",

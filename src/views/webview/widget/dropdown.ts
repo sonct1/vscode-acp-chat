@@ -2,12 +2,26 @@
  * Reusable dropdown widget for the webview.
  *
  * Renders a trigger + popover pair inside a container element.  Supports
- * grouped options (headers / dividers), keyboard-less selection, and an
- * optional star-toggle action used by the model picker.
+ * grouped options (headers / dividers), keyboard-less selection, optional
+ * search filtering, and an optional star-toggle action used by the model
+ * picker.
  */
 
 import { escapeHtml } from "../html-utils";
 import type { DropdownOption } from "../types";
+
+export interface DropdownConfig {
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  searchAriaLabel?: string;
+  emptyMessage?: string;
+}
+
+interface DropdownSection {
+  dividersBefore: DropdownOption[];
+  header?: DropdownOption;
+  items: DropdownOption[];
+}
 
 export class Dropdown {
   private element: HTMLElement;
@@ -20,11 +34,15 @@ export class Dropdown {
   private onStarToggle?: (id: string, isStarred: boolean) => void;
   private isOpen = false;
   private customTitle: string | null = null;
+  private searchQuery = "";
+  private searchInput?: HTMLInputElement;
+  private optionsList?: HTMLElement;
 
   constructor(
     element: HTMLElement,
     onChange?: (id: string) => void,
-    onStarToggle?: (id: string, isStarred: boolean) => void
+    onStarToggle?: (id: string, isStarred: boolean) => void,
+    private config: DropdownConfig = {}
   ) {
     this.element = element;
     this.onChange = onChange;
@@ -123,9 +141,14 @@ export class Dropdown {
 
   /** Open the popover and adjust its position. */
   open(): void {
+    if (this.config.searchable) {
+      this.clearSearchQuery();
+    }
+
     this.isOpen = true;
     this.element.classList.add("open");
     this.adjustPosition();
+    this.searchInput?.focus();
   }
 
   /** Close the popover. */
@@ -179,17 +202,79 @@ export class Dropdown {
     });
   }
 
+  private clearSearchQuery(): void {
+    if (!this.searchQuery && !this.searchInput?.value) return;
+
+    this.searchQuery = "";
+    if (this.searchInput) {
+      this.searchInput.value = "";
+    }
+    this.renderOptions();
+  }
+
+  private getOptionsHost(): HTMLElement {
+    if (!this.config.searchable) {
+      return this.popover;
+    }
+
+    if (!this.optionsList) {
+      this.popover.innerHTML = "";
+
+      const searchWrapper = this.element.ownerDocument.createElement("div");
+      searchWrapper.className = "dropdown-search";
+
+      this.searchInput = this.element.ownerDocument.createElement("input");
+      this.searchInput.className = "dropdown-search-input";
+      this.searchInput.type = "search";
+      this.searchInput.placeholder =
+        this.config.searchPlaceholder ?? "Search options...";
+      this.searchInput.setAttribute(
+        "aria-label",
+        this.config.searchAriaLabel ?? this.searchInput.placeholder
+      );
+      this.searchInput.addEventListener("input", () => {
+        this.searchQuery = this.searchInput?.value ?? "";
+        this.renderOptions();
+      });
+      this.searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          this.close();
+        }
+      });
+
+      searchWrapper.appendChild(this.searchInput);
+      this.optionsList = this.element.ownerDocument.createElement("div");
+      this.optionsList.className = "dropdown-options-list";
+
+      this.popover.appendChild(searchWrapper);
+      this.popover.appendChild(this.optionsList);
+    }
+
+    return this.optionsList;
+  }
+
   /**
    * Rebuild the popover DOM from `this.options`.
    * Renders headers, dividers, and selectable items (with optional star).
    */
   private renderOptions(): void {
-    this.popover.innerHTML = "";
-    this.options.forEach((opt) => {
+    const optionsHost = this.getOptionsHost();
+    optionsHost.innerHTML = "";
+
+    const options = this.getRenderableOptions();
+    if (options.length === 0 && this.hasSearchQuery()) {
+      const empty = this.element.ownerDocument.createElement("div");
+      empty.className = "dropdown-empty";
+      empty.textContent = this.config.emptyMessage ?? "No results found";
+      optionsHost.appendChild(empty);
+      return;
+    }
+
+    options.forEach((opt) => {
       if (opt.type === "divider") {
         const divider = this.element.ownerDocument.createElement("div");
         divider.className = "dropdown-divider";
-        this.popover.appendChild(divider);
+        optionsHost.appendChild(divider);
         return;
       }
 
@@ -197,7 +282,7 @@ export class Dropdown {
         const header = this.element.ownerDocument.createElement("div");
         header.className = "dropdown-header";
         header.textContent = opt.name;
-        this.popover.appendChild(header);
+        optionsHost.appendChild(header);
         return;
       }
 
@@ -233,7 +318,87 @@ export class Dropdown {
         this.close();
       });
 
-      this.popover.appendChild(item);
+      optionsHost.appendChild(item);
     });
+  }
+
+  private getRenderableOptions(): DropdownOption[] {
+    if (!this.hasSearchQuery()) {
+      return this.options;
+    }
+
+    const sections = this.getSections();
+    const visibleSections = sections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => this.matchesSearch(item)),
+      }))
+      .filter((section) => section.items.length > 0);
+
+    const result: DropdownOption[] = [];
+    visibleSections.forEach((section, index) => {
+      if (index > 0) {
+        result.push(...section.dividersBefore);
+      }
+      if (section.header) {
+        result.push(section.header);
+      }
+      result.push(...section.items);
+    });
+
+    return result;
+  }
+
+  private getSections(): DropdownSection[] {
+    const sections: DropdownSection[] = [];
+    let current: DropdownSection = { dividersBefore: [], items: [] };
+    let pendingDividers: DropdownOption[] = [];
+
+    const pushCurrent = () => {
+      if (current.header || current.items.length > 0) {
+        sections.push(current);
+      }
+    };
+
+    for (const option of this.options) {
+      if (option.type === "divider") {
+        pendingDividers.push(option);
+        continue;
+      }
+
+      if (option.type === "header") {
+        pushCurrent();
+        current = {
+          dividersBefore: pendingDividers,
+          header: option,
+          items: [],
+        };
+        pendingDividers = [];
+        continue;
+      }
+
+      if (!current.header && current.items.length === 0) {
+        current.dividersBefore = pendingDividers;
+        pendingDividers = [];
+      }
+      current.items.push(option);
+    }
+
+    pushCurrent();
+    return sections;
+  }
+
+  private hasSearchQuery(): boolean {
+    return this.config.searchable === true && this.searchQuery.trim() !== "";
+  }
+
+  private matchesSearch(option: DropdownOption): boolean {
+    const query = this.searchQuery.trim().toLocaleLowerCase();
+    const haystack = [option.name, option.id, option.searchText]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ")
+      .toLocaleLowerCase();
+
+    return haystack.includes(query);
   }
 }

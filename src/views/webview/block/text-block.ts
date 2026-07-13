@@ -27,6 +27,10 @@ export class TextBlock extends BlockWidget {
     this.rawContent += text;
     this.contentEl.innerHTML = marked.parse(this.rawContent) as string;
     this.element.setAttribute("data-raw-content", this.rawContent);
+    this.ctx.eventBus.emit("markdownRendered", {
+      root: this.contentEl,
+      kind: "text",
+    });
   }
 
   finalize(): void {

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ACPClient } from "./acp/client";
 import { ChatViewProvider } from "./views/chat";
 import { getAgentsWithStatus } from "./acp/agents";
+import { registerExtensionHostFeatures } from "./features/register-host";
 
 /** VSCode ACP extension client instance. */
 let acpClient: ACPClient | undefined;
@@ -106,6 +107,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
     )
   );
+
+  registerExtensionHostFeatures({
+    context,
+    getChatTarget: () => chatProvider,
+  });
 
   // Open chat view and connect to ACP server
   context.subscriptions.push(
@@ -332,125 +338,6 @@ export function activate(context: vscode.ExtensionContext) {
         await chatProvider?.switchAgent(selected.id);
       }
     })
-  );
-
-  // Send current editor/terminal selection to the chat
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "vscode-acp-chat.sendSelectionToChat",
-      async () => {
-        const activeEditor = vscode.window.activeTextEditor;
-        const activeTerminal = vscode.window.activeTerminal;
-
-        // Try editor selection first
-        if (activeEditor && !activeEditor.selection.isEmpty) {
-          const selection = activeEditor.selection;
-          const text = activeEditor.document.getText(selection);
-          const fileName = vscode.workspace.asRelativePath(
-            activeEditor.document.uri
-          );
-
-          chatProvider?.addSelection({
-            type: "selection",
-            name: `${fileName}:${selection.start.line + 1}-${selection.end.line + 1}`,
-            path: activeEditor.document.uri.fsPath,
-            content: text,
-            range: {
-              startLine: selection.start.line + 1,
-              endLine: selection.end.line + 1,
-            },
-          });
-
-          await vscode.commands.executeCommand(
-            "vscode-acp-chat.chatView.focus"
-          );
-          return;
-        }
-
-        // Try terminal selection if no editor selection
-        if (activeTerminal) {
-          // VS Code doesn't have a direct API to get terminal selection text.
-          // The standard workaround is to use the "copySelection" command and then read from clipboard.
-          await vscode.commands.executeCommand(
-            "workbench.action.terminal.copySelection"
-          );
-          const selection = await vscode.env.clipboard.readText();
-
-          if (selection) {
-            chatProvider?.addSelection({
-              type: "terminal",
-              name: `Terminal: ${activeTerminal.name}`,
-              content: selection,
-            });
-            await vscode.commands.executeCommand(
-              "vscode-acp-chat.chatView.focus"
-            );
-          } else {
-            vscode.window.showInformationMessage(
-              "No text selected in editor or terminal."
-            );
-          }
-        }
-      }
-    )
-  );
-
-  // Send terminal selection to chat (may include args from terminal context)
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "vscode-acp-chat.sendTerminalSelectionToChat",
-      async (args?: unknown) => {
-        let selection = "";
-        let terminalName = "Terminal";
-
-        // If invoked from terminal/context, args might contain the selection and/or terminal
-        if (args && typeof args === "object") {
-          const argsObj = args as Record<string, unknown>;
-          if (
-            typeof argsObj.selection === "string" &&
-            argsObj.selection.length > 0
-          ) {
-            selection = argsObj.selection;
-          }
-          if (
-            argsObj.terminal &&
-            typeof argsObj.terminal === "object" &&
-            "name" in argsObj.terminal
-          ) {
-            terminalName = (argsObj.terminal as Record<string, unknown>)
-              .name as string;
-          } else if (typeof argsObj.name === "string") {
-            terminalName = argsObj.name;
-          }
-        }
-
-        const activeTerminal = vscode.window.activeTerminal;
-        if (terminalName === "Terminal" && activeTerminal) {
-          terminalName = activeTerminal.name;
-        }
-
-        // Fallback to clipboard method if selection wasn't passed via args
-        if (!selection && activeTerminal) {
-          await vscode.commands.executeCommand(
-            "workbench.action.terminal.copySelection"
-          );
-          selection = await vscode.env.clipboard.readText();
-        }
-
-        if (selection) {
-          chatProvider?.addSelection({
-            type: "terminal",
-            name: `Terminal: ${terminalName}`,
-            content: selection,
-          });
-          await vscode.commands.executeCommand(
-            "vscode-acp-chat.chatView.focus"
-          );
-        } else {
-          vscode.window.showInformationMessage("No text selected in terminal.");
-        }
-      }
-    )
   );
 
   context.subscriptions.push({

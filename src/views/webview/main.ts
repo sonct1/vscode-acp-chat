@@ -16,7 +16,12 @@ import {
   type RegisteredWebviewFeatures,
 } from "../../features/register-webview";
 import type { WebviewContext } from "./context";
-import type { VsCodeApi, ExtensionMessage, WebviewEventMap } from "./types";
+import type {
+  VsCodeApi,
+  ExtensionMessage,
+  WebviewEventMap,
+  WebviewState,
+} from "./types";
 
 declare function acquireVsCodeApi(): VsCodeApi;
 
@@ -302,6 +307,31 @@ export class WebviewController implements MessageHandler {
 
   getDocument(): Document {
     return this.ctx.doc;
+  }
+
+  getWindow(): Window {
+    return this.ctx.win;
+  }
+
+  getEventBus(): EventBus<WebviewEventMap> {
+    return this.ctx.eventBus;
+  }
+
+  onMessageSent(handler: () => void): { dispose(): void } {
+    const listener = () => handler();
+    this.ctx.eventBus.on("messageSent", listener);
+    return {
+      dispose: () => this.ctx.eventBus.off("messageSent", listener),
+    };
+  }
+
+  getWebviewState() {
+    return this.stateService.restore();
+  }
+
+  saveWebviewState(state: WebviewState): void {
+    this.stateService.save(state);
+    this.stateService.flush();
   }
 
   beforeMultiSessionSend(): void {

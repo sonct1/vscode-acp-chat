@@ -11,6 +11,7 @@ import {
 } from "../../acp/client";
 import {
   getAgent,
+  getAgentsWithStatus,
   getFirstAvailableAgent,
   type AgentConfig,
 } from "../../acp/agents";
@@ -187,6 +188,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       case "feature.multi-session.new":
         await this.newChat();
         return true;
+      case "feature.multi-session.selectAgent":
+        await this.switchAgent(message.agentId);
+        return true;
       case "feature.multi-session.activate":
         this.activate(message.localSessionId);
         return true;
@@ -216,6 +220,8 @@ export class MultiSessionHostController implements vscode.Disposable {
         );
         return true;
     }
+
+    return false;
   }
 
   async handleCoreMessage(message: {
@@ -568,14 +574,14 @@ export class MultiSessionHostController implements vscode.Disposable {
     };
   }
 
-  addSelection(selection: {
-    type: "selection" | "terminal";
-    name: string;
-    path?: string;
-    content: string;
-    range?: { startLine: number; endLine: number };
-  }): void {
-    this.post({ type: "addMention", mention: selection });
+  addMention(mention: Mention): void {
+    this.post({ type: "addMention", mention });
+  }
+
+  addSelection(
+    selection: Mention & { type: "selection" | "terminal"; content: string }
+  ): void {
+    this.addMention(selection);
   }
 
   async switchAgent(agentId: string): Promise<void> {
@@ -589,9 +595,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       active.agent = agent;
       active.title = "Untitled chat";
       this.touch(active);
-      this.sendState();
       this.sendSnapshot();
     }
+    this.sendState();
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string {
@@ -970,6 +976,11 @@ export class MultiSessionHostController implements vscode.Disposable {
       activationRevision: this.activationRevision,
       sessions,
       aggregate: { running, awaitingPermission, unread },
+      agents: getAgentsWithStatus().map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+      })),
+      selectedAgentId: this.defaultAgent.id,
       managerOpen: this.managerOpen,
     });
     this.statusChanged(
