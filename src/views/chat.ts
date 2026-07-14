@@ -353,6 +353,7 @@ export class ChatViewProvider
     };
 
     webviewView.webview.html = this.getHtmlContent(webviewView.webview);
+    this.features.chatFontSize?.sendSettings();
 
     if (!this.features.multiSession) {
       this.handleConnect().catch((err) => {
@@ -653,6 +654,7 @@ export class ChatViewProvider
           }
           break;
         case "ready":
+          this.features.chatFontSize?.sendSettings();
           if (this.features.multiSession) {
             await this.features.multiSession.handleMessage({
               type: "feature.multi-session.ready",
@@ -1297,6 +1299,7 @@ export class ChatViewProvider
   }
 
   public dispose(): void {
+    this.features.chatFontSize?.dispose();
     this.features.multiSession?.dispose();
     this.sessionUpdateNotifier.dispose();
     this.webviewPostNotifier.dispose();

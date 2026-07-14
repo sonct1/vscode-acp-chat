@@ -134,10 +134,13 @@ export class WebviewController implements MessageHandler {
   handleMessage(
     msg: ExtensionMessage
   ): boolean | void | Promise<boolean | void> {
-    const featureResult = this.features?.multiSession.handleMessage(msg);
-    if (featureResult === true) return true;
-    if (isPromiseLike(featureResult)) {
-      return featureResult.then((handled) => {
+    const chatFontSizeResult = this.features?.chatFontSize.handleMessage(msg);
+    if (chatFontSizeResult === true) return true;
+
+    const multiSessionResult = this.features?.multiSession.handleMessage(msg);
+    if (multiSessionResult === true) return true;
+    if (isPromiseLike(multiSessionResult)) {
+      return multiSessionResult.then((handled) => {
         if (handled === true) return true;
         return this.handleNonFeatureMessage(msg);
       });

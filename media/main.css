@@ -1418,7 +1418,7 @@ body {
   padding: 4px 8px;
   outline: none;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  font-size: var(--acp-chat-font-size, var(--vscode-font-size));
   color: var(--vscode-input-foreground);
   line-height: 1.5;
   box-sizing: border-box;

@@ -151,6 +151,13 @@
           "default": true,
           "description": "Enable the collective diff summary for file modifications."
         },
+        "vscode-acp-chat.fontSize": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 40,
+          "description": "Chat webview font size in pixels. Set to 0 to follow the VS Code font size. Positive values are clamped to 8-40 px."
+        },
         "vscode-acp-chat.multiSession.enabled": {
           "type": "boolean",
           "default": true,

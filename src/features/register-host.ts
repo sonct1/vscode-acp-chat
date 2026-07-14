@@ -5,9 +5,11 @@ import {
   type ChatMentionTarget,
 } from "./add-to-chat/host";
 import { registerOpenSettingsHostFeature } from "./open-settings/host";
+import { registerChatFontSizeHostFeature } from "./chat-font-size/host";
 
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
+  chatFontSize?: ReturnType<typeof registerChatFontSizeHostFeature>;
   multiSession?: MultiSessionHostController;
   openSettings?: ReturnType<typeof registerOpenSettingsHostFeature>;
 }
@@ -17,16 +19,21 @@ export function registerHostFeatures(options: {
   postMessage: (message: Record<string, unknown>) => void;
   onStatusChanged?: (summary: string) => void;
 }): HostFeatureRegistry {
-  if (!MultiSessionHostController.isEnabled()) {
-    return {};
-  }
-  return {
-    multiSession: new MultiSessionHostController({
+  const features: HostFeatureRegistry = {
+    chatFontSize: registerChatFontSizeHostFeature({
+      postMessage: options.postMessage,
+    }),
+  };
+
+  if (MultiSessionHostController.isEnabled()) {
+    features.multiSession = new MultiSessionHostController({
       globalState: options.globalState,
       postMessage: options.postMessage,
       onStatusChanged: options.onStatusChanged,
-    }),
-  };
+    });
+  }
+
+  return features;
 }
 
 export function registerExtensionHostFeatures(options: {

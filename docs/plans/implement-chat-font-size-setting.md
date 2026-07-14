@@ -155,11 +155,11 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] Có property `vscode-acp-chat.fontSize`.
-- [ ] Type là `number`.
-- [ ] Default là `0`.
-- [ ] Minimum là `0`, maximum khuyến nghị là `40`.
-- [ ] Description nêu rõ `0` nghĩa là follow VS Code font size, giá trị dương là pixel.
+- [x] Có property `vscode-acp-chat.fontSize`.
+- [x] Type là `number`.
+- [x] Default là `0`.
+- [x] Minimum là `0`, maximum khuyến nghị là `40`.
+- [x] Description nêu rõ `0` nghĩa là follow VS Code font size, giá trị dương là pixel.
 
 **Verification:**
 
@@ -178,10 +178,10 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] Export message type `feature.chat-font-size.settings`.
-- [ ] Export `normalizeChatFontSize()`.
-- [ ] `0`, số âm, non-number trả về `null`.
-- [ ] Giá trị hợp lệ được round và clamp trong khoảng `8`-`40`.
+- [x] Export message type `feature.chat-font-size.settings`.
+- [x] Export `normalizeChatFontSize()`.
+- [x] `0`, số âm, non-number trả về `null`.
+- [x] Giá trị hợp lệ được round và clamp trong khoảng `8`-`40`.
 
 **Verification:**
 
@@ -199,11 +199,11 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] Host feature không phụ thuộc multi-session.
-- [ ] Có method `sendSettings()`.
-- [ ] Đăng ký `onDidChangeConfiguration` và chỉ phản ứng khi `vscode-acp-chat.fontSize` đổi.
-- [ ] Dispose listener đúng cách.
-- [ ] Không import webview-only code.
+- [x] Host feature không phụ thuộc multi-session.
+- [x] Có method `sendSettings()`.
+- [x] Đăng ký `onDidChangeConfiguration` và chỉ phản ứng khi `vscode-acp-chat.fontSize` đổi.
+- [x] Dispose listener đúng cách.
+- [x] Không import webview-only code.
 
 **Verification:**
 
@@ -222,11 +222,11 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] `registerHostFeatures()` trả về `chatFontSize` cả khi `multiSession.enabled` false.
-- [ ] `ChatViewProvider.resolveWebviewView()` gửi font settings sau khi set HTML hoặc khi webview ready.
-- [ ] Case `ready` trong single-session và multi-session đều gửi font settings.
-- [ ] `dispose()` dispose host feature.
-- [ ] Không làm thay đổi flow send/connect/session.
+- [x] `registerHostFeatures()` trả về `chatFontSize` cả khi `multiSession.enabled` false.
+- [x] `ChatViewProvider.resolveWebviewView()` gửi font settings sau khi set HTML hoặc khi webview ready.
+- [x] Case `ready` trong single-session và multi-session đều gửi font settings.
+- [x] `dispose()` dispose host feature.
+- [x] Không làm thay đổi flow send/connect/session.
 
 **Verification:**
 
@@ -248,11 +248,11 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] Feature nhận `feature.chat-font-size.settings`.
-- [ ] `fontSize: 16` set `--acp-chat-font-size: 16px`.
-- [ ] `fontSize: null` remove variable.
-- [ ] Invalid message không throw.
-- [ ] Feature có `dispose()` nếu có listener/state cần cleanup.
+- [x] Feature nhận `feature.chat-font-size.settings`.
+- [x] `fontSize: 16` set `--acp-chat-font-size: 16px`.
+- [x] `fontSize: null` remove variable.
+- [x] Invalid message không throw.
+- [x] Feature có `dispose()` nếu có listener/state cần cleanup.
 
 **Verification:**
 
@@ -273,10 +273,10 @@ body {
 
 **Acceptance criteria:**
 
-- [ ] `body` fallback về `var(--vscode-font-size)` khi custom setting không có.
-- [ ] `#input` dùng cùng custom variable.
-- [ ] Message content, markdown và code block scale theo base font.
-- [ ] Không làm vỡ layout compact controls.
+- [x] `body` fallback về `var(--vscode-font-size)` khi custom setting không có.
+- [x] `#input` dùng cùng custom variable.
+- [x] Message content, markdown và code block scale theo base font.
+- [x] Không làm vỡ layout compact controls.
 
 **Verification:**
 
@@ -348,6 +348,16 @@ code --install-extension .tmp/vscode-acp-chat-font-size.vsix --force
 - Setting nên tên là `vscode-acp-chat.fontSize` hay `vscode-acp-chat.chatFontSize`? Khuyến nghị: `fontSize` vì namespace đã là extension, description giải thích rõ phạm vi chat webview.
 - Có cần scale toàn bộ controls/metadata không? Khuyến nghị MVP chỉ scale transcript + prompt input; nếu user vẫn thấy nhỏ thì mở rộng sau cho toolbar/tool details.
 - Maximum nên là `32` hay `40`? Khuyến nghị `40` để hỗ trợ accessibility, nhưng normalize vẫn bảo vệ layout.
+
+## Completion notes
+
+Implemented on 2026-07-14:
+
+- Added `vscode-acp-chat.fontSize` setting with `0` fallback and `8`-`40` px normalization.
+- Added host/webview feature under `src/features/chat-font-size/`.
+- Registered host feature independently from multi-session and sends settings on resolve, ready, and config changes.
+- Updated webview CSS variable fallback for `body` and prompt input.
+- Added automated tests for normalization, host messaging/config changes, independent registration, and CSS variable application.
 
 ## Definition of Done
 
