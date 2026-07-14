@@ -265,6 +265,20 @@
           "group": "acp@2"
         }
       ],
+      "editor/title": [
+        {
+          "command": "vscode-acp-chat.addFileToChat",
+          "when": "resourceScheme == file",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "vscode-acp-chat.addFileToChat",
+          "when": "resourceScheme == file",
+          "group": "acp@1"
+        }
+      ],
       "view/title": [
         {
           "command": "vscode-acp-chat.selectAgent",

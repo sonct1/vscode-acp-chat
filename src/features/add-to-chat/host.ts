@@ -353,6 +353,13 @@ export class AddToChatHostController {
       return [...contextUris];
     }
 
+    if (resourceType === "file") {
+      const activeEditorUri = this.getActiveEditor()?.document.uri;
+      if (activeEditorUri?.scheme === "file") {
+        return [activeEditorUri];
+      }
+    }
+
     const dialogOptions: vscode.OpenDialogOptions = {
       canSelectFiles: resourceType === "file",
       canSelectFolders: resourceType === "folder",

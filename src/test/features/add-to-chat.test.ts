@@ -21,6 +21,7 @@ function createController(
   options: {
     statTypes?: Map<string, vscode.FileType>;
     dialogUris?: vscode.Uri[];
+    activeEditor?: vscode.TextEditor;
     activeTerminal?: vscode.Terminal;
     clipboardText?: string;
     onExecuteCommand?: (
@@ -40,7 +41,7 @@ function createController(
     getChatTarget: () => ({
       addMention: (mention) => mentions.push(mention),
     }),
-    getActiveEditor: () => undefined,
+    getActiveEditor: () => options.activeEditor,
     getActiveTerminal: () => options.activeTerminal,
     executeCommand: async (command) => {
       executedCommands.push(command);
@@ -248,7 +249,47 @@ suite("add-to-chat feature", () => {
     );
   });
 
-  test("opens command palette fallback file picker when no Explorer URI is provided", async () => {
+  test("adds active editor file when no Explorer URI is provided", async () => {
+    const fileUri = vscode.Uri.file("/workspace/active.ts");
+    const activeEditor = {
+      document: { uri: fileUri },
+    } as vscode.TextEditor;
+    const { controller, mentions, openDialogOptions } = createController({
+      activeEditor,
+      statTypes: new Map([[fileUri.toString(), vscode.FileType.File]]),
+    });
+
+    await controller.addFileToChat();
+
+    assert.strictEqual(openDialogOptions.length, 0);
+    assert.deepStrictEqual(mentions, [
+      { type: "file", name: "active.ts", path: fileUri.fsPath },
+    ]);
+  });
+
+  test("prefers explicit file URI over active editor fallback", async () => {
+    const explicitUri = vscode.Uri.file("/workspace/from-title.ts");
+    const activeUri = vscode.Uri.file("/workspace/active.ts");
+    const activeEditor = {
+      document: { uri: activeUri },
+    } as vscode.TextEditor;
+    const { controller, mentions, openDialogOptions } = createController({
+      activeEditor,
+      statTypes: new Map([
+        [explicitUri.toString(), vscode.FileType.File],
+        [activeUri.toString(), vscode.FileType.File],
+      ]),
+    });
+
+    await controller.addFileToChat(explicitUri);
+
+    assert.strictEqual(openDialogOptions.length, 0);
+    assert.deepStrictEqual(mentions, [
+      { type: "file", name: "from-title.ts", path: explicitUri.fsPath },
+    ]);
+  });
+
+  test("opens command palette fallback file picker when no file context is available", async () => {
     const fileUri = vscode.Uri.file("/workspace/from-picker.ts");
     const { controller, mentions, openDialogOptions } = createController({
       dialogUris: [fileUri],

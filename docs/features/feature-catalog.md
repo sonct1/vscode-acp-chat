@@ -67,7 +67,7 @@ Command-driven context:
 
 - `vscode-acp-chat.sendSelectionToChat` — adds the active editor selection as a `selection` mention.
 - `vscode-acp-chat.sendTerminalSelectionToChat` — adds selected terminal text as a `terminal` mention.
-- `vscode-acp-chat.addFileToChat` — adds an Explorer file mention.
+- `vscode-acp-chat.addFileToChat` — adds a file mention from Explorer, the active editor/title action, or a picker fallback.
 - `vscode-acp-chat.addFolderToChat` — adds an Explorer folder mention.
 
 Composer-driven context:
@@ -228,7 +228,7 @@ There is also an internal source-registered `vscode-acp-chat.openDevTools` comma
 | `vscode-acp-chat.selectAgent`                 | No      | Yes        | No                 | Selects an installed ACP agent.            |
 | `vscode-acp-chat.sendSelectionToChat`         | No      | No         | Editor selection   | Adds selected editor text to chat.         |
 | `vscode-acp-chat.sendTerminalSelectionToChat` | No      | No         | Terminal selection | Adds selected terminal text to chat.       |
-| `vscode-acp-chat.addFileToChat`               | No      | No         | Explorer file      | Adds a file mention to chat.               |
+| `vscode-acp-chat.addFileToChat`               | No      | No         | Editor/Explorer file or picker | Adds a file mention to chat.               |
 | `vscode-acp-chat.addFolderToChat`             | No      | No         | Explorer folder    | Adds a folder mention to chat.             |
 
 ## Implementation boundaries
