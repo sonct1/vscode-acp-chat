@@ -14,7 +14,7 @@ const esbuildProblemMatcherPlugin = {
         console.error(`✘ [ERROR] ${text}`);
         if (location == null) return;
         console.error(
-          `    ${location.file}:${location.line}:${location.column}:`,
+          `    ${location.file}:${location.line}:${location.column}:`
         );
       });
       console.log("[watch] build finished");
@@ -50,11 +50,40 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin],
   });
 
+  const piAcpCtx = await esbuild.context({
+    entryPoints: ["src/features/pi-agent/vendor/pi-acp/src/index.ts"],
+    bundle: true,
+    format: "esm",
+    minify: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "node",
+    outfile: "dist/pi-acp/index.mjs",
+    external: ["vscode"],
+    logLevel: "warning",
+    banner: {
+      js: "#!/usr/bin/env node",
+    },
+    plugins: [esbuildProblemMatcherPlugin],
+  });
+
   if (watch) {
-    await Promise.all([extensionCtx.watch(), webviewCtx.watch()]);
+    await Promise.all([
+      extensionCtx.watch(),
+      webviewCtx.watch(),
+      piAcpCtx.watch(),
+    ]);
   } else {
-    await Promise.all([extensionCtx.rebuild(), webviewCtx.rebuild()]);
-    await Promise.all([extensionCtx.dispose(), webviewCtx.dispose()]);
+    await Promise.all([
+      extensionCtx.rebuild(),
+      webviewCtx.rebuild(),
+      piAcpCtx.rebuild(),
+    ]);
+    await Promise.all([
+      extensionCtx.dispose(),
+      webviewCtx.dispose(),
+      piAcpCtx.dispose(),
+    ]);
   }
 }
 

@@ -353,6 +353,55 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(client.getSetModeCallCount(), 1);
     });
 
+    test("should migrate saved Pi thinking mode to thought_level config option", async () => {
+      await memento.update("vscode-acp-chat.agentPreferences.v1", {
+        pi: { modeId: "high", configOptionValues: {}, starredModels: [] },
+      });
+
+      class PiACPClientWithThoughtLevel extends TestACPClient {
+        constructor() {
+          super();
+          this.setAgent({ id: "pi" });
+        }
+
+        getSessionMetadata() {
+          return {
+            modes: null,
+            models: null,
+            genericConfigOptions: [
+              {
+                id: "thought_level",
+                name: "Thinking",
+                category: "thought_level",
+                currentValue: "medium",
+                options: [
+                  { value: "medium", name: "Medium" },
+                  { value: "high", name: "High" },
+                ],
+              },
+            ],
+            commands: null,
+          };
+        }
+      }
+
+      const client = new PiACPClientWithThoughtLevel();
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        client as any,
+        memento as any
+      );
+
+      await (provider as any).restoreSessionPreferences();
+
+      assert.strictEqual(client.getSetModeCallCount(), 0);
+      assert.strictEqual(client.lastSetConfigOptionId, "thought_level");
+      assert.strictEqual(client.lastSetConfigOptionValue, "high");
+      const pref = getAgentPrefs(memento, "pi") as any;
+      assert.strictEqual(pref.modeId, undefined);
+      assert.strictEqual(pref.configOptionValues.thought_level, "high");
+    });
+
     test("should validate and restore saved model against available models", async () => {
       await memento.update("vscode-acp-chat.agentPreferences.v1", {
         "test-agent": { modelId: "gpt-4", starredModels: [] },

@@ -1,10 +1,10 @@
 # Implementation Plan: Bundled Pi ACP Agent
 
-| Attribute | Value |
-| --- | --- |
-| Status | Draft |
-| Owner | TBD |
-| Scope | Extension Host agent catalog, bundled ACP adapter, packaging, docs, tests |
+| Attribute  | Value                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| Status     | Implemented                                                                                                    |
+| Owner      | TBD                                                                                                            |
+| Scope      | Extension Host agent catalog, bundled ACP adapter, packaging, docs, tests                                      |
 | References | `src/acp/agents.ts`, `src/acp/client.ts`, `src/utils/bin-paths.ts`, `esbuild.js`, `.vscodeignore`, `README.md` |
 
 ## Objective
@@ -125,7 +125,7 @@ Lý do dùng output riêng:
 Không dùng:
 
 ```ts
-command: "pi-acp"
+command: "pi-acp";
 ```
 
 Dùng bundled JS adapter:
@@ -165,7 +165,7 @@ export interface AgentConfig {
 Sửa availability:
 
 ```ts
-available: isCommandAvailable(agent.availabilityCommand ?? agent.command)
+available: isCommandAvailable(agent.availabilityCommand ?? agent.command);
 ```
 
 ### 5. Giữ custom override
@@ -320,7 +320,7 @@ Acceptance criteria:
 Update `AgentConfig` and `getAgentsWithStatus()`:
 
 ```ts
-available: isCommandAvailable(agent.availabilityCommand ?? agent.command)
+available: isCommandAvailable(agent.availabilityCommand ?? agent.command);
 ```
 
 Update validator to allow optional string `availabilityCommand`.
@@ -404,15 +404,15 @@ Manual checks:
 
 ## Risks and mitigations
 
-| Risk | Impact | Mitigation |
-| --- | --- | --- |
-| `pi-acp` SDK version conflicts with extension SDK | High | Decide compatibility in Phase 1; either patch adapter to SDK `1.2.0` or bundle isolated dependency. |
-| Bundled adapter path wrong after esbuild | High | Add tests/helper around path resolution and manually verify `dist/pi-acp/index.mjs` exists in installed extension. |
-| `process.execPath` without `ELECTRON_RUN_AS_NODE` launches VS Code instead of Node mode | High | Always set `ELECTRON_RUN_AS_NODE=1` for bundled JS adapter. |
-| Availability check marks Pi available because adapter exists but `pi` missing | Medium | Use `availabilityCommand: "pi"`. |
-| User's old custom `id: "pi"` masks built-in Pi | Medium | Document migration note; preserve override intentionally. |
-| VSIX excludes vendor/runtime artifact | Medium | Keep `!dist/**`; add package verification via `unzip -l`. |
-| Licensing/provenance unclear after vendoring | Medium | Preserve upstream license and add `UPSTREAM.md`. |
+| Risk                                                                                    | Impact | Mitigation                                                                                                         |
+| --------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
+| `pi-acp` SDK version conflicts with extension SDK                                       | High   | Decide compatibility in Phase 1; either patch adapter to SDK `1.2.0` or bundle isolated dependency.                |
+| Bundled adapter path wrong after esbuild                                                | High   | Add tests/helper around path resolution and manually verify `dist/pi-acp/index.mjs` exists in installed extension. |
+| `process.execPath` without `ELECTRON_RUN_AS_NODE` launches VS Code instead of Node mode | High   | Always set `ELECTRON_RUN_AS_NODE=1` for bundled JS adapter.                                                        |
+| Availability check marks Pi available because adapter exists but `pi` missing           | Medium | Use `availabilityCommand: "pi"`.                                                                                   |
+| User's old custom `id: "pi"` masks built-in Pi                                          | Medium | Document migration note; preserve override intentionally.                                                          |
+| VSIX excludes vendor/runtime artifact                                                   | Medium | Keep `!dist/**`; add package verification via `unzip -l`.                                                          |
+| Licensing/provenance unclear after vendoring                                            | Medium | Preserve upstream license and add `UPSTREAM.md`.                                                                   |
 
 ## Open questions
 
@@ -428,3 +428,13 @@ Manual checks:
 - Existing custom-agent override behavior is preserved.
 - README documents built-in Pi and migration from old custom config.
 - Typecheck, tests, package build, VSIX packaging, package content check, and local install complete successfully.
+
+## Completion notes
+
+Implemented on 2026-07-14:
+
+- Vendored `pi-acp` v0.0.31 (`9e857dcc05a057404eb1537e5f31e5aef88a5863`) under `src/features/pi-agent/vendor/pi-acp/` with license and upstream provenance.
+- Added a production esbuild target for `dist/pi-acp/index.mjs`.
+- Added built-in Pi agent config that launches the bundled adapter through VS Code/Electron Node mode and uses `availabilityCommand: "pi"`.
+- Extended agent validation, package configuration schema, tests, README, and feature catalog for `availabilityCommand` and bundled Pi behavior.
+- Verification completed: `npm run check-types`, `npm test`, `npm run package`, VSIX packaging, VSIX content check, and local `code --install-extension --force`.

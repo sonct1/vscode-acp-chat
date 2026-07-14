@@ -2196,7 +2196,10 @@ suite("Webview", () => {
         const popover = openModelDropdown();
         setModelSearchQuery(popover, "missing");
 
-        assert.strictEqual(popover.querySelectorAll(".dropdown-item").length, 0);
+        assert.strictEqual(
+          popover.querySelectorAll(".dropdown-item").length,
+          0
+        );
         assert.strictEqual(
           popover.querySelector(".dropdown-empty")?.textContent,
           "No models found"
@@ -3120,6 +3123,23 @@ suite("Webview", () => {
         );
       });
 
+      test("Pi-style metadata renders thought_level without legacy mode dropdown", () => {
+        controller.handleMessage({
+          type: "sessionMetadata",
+          modes: null,
+          models: null,
+          genericConfigOptions: [thoughtLevel],
+        });
+
+        assert.strictEqual(elements.modeDropdown.style.display, "none");
+        assert.strictEqual(
+          elements.configOptionsContainer.querySelectorAll(
+            '[data-config-id="thought_level"]'
+          ).length,
+          1
+        );
+      });
+
       test("thought_level option gets lightbulb icon, others do not", () => {
         controller.handleMessage({
           type: "sessionMetadata",
@@ -3458,7 +3478,10 @@ suite("Webview", () => {
         true
       );
       assert.ok(openButton.querySelector(".codicon-arrow-left"));
-      assert.strictEqual(openButton.querySelector(".multi-session-open-label"), null);
+      assert.strictEqual(
+        openButton.querySelector(".multi-session-open-label"),
+        null
+      );
       assert.strictEqual(openButton.textContent?.trim(), "");
       assert.strictEqual(document.querySelector(".multi-session-new"), null);
       assert.ok(status.textContent?.includes("Idle · Test Agent"));
@@ -3480,8 +3503,9 @@ suite("Webview", () => {
         document,
         window as unknown as Window
       );
-      const overlay = [...document.querySelectorAll(".multi-session-overlay")]
-        .at(-1) as HTMLElement;
+      const overlay = [
+        ...document.querySelectorAll(".multi-session-overlay"),
+      ].at(-1) as HTMLElement;
 
       restoredController.handleMessage({
         type: "feature.multi-session.state",
@@ -3567,7 +3591,9 @@ suite("Webview", () => {
       assert.ok(
         !mockVsCode
           ._getMessages()
-          .some((message: any) => message.type === "feature.multi-session.resync")
+          .some(
+            (message: any) => message.type === "feature.multi-session.resync"
+          )
       );
     });
 
@@ -3888,11 +3914,13 @@ suite("Webview", () => {
 
       assert.strictEqual(overlay.hidden, true);
       assert.ok(
-        mockVsCode._getMessages().some(
-          (message: any) =>
-            message.type === "feature.multi-session.activate" &&
-            message.localSessionId === "local-b"
-        )
+        mockVsCode
+          ._getMessages()
+          .some(
+            (message: any) =>
+              message.type === "feature.multi-session.activate" &&
+              message.localSessionId === "local-b"
+          )
       );
     });
 
@@ -3951,7 +3979,9 @@ suite("Webview", () => {
         activeItem.querySelector(".multi-session-badge-active"),
         null
       );
-      assert.ok(permissionItem.querySelector(".multi-session-badge-permission"));
+      assert.ok(
+        permissionItem.querySelector(".multi-session-badge-permission")
+      );
       assert.ok(permissionItem.querySelector(".multi-session-badge-unread"));
       assert.ok(permissionItem.querySelector(".multi-session-badge-diff"));
       assert.strictEqual(

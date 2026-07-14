@@ -68,6 +68,16 @@ export function validateAgent(agent: AgentConfig): ValidationResult {
     }
   }
 
+  if (
+    agent.availabilityCommand !== undefined &&
+    typeof agent.availabilityCommand !== "string"
+  ) {
+    return {
+      valid: false,
+      error: "Agent availabilityCommand must be a string or undefined",
+    };
+  }
+
   return { valid: true };
 }
 

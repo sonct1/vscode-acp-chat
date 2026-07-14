@@ -239,6 +239,10 @@
                 "additionalProperties": {
                   "type": "string"
                 }
+              },
+              "availabilityCommand": {
+                "type": "string",
+                "description": "Optional command used only for availability checks. Defaults to command."
               }
             }
           }

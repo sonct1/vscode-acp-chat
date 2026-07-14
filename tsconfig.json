@@ -15,5 +15,12 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", ".vscode-test", "src/views/webview"]
+  "exclude": [
+    "node_modules",
+    ".vscode-test",
+    "src/views/webview",
+    "src/features/pi-agent/vendor/pi-acp/test",
+    "src/features/pi-agent/vendor/pi-acp/scripts",
+    "src/features/pi-agent/vendor/pi-acp/tsup.config.ts"
+  ]
 }

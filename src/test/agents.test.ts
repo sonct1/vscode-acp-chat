@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import { validateAgent } from "../acp/agent-validator";
 import { AGENTS, getAgent, getFirstAvailableAgent } from "../acp/agents";
 
 suite("agents", () => {
@@ -32,6 +33,46 @@ suite("agents", () => {
       const claude = AGENTS.find((a) => a.id === "claude-code");
       assert.ok(claude, "claude-code agent should exist");
       assert.strictEqual(claude?.command, "npx");
+    });
+
+    test("should include bundled Pi agent", () => {
+      const pi = AGENTS.find((a) => a.id === "pi");
+      assert.ok(pi, "pi agent should exist");
+      assert.notStrictEqual(pi?.command, "pi-acp");
+      assert.strictEqual(pi?.availabilityCommand, "pi");
+      assert.strictEqual(pi?.env?.ELECTRON_RUN_AS_NODE, "1");
+      assert.ok(
+        pi?.args.some((arg) =>
+          arg.replace(/\\/g, "/").endsWith("pi-acp/index.mjs")
+        ),
+        "pi args should include bundled adapter entrypoint"
+      );
+    });
+  });
+
+  suite("validation", () => {
+    test("should accept string availabilityCommand", () => {
+      const result = validateAgent({
+        id: "custom",
+        name: "Custom",
+        command: "node",
+        args: [],
+        availabilityCommand: "pi",
+      });
+
+      assert.strictEqual(result.valid, true);
+    });
+
+    test("should reject non-string availabilityCommand", () => {
+      const result = validateAgent({
+        id: "custom",
+        name: "Custom",
+        command: "node",
+        args: [],
+        availabilityCommand: 123 as unknown as string,
+      });
+
+      assert.strictEqual(result.valid, false);
     });
   });
 

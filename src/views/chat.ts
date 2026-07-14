@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import { searchWorkspaceFiles } from "../utils/file-search";
 import { getWorkspaceRoot } from "../utils/workspace";
-import { ACPClient, type ContextUsageUpdate } from "../acp/client";
+import {
+  ACPClient,
+  type ContextUsageUpdate,
+  type SessionMetadata,
+} from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
 import { FileHandler } from "../acp/file-handler";
@@ -1962,6 +1966,12 @@ export class ChatViewProvider
     const configOptionsRestored = new Set<string>();
 
     if (
+      await this.migratePiThinkingModePreference(pref, genericConfigOptions)
+    ) {
+      configOptionsRestored.add("thought_level");
+    }
+
+    if (
       pref.modeId &&
       availableModes.some(
         (mode: { id: string }) => mode && mode.id === pref.modeId
@@ -2019,6 +2029,48 @@ export class ChatViewProvider
         starredModels: pref.starredModels,
       });
     }
+  }
+
+  private async migratePiThinkingModePreference(
+    pref: AgentPreference,
+    genericConfigOptions: NonNullable<SessionMetadata["genericConfigOptions"]>
+  ): Promise<boolean> {
+    const savedModeId = pref.modeId;
+    if (
+      this.acpClient.getAgentId() !== "pi" ||
+      !savedModeId ||
+      pref.configOptionValues?.thought_level ||
+      !this.isPiThinkingLevel(savedModeId)
+    ) {
+      return false;
+    }
+
+    const thoughtOption = genericConfigOptions.find(
+      (option) =>
+        option.id === "thought_level" || option.category === "thought_level"
+    );
+    if (
+      !thoughtOption?.options.some((option) => option.value === savedModeId)
+    ) {
+      return false;
+    }
+
+    await this.acpClient.setConfigOption(thoughtOption.id, savedModeId);
+    await this.updateCurrentAgentPreference((current) => {
+      const { modeId: _modeId, ...rest } = current;
+      return {
+        ...rest,
+        configOptionValues: {
+          ...current.configOptionValues,
+          [thoughtOption.id]: savedModeId,
+        },
+      };
+    });
+    return true;
+  }
+
+  private isPiThinkingLevel(value: string): boolean {
+    return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(value);
   }
 
   private postMessage(message: Record<string, unknown>): void {

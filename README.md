@@ -12,7 +12,7 @@
 
 ## 🚀 Features
 
-- **Multi-Agent Support** — Connect to OpenCode, Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
+- **Multi-Agent Support** — Connect to OpenCode, Pi, Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
 - **Native Chat Interface** — Integrated sidebar chat that feels like a native part of VS Code.
 - **Context-Aware** — Send code selections or terminal output directly to the chat via context menus.
 - **Tool Visibility** — See what commands the AI runs with expandable input/output and file diffs.
@@ -32,6 +32,7 @@
 You need at least one ACP-compatible agent installed and available in your `$PATH`:
 
 - **[OpenCode](https://github.com/sst/opencode)**: `pnpm add -g opencode`
+- **[Pi](https://github.com/earendil-works/pi)**: `npm install -g @earendil-works/pi-coding-agent`
 - **[Claude Code](https://claude.ai/code)**: `npm install -g @anthropic-ai/claude-code`
 - **[Gemini CLI](https://github.com/google/gemini-cli)**: `npm install -g @google/gemini-cli`
 
@@ -61,6 +62,7 @@ The extension automatically detects installed agents by checking your system's `
 | Agent          | Command                                     | Detection      |
 | -------------- | ------------------------------------------- | -------------- |
 | OpenCode       | `opencode acp`                              | Checks `$PATH` |
+| Pi             | bundled `pi-acp` adapter                    | Checks `pi`    |
 | Claude Code    | `npx @agentclientprotocol/claude-agent-acp` | Checks `$PATH` |
 | Codex CLI      | `npx @agentclientprotocol/codex-acp`        | Checks `$PATH` |
 | CodeBuddy Code | `codebuddy --acp`                           | Checks `$PATH` |
@@ -114,6 +116,7 @@ You can add custom agents via VS Code settings:
 
 > [!NOTE]
 > Custom agents with the same `id` as a built-in agent will **replace** the built-in configuration.
+> To use the bundled Pi adapter, remove any old custom agent with `id: "pi"` and `command: "pi-acp"`. Keep a custom `pi` entry only when intentionally overriding the bundled adapter.
 
 ## 👨‍💻 Development
 

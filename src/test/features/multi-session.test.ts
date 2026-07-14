@@ -54,6 +54,14 @@ class FakeSessionManager {
 class FakeClient {
   state = "disconnected";
   currentSessionId: string | null = null;
+  agentId = "test-agent";
+  metadata: any = {
+    modes: null,
+    models: null,
+    genericConfigOptions: [],
+    commands: null,
+  };
+  setConfigOptionCalls: Array<{ configId: string; value: string }> = [];
   connectError?: Error;
   cancelCalls = 0;
   disposeCalls = 0;
@@ -73,12 +81,7 @@ class FakeClient {
   }
 
   getSessionMetadata(): any {
-    return {
-      modes: null,
-      models: null,
-      genericConfigOptions: [],
-      commands: null,
-    };
+    return this.metadata;
   }
 
   getNesDocumentCapabilities(): any {
@@ -99,7 +102,7 @@ class FakeClient {
   }
 
   getAgentId(): string {
-    return "test-agent";
+    return this.agentId;
   }
 
   getAgentName(): string {
@@ -149,7 +152,9 @@ class FakeClient {
 
   async setMode(): Promise<void> {}
   async setModel(): Promise<void> {}
-  async setConfigOption(): Promise<void> {}
+  async setConfigOption(configId: string, value: string): Promise<void> {
+    this.setConfigOptionCalls.push({ configId, value });
+  }
   updateSessionMetadataFromConfigOptions(): void {}
   setLastUsageUpdate(): void {}
 
@@ -528,11 +533,67 @@ suite("multi-session feature", () => {
     assert.strictEqual(state.managerOpen, false);
 
     await controller.handleMessage({ type: "feature.multi-session.manage" });
-    await controller.handleMessage({ type: "feature.multi-session.hideManager" });
+    await controller.handleMessage({
+      type: "feature.multi-session.hideManager",
+    });
     state = [...messages]
       .reverse()
       .find((message) => message.type === "feature.multi-session.state") as any;
     assert.strictEqual(state.managerOpen, false);
+    controller.dispose();
+  });
+
+  test("migrates saved Pi mode preference to thought_level in multi-session restore", async () => {
+    const messages: Record<string, unknown>[] = [];
+    const clients: FakeClient[] = [];
+    const state = new TestMemento();
+    await state.update("vscode-acp-chat.selectedAgent", "pi");
+    await state.update("vscode-acp-chat.agentPreferences.v1", {
+      pi: { modeId: "xhigh", configOptionValues: {}, starredModels: [] },
+    });
+
+    const controller = new MultiSessionHostController({
+      globalState: state,
+      postMessage: (message) => messages.push(message),
+      clientFactory: () => {
+        const client = new FakeClient();
+        client.agentId = "pi";
+        client.metadata = {
+          modes: null,
+          models: null,
+          genericConfigOptions: [
+            {
+              id: "thought_level",
+              name: "Thinking",
+              category: "thought_level",
+              currentValue: "medium",
+              options: [
+                { value: "medium", name: "Medium" },
+                { value: "xhigh", name: "Xhigh" },
+              ],
+            },
+          ],
+          commands: null,
+        };
+        clients.push(client);
+        return {
+          client: client as any,
+          sessionManager: new FakeSessionManager() as any,
+        };
+      },
+    });
+
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clients[0].resolvePrompt();
+    await prompt;
+
+    assert.deepStrictEqual(clients[0].setConfigOptionCalls, [
+      { configId: "thought_level", value: "xhigh" },
+    ]);
+    const prefs = state.get<any>("vscode-acp-chat.agentPreferences.v1");
+    assert.strictEqual(prefs.pi.modeId, undefined);
+    assert.strictEqual(prefs.pi.configOptionValues.thought_level, "xhigh");
     controller.dispose();
   });
 
@@ -554,9 +615,11 @@ suite("multi-session feature", () => {
     assert.strictEqual(state.managerOpen, false);
     assert.strictEqual(snapshot.isGenerating, false);
     assert.strictEqual(
-      controller.getStateForTest().sessions.find(
-        (session) => session.localSessionId === snapshot.activeLocalSessionId
-      )?.status,
+      controller
+        .getStateForTest()
+        .sessions.find(
+          (session) => session.localSessionId === snapshot.activeLocalSessionId
+        )?.status,
       "idle"
     );
     assert.strictEqual(clients.length, 1);

@@ -362,7 +362,8 @@ export class MultiSessionHostController implements vscode.Disposable {
     try {
       await this.ensureRuntime(session, false);
     } catch (error) {
-      session.lastError = error instanceof Error ? error.message : String(error);
+      session.lastError =
+        error instanceof Error ? error.message : String(error);
       this.touch(session);
       this.sendState();
       this.sendSnapshot();
@@ -1316,6 +1317,8 @@ export class MultiSessionHostController implements vscode.Disposable {
     const metadata = client.getSessionMetadata();
     const preference = this.getAgentPreference(session.agent.id);
 
+    await this.migratePiThinkingModePreference(session, preference);
+
     if (
       preference.modeId &&
       metadata?.modes?.availableModes.some(
@@ -1346,6 +1349,51 @@ export class MultiSessionHostController implements vscode.Disposable {
       await this.restorePerModelConfigOptions(session, preference.modelId);
     }
     session.metadata = clientMetadata(client);
+  }
+
+  private async migratePiThinkingModePreference(
+    session: ManagedSession,
+    preference: AgentPreference
+  ): Promise<void> {
+    const client = session.client;
+    const savedModeId = preference.modeId;
+    if (
+      !client ||
+      session.agent.id !== "pi" ||
+      !savedModeId ||
+      preference.configOptionValues?.thought_level ||
+      !this.isPiThinkingLevel(savedModeId)
+    ) {
+      return;
+    }
+
+    const thoughtOption = client
+      .getSessionMetadata()
+      ?.genericConfigOptions.find(
+        (option) =>
+          option.id === "thought_level" || option.category === "thought_level"
+      );
+    if (
+      !thoughtOption?.options.some((option) => option.value === savedModeId)
+    ) {
+      return;
+    }
+
+    await client.setConfigOption(thoughtOption.id, savedModeId);
+    await this.updateAgentPreference(session.agent.id, (current) => {
+      const { modeId: _modeId, ...rest } = current;
+      return {
+        ...rest,
+        configOptionValues: {
+          ...current.configOptionValues,
+          [thoughtOption.id]: savedModeId,
+        },
+      };
+    });
+  }
+
+  private isPiThinkingLevel(value: string): boolean {
+    return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(value);
   }
 
   private async waitForIdle(session: ManagedSession): Promise<boolean> {

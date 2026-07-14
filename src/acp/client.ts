@@ -519,9 +519,11 @@ export class ACPClient {
     this.watchDebugConfiguration();
 
     if (!this.skipAvailabilityCheck && !isAgentAvailable(this.agentConfig.id)) {
+      const installCommand =
+        this.agentConfig.availabilityCommand ?? this.agentConfig.command;
       throw new Error(
         `Agent "${this.agentConfig.name}" is not installed. ` +
-          `Please install "${this.agentConfig.command}" and try again.`
+          `Please install "${installCommand}" and try again.`
       );
     }
 

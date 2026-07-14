@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { createPiAgentConfig } from "../features/pi-agent";
 import { validateAgents, showValidationWarnings } from "./agent-validator";
 import { isCommandAvailable } from "../utils/bin-paths";
 
@@ -12,6 +13,7 @@ export interface AgentConfig {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  availabilityCommand?: string;
 }
 
 /**
@@ -112,6 +114,7 @@ export const AGENTS: AgentConfig[] = [
     command: "codebuddy",
     args: ["--acp"],
   },
+  createPiAgentConfig(),
 ];
 
 /**
@@ -175,7 +178,7 @@ export function getAgentsWithStatus(forceRefresh = false): AgentWithStatus[] {
     .filter((agent) => !invalidAgentIds.has(agent.id))
     .map((agent) => ({
       ...agent,
-      available: isCommandAvailable(agent.command),
+      available: isCommandAvailable(agent.availabilityCommand ?? agent.command),
     }));
 
   return cachedAgentsWithStatus;
