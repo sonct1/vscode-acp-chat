@@ -127,10 +127,11 @@ Multi-session is enabled by default through `vscode-acp-chat.multiSession.enable
 User-visible behavior:
 
 - multiple local sessions can be created and switched from a sticky header or manager overlay;
+- the initial restored/opened draft session eagerly starts its ACP runtime when the chat webview is ready, but does not create an ACP session/history entry until a prompt or explicit session action needs one;
 - each session has independent transcript, draft, scroll state, ACP runtime, metadata, permissions, diffs, unread count, and status;
 - the manager shows running, idle, draft, permission-waiting, error, and closed sessions;
 - started and loaded sessions show the full ACP session id in manager metadata and its hover tooltip for debugging/resume traceability;
-- `vscode-acp-chat.multiSession.maxConcurrentSessions` limits concurrently started local ACP processes; draft sessions do not count.
+- `vscode-acp-chat.multiSession.maxConcurrentSessions` limits concurrently started local ACP processes; draft sessions without an eager-started runtime do not count.
 
 Main host/webview protocol messages:
 

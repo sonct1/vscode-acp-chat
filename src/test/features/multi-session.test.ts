@@ -75,6 +75,8 @@ class FakeClient {
   };
   setConfigOptionCalls: Array<{ configId: string; value: string }> = [];
   connectError?: Error;
+  connectPromise?: Promise<void>;
+  connectCalls = 0;
   cancelCalls = 0;
   disposeCalls = 0;
   promptResolvers: Array<(value: { stopReason: string }) => void> = [];
@@ -83,6 +85,8 @@ class FakeClient {
   permissionRequest?: (params: unknown) => Promise<unknown>;
 
   async connect(): Promise<void> {
+    this.connectCalls += 1;
+    if (this.connectPromise) await this.connectPromise;
     if (this.connectError) throw this.connectError;
     this.state = "connected";
     this.stateChange?.("connected");
@@ -1013,6 +1017,106 @@ suite("multi-session feature", () => {
     const prefs = state.get<any>("vscode-acp-chat.agentPreferences.v1");
     assert.strictEqual(prefs.pi.modeId, undefined);
     assert.strictEqual(prefs.pi.configOptionValues.thought_level, "xhigh");
+    controller.dispose();
+  });
+
+  test("ready auto-starts runtime without creating an ACP session", async () => {
+    const { controller, clients, managers } = createController();
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
+      )!;
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].state, "connected");
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.status, "idle");
+    assert.strictEqual(active.acpSessionId, undefined);
+    controller.dispose();
+  });
+
+  test("repeated ready does not start another runtime", async () => {
+    const { controller, clients, managers } = createController();
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].connectCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 0);
+    controller.dispose();
+  });
+
+  test("failed ready auto-start leaves retryable draft state", async () => {
+    const { controller, messages, clients, managers } = createController(
+      (client) => {
+        client.connectError = new Error("connect failed");
+      }
+    );
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
+      )!;
+    const errors = messages.filter(
+      (message) =>
+        message.type === "feature.multi-session.delta" &&
+        (message.event as any)?.message?.type === "error"
+    );
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].disposeCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.status, "draft");
+    assert.match(active.lastError ?? "", /connect failed/);
+    assert.strictEqual(errors.length, 1);
+    controller.dispose();
+  });
+
+  test("send during pending ready auto-start reuses runtime and creates one ACP session", async () => {
+    let releaseConnect!: () => void;
+    let resolveConnectStarted!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      resolveConnectStarted = resolve;
+    });
+    const { controller, clients, managers } = createController((client) => {
+      client.connectPromise = new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+        resolveConnectStarted();
+      });
+    });
+
+    const ready = controller.handleMessage({
+      type: "feature.multi-session.ready",
+    });
+    await connectStarted;
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].promptResolvers.length, 0);
+
+    releaseConnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].connectCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(clients[0].promptResolvers.length, 1);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    await ready;
     controller.dispose();
   });
 

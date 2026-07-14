@@ -22,6 +22,8 @@ Current plans:
 - [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md) — fix bundled Pi history loading by replaying full active-path transcript from Pi JSONL files instead of compacted RPC state.
 - [Pi Agent Toolbar Thinking and Context Usage Fixes](./implement-pi-agent-toolbar-context-fixes.md) — remove duplicate Pi thinking selectors and surface Pi context/token usage in the chat toolbar.
 - [Full ACP Session ID Display](./implement-full-session-id-display.md) — show the complete ACP/Pi session id in multi-session UI metadata and remove short-id fallbacks.
+- [Split Multi-Session Manager Panel](./implement-split-session-manager-panel.md) — move full session management out of the chat webview into a dedicated panel plus quick switch flow.
+- [Eager Multi-Session Runtime Loading](./implement-eager-multi-session-runtime.md) — auto-start the restored/opened multi-session draft's ACP runtime without creating an ACP session until user action.
 - [Searchable Model Picker](./implement-searchable-model-picker.md) — add search/filter support to the model selection dropdown.
 - [Secondary Sidebar Settings Action](./implement-secondary-sidebar-settings-action.md) — add a settings gear action to the ACP Chat secondary sidebar title area.
 

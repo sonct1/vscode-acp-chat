@@ -135,6 +135,8 @@ interface ManagedSession {
   isGenerating: boolean;
   isLoadingHistory: boolean;
   sendInFlight: boolean;
+  eagerRuntimeAttempted?: boolean;
+  runtimeStartPromise?: Promise<void>;
   resources?: SessionResources;
   client?: ACPClient;
   sessionManager?: AgentSessionManager;
@@ -210,6 +212,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       case "feature.multi-session.ready":
         this.sendState();
         this.sendSnapshot();
+        await this.eagerStartActiveRuntimeOnReady();
         return true;
       case "feature.multi-session.new":
         await this.newChat();
@@ -627,6 +630,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (active && active.status === "draft" && !active.client) {
       active.agent = agent;
       active.title = "Untitled chat";
+      active.eagerRuntimeAttempted = false;
       this.touch(active);
       this.sendSnapshot();
     }
@@ -683,6 +687,42 @@ export class MultiSessionHostController implements vscode.Disposable {
     return session;
   }
 
+  private async eagerStartActiveRuntimeOnReady(): Promise<void> {
+    const session = this.getActive();
+    if (!session || session.eagerRuntimeAttempted) return;
+    if (session.client || session.acpSessionId || session.isLoadingHistory)
+      return;
+    if (session.status !== "draft") return;
+
+    session.eagerRuntimeAttempted = true;
+    try {
+      await this.ensureRuntime(session, false);
+      if (!this.sessions.has(session.localSessionId)) return;
+      if (
+        !session.acpSessionId &&
+        (session.status as MultiSessionStatus) === "starting"
+      ) {
+        session.status = "idle";
+        this.touch(session);
+        this.sendState();
+      }
+      if (session.localSessionId === this.activeLocalSessionId) {
+        this.sendSnapshot();
+      }
+    } catch (error) {
+      if (!this.sessions.has(session.localSessionId)) return;
+      const message = error instanceof Error ? error.message : String(error);
+      session.lastError = message;
+      session.status = session.acpSessionId ? "error" : "draft";
+      this.append(session, { type: "error", text: message });
+      this.touch(session);
+      this.sendState();
+      if (session.localSessionId === this.activeLocalSessionId) {
+        this.sendSnapshot();
+      }
+    }
+  }
+
   private ensureResources(session: ManagedSession): SessionResources {
     if (session.resources) return session.resources;
 
@@ -717,89 +757,17 @@ export class MultiSessionHostController implements vscode.Disposable {
     session: ManagedSession,
     createAcpSession = true
   ): Promise<void> {
-    if (!session.client) {
-      const max = vscode.workspace
-        .getConfiguration("vscode-acp-chat")
-        .get<number>("multiSession.maxConcurrentSessions", 4);
-      const started = [...this.sessions.values()].filter(
-        (item) => item.client
-      ).length;
-      if (started >= max) {
-        throw new Error(
-          `Maximum concurrent sessions (${max}) reached. Close an idle session and retry.`
-        );
-      }
-
-      const resources = this.ensureResources(session);
-      const created = this.clientFactory(session.agent);
-      const isFactoryResult =
-        typeof created === "object" && created !== null && "client" in created;
-      const client = isFactoryResult ? created.client : created;
-      const sessionManager = isFactoryResult
-        ? (created.sessionManager ?? this.catalog.createManager(client))
-        : this.catalog.createManager(client);
-      const output = new SessionOutputPipeline({
-        client,
-        fileHandler: resources.fileHandler,
-        emit: (message) => this.append(session, message),
-        onMetadataChanged: (metadata) => {
-          session.metadata = metadata;
-          this.emitSessionMetadata(session);
-        },
-        onContextUsageChanged: (usage) => {
-          session.contextUsage = usage;
-          this.append(session, {
-            type: "contextUsage",
-            used: usage?.used ?? null,
-            size: usage?.size ?? null,
-            cost: usage?.cost ?? null,
-          });
-        },
-        onSessionInfoChanged: (update) => {
-          const title = update.title;
-          if (typeof title === "string" && title.trim()) {
-            session.title = title;
-            this.touch(session);
-            this.sendState();
-          }
-        },
-        onStructuredDiffContent: async (content) => {
-          await recordStructuredDiffsFromContent(content, {
-            cwd: session.cwd,
-            diffManager: resources.diffManager,
-            onDidRecord: (path, oldText, newText) =>
-              this.mutationCoordinator.didWrite(
-                session.localSessionId,
-                path,
-                oldText,
-                newText
-              ),
-          });
-        },
-      });
-      const queue = new AsyncSerialProcessor<SessionNotification>((update) =>
-        output.handleSessionUpdate(update)
-      );
-
-      session.client = client;
-      session.sessionManager = sessionManager;
-      session.output = output;
-      session.queue = queue;
-      session.runtimeId = `runtime-${session.localSessionId}`;
-      this.bindClient(session, client, resources);
-      session.status = "starting";
-      this.sendState();
-
+    if (session.runtimeStartPromise) {
+      await session.runtimeStartPromise;
+    } else if (!session.client) {
+      const runtimeStartPromise = this.startRuntime(session);
+      session.runtimeStartPromise = runtimeStartPromise;
       try {
-        await client.connect(session.cwd);
-        sessionManager.syncCapabilities();
-        if (session.localSessionId === this.activeLocalSessionId) {
-          this.rebindDocumentSync(session);
+        await runtimeStartPromise;
+      } finally {
+        if (session.runtimeStartPromise === runtimeStartPromise) {
+          session.runtimeStartPromise = undefined;
         }
-      } catch (error) {
-        this.disposeRuntime(session);
-        session.status = session.acpSessionId ? "error" : "draft";
-        throw error;
       }
     }
 
@@ -817,6 +785,92 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.sendState();
       this.emitSessionMetadata(session);
       this.sendSnapshot();
+    }
+  }
+
+  private async startRuntime(session: ManagedSession): Promise<void> {
+    const max = vscode.workspace
+      .getConfiguration("vscode-acp-chat")
+      .get<number>("multiSession.maxConcurrentSessions", 4);
+    const started = [...this.sessions.values()].filter(
+      (item) => item.client
+    ).length;
+    if (started >= max) {
+      throw new Error(
+        `Maximum concurrent sessions (${max}) reached. Close an idle session and retry.`
+      );
+    }
+
+    const resources = this.ensureResources(session);
+    const created = this.clientFactory(session.agent);
+    const isFactoryResult =
+      typeof created === "object" && created !== null && "client" in created;
+    const client = isFactoryResult ? created.client : created;
+    const sessionManager = isFactoryResult
+      ? (created.sessionManager ?? this.catalog.createManager(client))
+      : this.catalog.createManager(client);
+    const output = new SessionOutputPipeline({
+      client,
+      fileHandler: resources.fileHandler,
+      emit: (message) => this.append(session, message),
+      onMetadataChanged: (metadata) => {
+        session.metadata = metadata;
+        this.emitSessionMetadata(session);
+      },
+      onContextUsageChanged: (usage) => {
+        session.contextUsage = usage;
+        this.append(session, {
+          type: "contextUsage",
+          used: usage?.used ?? null,
+          size: usage?.size ?? null,
+          cost: usage?.cost ?? null,
+        });
+      },
+      onSessionInfoChanged: (update) => {
+        const title = update.title;
+        if (typeof title === "string" && title.trim()) {
+          session.title = title;
+          this.touch(session);
+          this.sendState();
+        }
+      },
+      onStructuredDiffContent: async (content) => {
+        await recordStructuredDiffsFromContent(content, {
+          cwd: session.cwd,
+          diffManager: resources.diffManager,
+          onDidRecord: (path, oldText, newText) =>
+            this.mutationCoordinator.didWrite(
+              session.localSessionId,
+              path,
+              oldText,
+              newText
+            ),
+        });
+      },
+    });
+    const queue = new AsyncSerialProcessor<SessionNotification>((update) =>
+      output.handleSessionUpdate(update)
+    );
+
+    session.client = client;
+    session.sessionManager = sessionManager;
+    session.output = output;
+    session.queue = queue;
+    session.runtimeId = `runtime-${session.localSessionId}`;
+    this.bindClient(session, client, resources);
+    session.status = "starting";
+    this.sendState();
+
+    try {
+      await client.connect(session.cwd);
+      sessionManager.syncCapabilities();
+      if (session.localSessionId === this.activeLocalSessionId) {
+        this.rebindDocumentSync(session);
+      }
+    } catch (error) {
+      this.disposeRuntime(session);
+      session.status = session.acpSessionId ? "error" : "draft";
+      throw error;
     }
   }
 
@@ -1490,6 +1544,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     session.client = undefined;
     session.sessionManager = undefined;
     session.runtimeId = undefined;
+    session.runtimeStartPromise = undefined;
   }
 
   private disposeSession(session: ManagedSession): void {
