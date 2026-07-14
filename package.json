@@ -79,6 +79,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "vscode-acp-chat.switchSession",
+        "title": "Switch Chat Session",
+        "category": "ACP",
+        "icon": "$(list-selection)"
+      },
+      {
         "command": "vscode-acp-chat.loadHistory",
         "title": "Load History",
         "category": "ACP",
@@ -316,19 +322,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "vscode-acp-chat.clearChat",
+          "command": "vscode-acp-chat.switchSession",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@3"
         },
         {
-          "command": "vscode-acp-chat.loadHistory",
+          "command": "vscode-acp-chat.clearChat",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@4"
         },
         {
-          "command": "vscode-acp-chat.openSettings",
+          "command": "vscode-acp-chat.loadHistory",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@5"
+        },
+        {
+          "command": "vscode-acp-chat.openSettings",
+          "when": "view == vscode-acp-chat.chatView",
+          "group": "navigation@6"
         }
       ],
       "commandPalette": [
@@ -342,6 +353,10 @@
         },
         {
           "command": "vscode-acp-chat.manageSessions",
+          "when": "true"
+        },
+        {
+          "command": "vscode-acp-chat.switchSession",
           "when": "true"
         },
         {

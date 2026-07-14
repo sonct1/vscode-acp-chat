@@ -39,8 +39,11 @@ import {
   type CatalogCapabilities,
 } from "./session-catalog";
 import type {
+  MultiSessionAggregate,
+  MultiSessionChatStateMessage,
   MultiSessionHostMessage,
   MultiSessionListItem,
+  MultiSessionManagerStateMessage,
   MultiSessionStatus,
 } from "./contracts";
 
@@ -86,6 +89,9 @@ export interface MultiSessionHostOptions {
   globalState: vscode.Memento;
   postMessage: (message: Record<string, unknown>) => void;
   onStatusChanged?: (summary: string) => void;
+  onOpenManager?: () => void;
+  onFocusChat?: () => Thenable<void> | void;
+  onQuickSwitch?: () => Thenable<void> | void;
   clientFactory?: (
     agent: AgentConfig
   ) => ACPClient | MultiSessionClientFactoryResult;
@@ -154,12 +160,20 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly catalog: SessionCatalogService;
   private documentSync?: DocumentSyncManager;
   private activeDocumentSyncSessionId: string | undefined;
-  private managerOpen = false;
   private disposed = false;
+  private chatStateTimer: ReturnType<typeof setTimeout> | undefined;
+  private managerStateTimer: ReturnType<typeof setTimeout> | undefined;
+  private managerRevision = 0;
+  private managerSubscriberCount = 0;
+  private readonly managerStateEmitter =
+    new vscode.EventEmitter<MultiSessionManagerStateMessage>();
 
   private readonly globalState: vscode.Memento;
   private readonly post: (message: Record<string, unknown>) => void;
   private readonly statusChanged: (summary: string) => void;
+  private readonly openManagerPanel: () => void;
+  private readonly focusChat: () => Thenable<void> | void;
+  private readonly quickSwitch: () => Thenable<void> | void;
   private readonly clientFactory: (
     agent: AgentConfig
   ) => ACPClient | MultiSessionClientFactoryResult;
@@ -173,6 +187,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.globalState = globalStateOrOptions.globalState;
       this.post = globalStateOrOptions.postMessage;
       this.statusChanged = globalStateOrOptions.onStatusChanged ?? (() => {});
+      this.openManagerPanel = globalStateOrOptions.onOpenManager ?? (() => {});
+      this.focusChat = globalStateOrOptions.onFocusChat ?? (() => {});
+      this.quickSwitch = globalStateOrOptions.onQuickSwitch ?? (() => {});
       this.clientFactory =
         globalStateOrOptions.clientFactory ??
         ((agent) => new ACPClient({ agentConfig: agent }));
@@ -180,6 +197,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.globalState = globalStateOrOptions;
       this.post = postMessage ?? (() => {});
       this.statusChanged = onStatusChanged;
+      this.openManagerPanel = () => {};
+      this.focusChat = () => {};
+      this.quickSwitch = () => {};
       this.clientFactory = (agent) => new ACPClient({ agentConfig: agent });
     }
 
@@ -201,8 +221,19 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   attachView(view: vscode.WebviewView): void {
     this.view = view;
-    this.sendState();
+    this.sendChatStateNow();
     this.sendSnapshot();
+  }
+
+  onDidChangeManagerState(
+    listener: (state: MultiSessionManagerStateMessage) => void
+  ): vscode.Disposable {
+    this.managerSubscriberCount += 1;
+    const subscription = this.managerStateEmitter.event(listener);
+    return new vscode.Disposable(() => {
+      subscription.dispose();
+      this.managerSubscriberCount = Math.max(0, this.managerSubscriberCount - 1);
+    });
   }
 
   async handleMessage(message: MultiSessionHostMessage): Promise<boolean> {
@@ -210,15 +241,19 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     switch (message.type) {
       case "feature.multi-session.ready":
-        this.sendState();
+        this.sendChatStateNow();
         this.sendSnapshot();
         await this.eagerStartActiveRuntimeOnReady();
         return true;
+      case "feature.multi-session.managerReady":
+      case "feature.multi-session.managerResync":
+        this.sendManagerStateNow();
+        return true;
       case "feature.multi-session.new":
-        await this.newChat();
+        await this.newChat({ focusChat: message.focusChat });
         return true;
       case "feature.multi-session.activate":
-        this.activate(message.localSessionId);
+        this.activate(message.localSessionId, { focusChat: message.focusChat });
         return true;
       case "feature.multi-session.stop":
         await this.stop(message.localSessionId);
@@ -227,16 +262,21 @@ export class MultiSessionHostController implements vscode.Disposable {
         await this.close(message.localSessionId);
         return true;
       case "feature.multi-session.manage":
+      case "feature.multi-session.openManagerPanel":
         this.openManager();
         return true;
+      case "feature.multi-session.quickSwitch":
+        await this.quickSwitch();
+        return true;
       case "feature.multi-session.hideManager":
-        this.closeManager();
         return true;
       case "feature.multi-session.resync":
         this.sendSnapshot();
         return true;
       case "feature.multi-session.reviewPermission":
-        this.activate(message.localSessionId);
+        this.activate(message.localSessionId, {
+          focusChat: message.focusChat ?? true,
+        });
         return true;
       case "feature.multi-session.permission.respond":
         this.respondPermission(
@@ -266,7 +306,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         await this.connectActive();
         return true;
       case "ready":
-        this.sendState();
+        this.sendChatStateNow();
         this.sendSnapshot();
         return true;
       case "newChat":
@@ -340,9 +380,9 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
   }
 
-  async newChat(): Promise<void> {
+  async newChat(options: { focusChat?: boolean } = {}): Promise<void> {
     const session = this.createDraft();
-    this.activate(session.localSessionId);
+    this.activate(session.localSessionId, options);
 
     try {
       await this.ensureRuntime(session, true);
@@ -359,14 +399,12 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   openManager(): void {
-    this.managerOpen = true;
-    this.sendState();
+    this.openManagerPanel();
   }
 
   closeManager(): void {
-    if (!this.managerOpen) return;
-    this.managerOpen = false;
-    this.sendState();
+    // Compatibility shim for restored older webviews. The dedicated manager
+    // panel owns its own visibility and does not mirror drawer state here.
   }
 
   clearActive(): void {
@@ -383,11 +421,6 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   async connectActive(): Promise<void> {
     const session = this.getActive() ?? this.createDraft();
-    if (this.managerOpen) {
-      this.managerOpen = false;
-      this.sendState();
-    }
-
     try {
       await this.ensureRuntime(session, false);
     } catch (error) {
@@ -425,7 +458,6 @@ export class MultiSessionHostController implements vscode.Disposable {
       session.lastError = message;
       this.append(session, { type: "error", text: message });
       this.sendState();
-      this.openManager();
       session.sendInFlight = false;
       return;
     }
@@ -651,6 +683,11 @@ export class MultiSessionHostController implements vscode.Disposable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.chatStateTimer) clearTimeout(this.chatStateTimer);
+    if (this.managerStateTimer) clearTimeout(this.managerStateTimer);
+    this.chatStateTimer = undefined;
+    this.managerStateTimer = undefined;
+    this.managerStateEmitter.dispose();
     this.documentSync?.dispose();
     this.documentSync = undefined;
     for (const session of this.sessions.values()) this.disposeSession(session);
@@ -1009,7 +1046,8 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     if (session.localSessionId !== this.activeLocalSessionId) {
       session.unreadCount += 1;
-      this.sendState();
+      this.scheduleChatState();
+      this.scheduleManagerState();
       return;
     }
 
@@ -1019,18 +1057,35 @@ export class MultiSessionHostController implements vscode.Disposable {
       activationRevision: this.activationRevision,
       event,
     });
+    this.scheduleChatState();
+    this.scheduleManagerState();
   }
 
-  private activate(localSessionId: string): void {
+  activateSession(
+    localSessionId: string,
+    options: { focusChat?: boolean } = {}
+  ): void {
+    this.activate(localSessionId, options);
+  }
+
+  private activate(
+    localSessionId: string,
+    options: { focusChat?: boolean } = {}
+  ): void {
     const session = this.sessions.get(localSessionId);
     if (!session) return;
     this.activeLocalSessionId = localSessionId;
     this.activationRevision += 1;
-    this.managerOpen = false;
     session.unreadCount = 0;
     this.rebindDocumentSync(session);
-    this.sendState();
+    this.sendChatStateNow();
+    this.sendManagerStateNow();
     this.sendSnapshot();
+    if (options.focusChat) {
+      void Promise.resolve(this.focusChat()).catch((error) => {
+        console.error("[MultiSession] Failed to focus chat view:", error);
+      });
+    }
   }
 
   private sendSnapshot(): void {
@@ -1055,7 +1110,86 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private sendState(): void {
+    this.sendChatStateNow();
+    this.sendManagerStateNow();
+  }
+
+  private scheduleChatState(): void {
+    if (this.disposed || this.chatStateTimer) return;
+    this.chatStateTimer = setTimeout(() => {
+      this.chatStateTimer = undefined;
+      this.sendChatStateNow();
+    }, 200);
+    this.chatStateTimer.unref?.();
+  }
+
+  private scheduleManagerState(): void {
+    if (this.disposed || this.managerSubscriberCount === 0) return;
+    if (this.managerStateTimer) return;
+    this.managerStateTimer = setTimeout(() => {
+      this.managerStateTimer = undefined;
+      this.sendManagerStateNow();
+    }, 250);
+    this.managerStateTimer.unref?.();
+  }
+
+  private sendChatStateNow(): void {
     if (this.disposed) return;
+    if (this.chatStateTimer) {
+      clearTimeout(this.chatStateTimer);
+      this.chatStateTimer = undefined;
+    }
+    const state = this.buildChatState();
+    this.post(state as unknown as Record<string, unknown>);
+    this.statusChanged(this.buildStatusSummary(state.aggregate));
+  }
+
+  private sendManagerStateNow(): void {
+    if (this.disposed) return;
+    if (this.managerStateTimer) {
+      clearTimeout(this.managerStateTimer);
+      this.managerStateTimer = undefined;
+    }
+    if (this.managerSubscriberCount === 0) return;
+    const state = this.buildManagerState();
+    this.managerStateEmitter.fire(state);
+  }
+
+  getManagerStateSnapshot(): MultiSessionManagerStateMessage {
+    return this.buildManagerState();
+  }
+
+  getChatStateSnapshot(): MultiSessionChatStateMessage {
+    return this.buildChatState();
+  }
+
+  private buildChatState(): MultiSessionChatStateMessage {
+    const active = this.getActive();
+    return {
+      type: "feature.multi-session.chatState",
+      enabled: true,
+      activeLocalSessionId: this.activeLocalSessionId,
+      activationRevision: this.activationRevision,
+      active: active ? this.toListItem(active) : undefined,
+      aggregate: this.buildAggregate(),
+    };
+  }
+
+  private buildManagerState(): MultiSessionManagerStateMessage {
+    return {
+      type: "feature.multi-session.managerState",
+      revision: ++this.managerRevision,
+      activeLocalSessionId: this.activeLocalSessionId,
+      sessions: [...this.sessions.values()].map((session) =>
+        this.toListItem(session)
+      ),
+      aggregate: this.buildAggregate(),
+      agents: this.getAgentOptions(),
+      selectedAgentId: this.defaultAgent.id,
+    };
+  }
+
+  private buildAggregate(): MultiSessionAggregate {
     const sessions = [...this.sessions.values()].map((session) =>
       this.toListItem(session)
     );
@@ -1071,28 +1205,22 @@ export class MultiSessionHostController implements vscode.Disposable {
       (sum, session) => sum + session.unreadCount,
       0
     );
+    return { open: sessions.length, running, awaitingPermission, unread };
+  }
 
-    this.post({
-      type: "feature.multi-session.state",
-      enabled: true,
-      activeLocalSessionId: this.activeLocalSessionId,
-      activationRevision: this.activationRevision,
-      sessions,
-      aggregate: { running, awaitingPermission, unread },
-      agents: getAgentsWithStatus()
-        .filter((agent) => agent.available || agent.id === this.defaultAgent.id)
-        .map((agent) => ({
-          id: agent.id,
-          name: agent.name,
-        })),
-      selectedAgentId: this.defaultAgent.id,
-      managerOpen: this.managerOpen,
-    });
-    this.statusChanged(
-      running || awaitingPermission
-        ? `ACP: ${running} running${awaitingPermission ? `, ${awaitingPermission} waiting` : ""}`
-        : "ACP: Idle"
-    );
+  private getAgentOptions(): Array<{ id: string; name: string }> {
+    return getAgentsWithStatus()
+      .filter((agent) => agent.available || agent.id === this.defaultAgent.id)
+      .map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+      }));
+  }
+
+  private buildStatusSummary(aggregate: MultiSessionAggregate): string {
+    return aggregate.running || aggregate.awaitingPermission
+      ? `ACP: ${aggregate.running} running${aggregate.awaitingPermission ? `, ${aggregate.awaitingPermission} waiting` : ""}`
+      : "ACP: Idle";
   }
 
   private toListItem(session: ManagedSession): MultiSessionListItem {

@@ -32,6 +32,7 @@ export function activate(context: vscode.ExtensionContext) {
     acpClient,
     context.globalState
   );
+  context.subscriptions.push(chatProvider);
 
   // Create and show status bar item
   statusBarItem = vscode.window.createStatusBarItem(
@@ -308,13 +309,15 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "vscode-acp-chat.manageSessions",
-      async () => {
-        await vscode.commands.executeCommand("vscode-acp-chat.chatView.focus");
-        chatProvider?.manageSessions();
-      }
-    )
+    vscode.commands.registerCommand("vscode-acp-chat.manageSessions", () => {
+      chatProvider?.manageSessions();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vscode-acp-chat.switchSession", async () => {
+      await chatProvider?.switchSession();
+    })
   );
 
   // Switch to a different AI agent

@@ -3424,110 +3424,89 @@ suite("Webview", () => {
       const header = document.querySelector(
         ".multi-session-header"
       ) as HTMLElement;
-      const overlay = document.querySelector(
-        ".multi-session-overlay"
-      ) as HTMLElement;
 
       assert.strictEqual(header.hidden, true);
-      assert.strictEqual(overlay.hidden, true);
+      assert.strictEqual(document.querySelector(".multi-session-overlay"), null);
       assert.match(
         MULTI_SESSION_STYLES,
-        /\.multi-session-header\[hidden\],\.multi-session-overlay\[hidden\],\.multi-session-loading\[hidden\]\{display:none!important\}/
+        /\.multi-session-header\[hidden\],\.multi-session-loading\[hidden\]\{display:none!important\}/
       );
 
       controller.handleMessage({
-        type: "feature.multi-session.state",
+        type: "feature.multi-session.chatState",
         enabled: true,
         activationRevision: 0,
-        sessions: [],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        aggregate: { open: 0, running: 0, awaitingPermission: 0, unread: 0 },
       } as any);
 
       assert.strictEqual(header.hidden, false);
-      assert.strictEqual(overlay.hidden, true);
     });
 
-    test("renders the multi-session header as compact VS Code-style controls", () => {
+    test("renders the multi-session header as compact active-session controls", () => {
       controller.handleMessage({
-        type: "feature.multi-session.state",
+        type: "feature.multi-session.chatState",
         enabled: true,
         activeLocalSessionId: "local-a",
         activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        active: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          unreadCount: 0,
+          pendingPermissionCount: 0,
+          diffCount: 0,
+          conflictedDiffCount: 0,
+        },
+        aggregate: { open: 2, running: 0, awaitingPermission: 0, unread: 3 },
       } as any);
 
-      const openButton = document.querySelector(
+      const switchButton = document.querySelector(
         ".multi-session-open"
+      ) as HTMLButtonElement;
+      const managerButton = document.querySelector(
+        ".multi-session-manager"
       ) as HTMLButtonElement;
       const status = document.querySelector(
         ".multi-session-status"
       ) as HTMLElement;
+      const aggregate = document.querySelector(
+        ".multi-session-aggregate"
+      ) as HTMLElement;
 
+      assert.ok(switchButton.querySelector(".codicon-list-selection"));
       assert.strictEqual(
-        openButton.classList.contains("multi-session-button-ghost"),
-        true
+        switchButton.getAttribute("aria-label"),
+        "Switch chat session"
       );
-      assert.ok(openButton.querySelector(".codicon-arrow-left"));
       assert.strictEqual(
-        openButton.querySelector(".multi-session-open-label"),
-        null
+        managerButton.getAttribute("aria-label"),
+        "Open session manager"
       );
-      assert.strictEqual(openButton.textContent?.trim(), "");
-      assert.strictEqual(
-        openButton.querySelector(".multi-session-open-badge"),
-        null
-      );
-      assert.strictEqual(document.querySelector(".multi-session-new"), null);
       assert.ok(status.textContent?.includes("Idle · Test Agent"));
-      assert.strictEqual(
-        openButton.getAttribute("aria-label"),
-        "Back to session manager."
-      );
+      assert.ok(aggregate.textContent?.includes("Sessions 2"));
+      assert.ok(aggregate.textContent?.includes("Unread 3"));
     });
 
-    test("does not restore the session manager overlay from webview state", () => {
-      mockVsCode.setState({
-        isConnected: false,
-        inputValue: "",
-        multiSession: { managerOpen: true },
-      } as any);
+    test("header buttons post quick switch and manager panel actions", () => {
+      (document.querySelector(".multi-session-open") as HTMLButtonElement).click();
+      (document.querySelector(".multi-session-manager") as HTMLButtonElement).click();
 
-      const restoredController = new WebviewController(
-        mockVsCode,
-        document,
-        window as unknown as Window
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some((message: any) => message.type === "feature.multi-session.quickSwitch")
       );
-      const overlay = [
-        ...document.querySelectorAll(".multi-session-overlay"),
-      ].at(-1) as HTMLElement;
-
-      restoredController.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activationRevision: 0,
-        sessions: [],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-      } as any);
-
-      assert.strictEqual(overlay.hidden, true);
-      assert.strictEqual(
-        (mockVsCode.getState() as any).multiSession.managerOpen,
-        undefined
+      assert.ok(
+        mockVsCode
+          ._getMessages()
+          .some(
+            (message: any) =>
+              message.type === "feature.multi-session.openManagerPanel"
+          )
       );
     });
 
@@ -3606,115 +3585,30 @@ suite("Webview", () => {
       );
     });
 
-    test("renders selected agent identity in session manager header", () => {
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "claude-code",
-            agentName: "Claude Code",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-        agents: [
-          { id: "claude-code", name: "Claude Code" },
-          { id: "opencode", name: "OpenCode" },
-        ],
-        selectedAgentId: "opencode",
-        managerOpen: true,
-      } as any);
-
-      assert.strictEqual(
-        document.querySelector(".multi-session-new-overlay"),
-        null
-      );
-      assert.strictEqual(
-        document.querySelector(".multi-session-close-overlay"),
-        null
-      );
-      assert.strictEqual(
-        document.querySelector(".multi-session-agent-select"),
-        null
-      );
-
-      const currentAgent = document.querySelector(
-        ".multi-session-agent-current"
-      ) as HTMLElement;
-      assert.ok(currentAgent);
-      assert.strictEqual(
-        currentAgent.getAttribute("aria-label"),
-        "Selected agent: OpenCode"
-      );
-      assert.strictEqual(
-        currentAgent.querySelector(".multi-session-agent-name")?.textContent,
-        "OpenCode"
-      );
-      assert.ok(currentAgent.querySelector(".codicon-code"));
-    });
-
     test("keeps the prompt cleared after sending in an active multi-session", async () => {
       await controller.handleMessage({
-        type: "feature.multi-session.state",
+        type: "feature.multi-session.chatState",
         enabled: true,
         activeLocalSessionId: "local-a",
         activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-          {
-            localSessionId: "local-b",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "B",
-            status: "idle",
-            createdAt: 2,
-            updatedAt: 2,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-        managerOpen: true,
+        active: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          unreadCount: 0,
+          pendingPermissionCount: 0,
+          diffCount: 0,
+          conflictedDiffCount: 0,
+        },
+        aggregate: { open: 2, running: 0, awaitingPermission: 0, unread: 0 },
       } as any);
 
       elements.inputEl.innerHTML = "hello";
       elements.inputEl.dispatchEvent(new window.Event("input"));
-      (
-        document.querySelector(
-          '.multi-session-item[data-session-id="local-b"] .multi-session-item-main'
-        ) as HTMLButtonElement
-      ).click();
-      assert.strictEqual(
-        (mockVsCode.getState() as any).multiSession.drafts["local-a"],
-        "hello"
-      );
-      assert.strictEqual((mockVsCode.getState() as any).inputValue, "hello");
-
       mockVsCode._clearMessages();
       elements.inputEl.dispatchEvent(
         new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: false })
@@ -3871,256 +3765,6 @@ suite("Webview", () => {
       ) as HTMLElement;
       assert.strictEqual(loading.hidden, false);
       assert.ok(loading.textContent?.includes("Loading chat history"));
-    });
-
-    test("clicking a session closes the local manager immediately", () => {
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-          {
-            localSessionId: "local-b",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "B",
-            status: "idle",
-            createdAt: 2,
-            updatedAt: 2,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-        managerOpen: true,
-      } as any);
-
-      const overlay = document.querySelector(
-        ".multi-session-overlay"
-      ) as HTMLElement;
-      const item = [...document.querySelectorAll(".multi-session-item")].find(
-        (el) => el.textContent?.includes("B")
-      ) as HTMLElement;
-
-      assert.strictEqual(overlay.hidden, false);
-      item.click();
-
-      assert.strictEqual(overlay.hidden, true);
-      assert.ok(
-        mockVsCode
-          ._getMessages()
-          .some(
-            (message: any) =>
-              message.type === "feature.multi-session.activate" &&
-              message.localSessionId === "local-b"
-          )
-      );
-    });
-
-    test("renders the session manager as accessible list rows with badges", () => {
-      const fullSessionId = "019f5f61-1234-4567-89ab-full-session-id";
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            acpSessionId: fullSessionId,
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-          {
-            localSessionId: "local-b",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "B",
-            status: "awaiting_permission",
-            createdAt: 2,
-            updatedAt: 2,
-            unreadCount: 3,
-            pendingPermissionCount: 1,
-            diffCount: 2,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 1, unread: 3 },
-        managerOpen: true,
-      } as any);
-
-      const list = document.querySelector(".multi-session-list") as HTMLElement;
-      const activeItem = document.querySelector(
-        '.multi-session-item[data-session-id="local-a"]'
-      ) as HTMLElement;
-      const permissionItem = document.querySelector(
-        '.multi-session-item[data-session-id="local-b"]'
-      ) as HTMLElement;
-      const mainAction = activeItem.querySelector(
-        ".multi-session-item-main"
-      ) as HTMLButtonElement;
-      const activeMeta = activeItem.querySelector(
-        ".multi-session-item-meta"
-      ) as HTMLElement;
-      const draftMeta = permissionItem.querySelector(
-        ".multi-session-item-meta"
-      ) as HTMLElement;
-
-      assert.strictEqual(list.getAttribute("role"), "list");
-      assert.strictEqual(mainAction.tagName, "BUTTON");
-      assert.strictEqual(
-        activeItem.querySelector(".multi-session-badge-active"),
-        null
-      );
-      assert.strictEqual(
-        activeMeta.textContent,
-        `Idle · Test Agent · ${fullSessionId}`
-      );
-      assert.strictEqual(
-        activeMeta.getAttribute("title"),
-        activeMeta.textContent
-      );
-      assert.strictEqual(
-        draftMeta.textContent,
-        "Awaiting permission · Test Agent"
-      );
-      assert.strictEqual(
-        draftMeta.getAttribute("title"),
-        draftMeta.textContent
-      );
-      assert.ok(!draftMeta.textContent?.includes("undefined"));
-      assert.ok(
-        permissionItem.querySelector(".multi-session-badge-permission")
-      );
-      assert.ok(permissionItem.querySelector(".multi-session-badge-unread"));
-      assert.ok(permissionItem.querySelector(".multi-session-badge-diff"));
-      assert.strictEqual(
-        [...permissionItem.querySelectorAll("button")].some(
-          (buttonEl) => buttonEl.textContent?.trim() === "Open"
-        ),
-        false
-      );
-      const closeButton = activeItem.querySelector(
-        "button[aria-label='Close session A']"
-      ) as HTMLButtonElement;
-      assert.ok(closeButton.querySelector(".codicon-close"));
-      assert.strictEqual(closeButton.textContent?.trim(), "");
-    });
-
-    test("session manager traps focus and Escape restores the opener", () => {
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-      } as any);
-
-      const openButton = document.querySelector(
-        ".multi-session-open"
-      ) as HTMLButtonElement;
-      openButton.focus();
-
-      controller.handleMessage({
-        type: "feature.multi-session.state",
-        enabled: true,
-        activeLocalSessionId: "local-a",
-        activationRevision: 1,
-        sessions: [
-          {
-            localSessionId: "local-a",
-            agentId: "test-agent",
-            agentName: "Test Agent",
-            title: "A",
-            status: "idle",
-            createdAt: 1,
-            updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
-          },
-        ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
-        managerOpen: true,
-      } as any);
-
-      const overlay = document.querySelector(
-        ".multi-session-overlay"
-      ) as HTMLElement;
-
-      assert.strictEqual(overlay.hidden, false);
-      assert.strictEqual(document.activeElement, overlay);
-
-      overlay.dispatchEvent(
-        new window.KeyboardEvent("keydown", {
-          key: "Tab",
-          shiftKey: true,
-          bubbles: true,
-        })
-      );
-      assert.strictEqual(
-        (document.activeElement as HTMLElement).getAttribute("aria-label"),
-        "Close session A"
-      );
-      assert.strictEqual(document.activeElement?.textContent?.trim(), "");
-
-      overlay.dispatchEvent(
-        new window.KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-        })
-      );
-
-      assert.strictEqual(overlay.hidden, true);
-      assert.strictEqual(document.activeElement, openButton);
-      assert.ok(
-        mockVsCode
-          ._getMessages()
-          .some(
-            (message: any) =>
-              message.type === "feature.multi-session.hideManager"
-          )
-      );
     });
   });
 

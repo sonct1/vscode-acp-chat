@@ -22,6 +22,9 @@ export function registerHostFeatures(options: {
   globalState: vscode.Memento;
   postMessage: (message: Record<string, unknown>) => void;
   onStatusChanged?: (summary: string) => void;
+  onOpenManager?: () => void;
+  onFocusChat?: () => Thenable<void> | void;
+  onQuickSwitch?: () => Thenable<void> | void;
 }): HostFeatureRegistry {
   const features: HostFeatureRegistry = {
     chatFontSize: registerChatFontSizeHostFeature({
@@ -35,6 +38,9 @@ export function registerHostFeatures(options: {
       globalState: options.globalState,
       postMessage: options.postMessage,
       onStatusChanged: options.onStatusChanged,
+      onOpenManager: options.onOpenManager,
+      onFocusChat: options.onFocusChat,
+      onQuickSwitch: options.onQuickSwitch,
     });
   }
 

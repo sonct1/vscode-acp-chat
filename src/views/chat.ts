@@ -24,6 +24,8 @@ import {
   registerHostFeatures,
   type HostFeatureRegistry,
 } from "../features/register-host";
+import { MultiSessionManagerPanelController } from "../features/multi-session/manager-panel";
+import { showMultiSessionQuickSwitch } from "../features/multi-session/quick-switch";
 import {
   type SessionNotification,
   type RequestPermissionRequest,
@@ -182,6 +184,7 @@ export class ChatViewProvider
   private terminalHandler: TerminalHandler;
   private documentSyncManager: DocumentSyncManager;
   private features: HostFeatureRegistry;
+  private multiSessionManagerPanel?: MultiSessionManagerPanelController;
   private permissionQueue: Array<{
     id: string;
     params: RequestPermissionRequest;
@@ -219,7 +222,17 @@ export class ChatViewProvider
       globalState,
       postMessage: (message) => this.postMessage(message),
       onStatusChanged: (summary) => this.onMultiSessionStatus(summary),
+      onOpenManager: () => this.openMultiSessionManagerPanel(),
+      onFocusChat: () =>
+        vscode.commands.executeCommand("vscode-acp-chat.chatView.focus"),
+      onQuickSwitch: () => this.switchSession(),
     });
+    if (this.features.multiSession) {
+      this.multiSessionManagerPanel = new MultiSessionManagerPanelController(
+        this.extensionUri,
+        this.features.multiSession
+      );
+    }
     this.diffManager = new DiffManager();
     this.fileHandler = new FileHandler(this.diffManager);
     this.terminalHandler = new TerminalHandler();
@@ -672,11 +685,15 @@ export class ChatViewProvider
             break;
           }
           this.postMessage({
-            type: "feature.multi-session.state",
+            type: "feature.multi-session.chatState",
             enabled: false,
             activationRevision: 0,
-            sessions: [],
-            aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+            aggregate: {
+              open: 0,
+              running: 0,
+              awaitingPermission: 0,
+              unread: 0,
+            },
           });
           this.postMessage({
             type: "connectionState",
@@ -747,7 +764,16 @@ export class ChatViewProvider
   }
 
   public manageSessions(): void {
-    this.features.multiSession?.openManager();
+    this.openMultiSessionManagerPanel();
+  }
+
+  public async switchSession(): Promise<void> {
+    if (!this.features.multiSession) return;
+    await showMultiSessionQuickSwitch(this.features.multiSession);
+  }
+
+  private openMultiSessionManagerPanel(): void {
+    this.multiSessionManagerPanel?.open();
   }
 
   public isMultiSessionEnabled(): boolean {
@@ -1317,6 +1343,7 @@ export class ChatViewProvider
 
   public dispose(): void {
     this.features.chatFontSize?.dispose();
+    this.multiSessionManagerPanel?.dispose();
     this.features.multiSession?.dispose();
     this.sessionUpdateNotifier.dispose();
     this.webviewPostNotifier.dispose();
@@ -2070,7 +2097,8 @@ export class ChatViewProvider
 
     await this.acpClient.setConfigOption(thoughtOption.id, savedModeId);
     await this.updateCurrentAgentPreference((current) => {
-      const { modeId: _modeId, ...rest } = current;
+      const { modeId, ...rest } = current;
+      void modeId;
       return {
         ...rest,
         configOptionValues: {

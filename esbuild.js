@@ -50,6 +50,19 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin],
   });
 
+  const sessionManagerWebviewCtx = await esbuild.context({
+    entryPoints: ["src/features/multi-session/manager-webview.ts"],
+    bundle: true,
+    format: "iife",
+    minify: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "browser",
+    outfile: "dist/session-manager-webview.js",
+    logLevel: "warning",
+    plugins: [esbuildProblemMatcherPlugin],
+  });
+
   const piAcpCtx = await esbuild.context({
     entryPoints: ["src/features/pi-agent/vendor/pi-acp/src/index.ts"],
     bundle: true,
@@ -71,17 +84,20 @@ async function main() {
     await Promise.all([
       extensionCtx.watch(),
       webviewCtx.watch(),
+      sessionManagerWebviewCtx.watch(),
       piAcpCtx.watch(),
     ]);
   } else {
     await Promise.all([
       extensionCtx.rebuild(),
       webviewCtx.rebuild(),
+      sessionManagerWebviewCtx.rebuild(),
       piAcpCtx.rebuild(),
     ]);
     await Promise.all([
       extensionCtx.dispose(),
       webviewCtx.dispose(),
+      sessionManagerWebviewCtx.dispose(),
       piAcpCtx.dispose(),
     ]);
   }

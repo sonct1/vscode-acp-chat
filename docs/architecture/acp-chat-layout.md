@@ -19,15 +19,16 @@ Phần `ACP CHAT` và dãy icon phía trên ảnh chụp là chrome của VS Cod
 ```text
 VS Code secondary sidebar title area
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ [0] ACP CHAT                              [robot] [+] [≡] [≡×] [↺] [gear] │
+│ [0] ACP CHAT                          [robot] [+] [≡] [⇄] [≡×] [↺] [gear] │
 └────────────────────────────────────────────────────────────────────────────┘
                                              │      │    │    │    │      │
-                                             │      │    │    │    │      └─ Open ACP Settings
-                                             │      │    │    │    └───────── Load History
-                                             │      │    │    └────────────── Clear Chat
-                                             │      │    └─────────────────── Manage Chat Sessions
-                                             │      └──────────────────────── New Chat
-                                             └─────────────────────────────── Select Agent
+                                             │      │    │    │    │    │      └─ Open ACP Settings
+                                             │      │    │    │    │    └───────── Load History
+                                             │      │    │    │    └────────────── Clear Chat
+                                             │      │    │    └─────────────────── Switch Chat Session
+                                             │      │    └─────────────────────── Manage Chat Sessions
+                                             │      └──────────────────────────── New Chat
+                                             └─────────────────────────────────── Select Agent
 ```
 
 | Vùng | Nguồn khai báo | Ý nghĩa |
@@ -37,20 +38,21 @@ VS Code secondary sidebar title area
 | `[robot]` | `vscode-acp-chat.selectAgent`, icon `$(robot)` | Chọn agent ACP. |
 | `[+]` | `vscode-acp-chat.newChat`, icon `$(add)` | Tạo chat mới. |
 | `[≡]` | `vscode-acp-chat.manageSessions`, icon `$(list-tree)` | Mở quản lý chat sessions. |
+| `[⇄]` | `vscode-acp-chat.switchSession`, icon `$(list-selection)` | Chuyển nhanh active multi-session qua QuickPick. |
 | `[≡×]` | `vscode-acp-chat.clearChat`, icon `$(clear-all)` | Xoá transcript/chat hiện tại. |
 | `[↺]` | `vscode-acp-chat.loadHistory`, icon `$(history)` | Tải lịch sử chat. |
 | `[gear]` | `vscode-acp-chat.openSettings`, icon `$(gear)` | Mở VS Code Settings UI tới cấu hình extension ACP Chat. |
 
 ## Wireframe tổng thể
 
-Bố cục dưới đây bắt đầu từ phần bên trong webview iframe, nằm dưới vùng VS Code chrome `[0]`. Bố cục gốc được sinh trong `ChatViewProvider.getHtmlContent()` ở [`src/views/chat.ts`](../../src/views/chat.ts). Các vùng multi-session được inject thêm bằng `document.body.prepend()` trong [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts), nên không xuất hiện trực tiếp trong HTML template.
+Bố cục dưới đây bắt đầu từ phần bên trong webview iframe, nằm dưới vùng VS Code chrome `[0]`. Bố cục gốc được sinh trong `ChatViewProvider.getHtmlContent()` ở [`src/views/chat.ts`](../../src/views/chat.ts). Multi-session chat chỉ inject header/loading strip bằng `document.body.prepend()` trong [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts); màn quản lý danh sách session nằm trong `WebviewPanel` riêng.
 
 ```text
 ACP Chat webview in VS Code secondary sidebar
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ [A] Multi-session header, optional, sticky                                 │
-│     [←]  Active session title / status                       [↑] [↓]       │
-│                                                assistant turn navigator     │
+│     [switch]  Active session title / status / aggregate     [Manager][↑][↓]│
+│                                           manager + assistant turn nav      │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ [B] Multi-session loading strip, optional                                  │
 │     Spinner + "Initializing / Loading history / Stopping ..."              │
@@ -93,18 +95,18 @@ ACP Chat webview in VS Code secondary sidebar
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Modal và overlay
+## Panel, modal và overlay
 
 ```text
-Runtime overlays above the chat surface
+Runtime surfaces above or beside the chat surface
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ [H] Multi-session manager overlay, fixed full webview                      │
+│ [H] ACP Sessions WebviewPanel / tab riêng                                  │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
-│ │ Sessions                                            [New] [Close]      │ │
+│ │ ACP Sessions                                      [New] [Refresh]      │ │
 │ ├────────────────────────────────────────────────────────────────────────┤ │
-│ │ Session item                                                           │ │
-│ │   status icon + title + status/agent meta + badges                     │ │
-│ │   actions: [Open] [Review] [Stop] [Close]                              │ │
+│ │ Filters + search                                                        │ │
+│ │ Session rows: status + title + badges + actions                         │ │
+│ │ Actions: [Review] [Open Chat] [Stop] [Close]                            │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ [I] Permission dialog                                                      │
@@ -118,12 +120,22 @@ Runtime overlays above the chat surface
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+```text
+Quick switch surface
+┌────────────────────────────────────────────────────────────────────────────┐
+│ VS Code QuickPick: Switch ACP Session                                      │
+│   ! Needs permission session · 2 unread · Agent                            │
+│   ● Running session · Active · Agent                                       │
+│   ○ Idle session · Agent                                                   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Component mapping
 
 | ID | Thành phần UI | DOM/CSS chính | Code chịu trách nhiệm |
 | --- | --- | --- | --- |
 | 0 | VS Code secondary sidebar title area | VS Code Workbench chrome, không nằm trong webview DOM | [`package.json`](../../package.json) `contributes.viewsContainers.secondarySidebar`, `contributes.views`, `contributes.menus.view/title`; command handlers đăng ký trong [`src/extension.ts`](../../src/extension.ts) và Extension Host features dưới [`src/features/`](../../src/features). |
-| A | Multi-session header | `.multi-session-header`, `.multi-session-open`, `.multi-session-heading`, `.multi-session-title`, `.multi-session-status` | [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts) `MultiSessionWebviewController.createHeader()`, `renderHeader()`; CSS inject từ [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts). |
+| A | Multi-session header | `.multi-session-header`, `.multi-session-open`, `.multi-session-manager`, `.multi-session-heading`, `.multi-session-title`, `.multi-session-status`, `.multi-session-aggregate` | [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts) `MultiSessionWebviewController.createHeader()`, `renderHeader()`; CSS inject từ [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts). Header chỉ hiển thị active session + aggregate và route quick switch / manager panel. |
 | A1 | Assistant response navigator trong header | `.assistant-turn-navigator`, `.assistant-turn-navigator-header`, `.assistant-turn-nav-btn`, `.assistant-turn-prev`, `.assistant-turn-next`, `.assistant-turn-counter` | [`src/features/assistant-turn-navigation/webview.ts`](../../src/features/assistant-turn-navigation/webview.ts) attach navigator vào `.multi-session-header`, index completed `.message.assistant` có `.message-actions` bằng `MutationObserver`; khi nhảy turn, scroll target là `.block-text` đầu tiên để câu trả lời lên đầu viewport, fallback về `.message.assistant` nếu turn không có text block; visual CSS ở [`media/main.css`](../../media/main.css). |
 | B | Multi-session loading strip | `.multi-session-loading`, `.multi-session-spinner` | [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts) `createLoading()`, `renderLoading()`. |
 | C | Welcome view | `#welcome-view`, `.welcome-view`, `.welcome-logo` | HTML ở [`src/views/chat.ts`](../../src/views/chat.ts) `getHtmlContent()`; visibility do [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts) `MessageListComponent.updateViewState()` điều khiển; style ở [`media/main.css`](../../media/main.css). |
@@ -144,7 +156,7 @@ Runtime overlays above the chat surface
 | G4 | Options toolbar | `#options-bar`, `#left-options`, `#right-options` | `#send`, `#stop`, `#attach-image` thuộc [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts); mode/model/config/context thuộc [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts). |
 | G4a | Mode/model/config dropdowns | `#mode-dropdown`, `#model-dropdown`, `#config-options-container`, `.custom-dropdown`, `.dropdown-popover` | [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts); reusable dropdown ở [`src/views/webview/widget/dropdown.ts`](../../src/views/webview/widget/dropdown.ts). |
 | G4b | Context usage ring | `#context-usage-ring`, `.context-usage__bg`, `.context-usage__fg` | [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts) nhận `contextUsage`; renderer ở [`src/views/webview/widget/context-usage.ts`](../../src/views/webview/widget/context-usage.ts). |
-| H | Multi-session manager overlay | `.multi-session-overlay`, `.multi-session-list`, `.multi-session-item`, `.multi-session-actions` | [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts) `createOverlay()`, `renderOverlay()`, `activateSession()`, `createNewSession()`; host counterpart ở [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts). |
+| H | ACP Sessions manager panel | `.manager-shell`, `.manager-header`, `.manager-filters`, `.manager-list`, `.session-row`, `.row-actions` | Panel lifecycle ở [`src/features/multi-session/manager-panel.ts`](../../src/features/multi-session/manager-panel.ts); browser DOM ở [`src/features/multi-session/manager-webview.ts`](../../src/features/multi-session/manager-webview.ts); styles ở [`src/features/multi-session/manager-styles.ts`](../../src/features/multi-session/manager-styles.ts); host summary/event source ở [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts). |
 | I | Permission dialog | Tool-block embedded dialog or modal overlay | [`src/views/webview/widget/permission-dialog.ts`](../../src/views/webview/widget/permission-dialog.ts); host request queue in [`src/views/chat.ts`](../../src/views/chat.ts) `handlePermissionRequest()`. |
 | J | Confirm dialog | Modal confirm overlay | [`src/views/webview/widget/confirm-dialog.ts`](../../src/views/webview/widget/confirm-dialog.ts); requested by `confirmAction` messages from [`src/views/chat.ts`](../../src/views/chat.ts). |
 | K | Image preview popover | `#image-preview-popover` | HTML in [`src/views/chat.ts`](../../src/views/chat.ts); image attach/paste in [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts); hover preview in [`src/views/webview/component/chip-renderer.ts`](../../src/views/webview/component/chip-renderer.ts). |
@@ -180,7 +192,7 @@ WebviewController
 │    └─ DiffSummary                                                           │
 │                                                                             │
 │ registerWebviewFeatures()                                                   │
-│ ├─ MultiSessionWebviewController injects header, loading strip, overlay     │
+│ ├─ MultiSessionWebviewController injects header and loading strip          │
 │ └─ AssistantTurnNavigationWebviewFeature attaches header prev/next icons    │
 │    and observes MessageList DOM for completed assistant responses           │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -212,7 +224,8 @@ Các message layout quan trọng:
 | host → webview | `userMessage`, `streamStart`, `streamChunk`, `thoughtChunk`, `toolCallStart`, `toolCallComplete`, `streamEnd` | message list, assistant blocks, typing indicator, action buttons, assistant response navigator index | [`MessageListComponent`](../../src/views/webview/component/message-list.ts), [`BlockManager`](../../src/views/webview/block/block-manager.ts); navigator index updated by [`AssistantTurnNavigationWebviewFeature`](../../src/features/assistant-turn-navigation/webview.ts) from rendered DOM. |
 | host → webview | `plan`, `planComplete`, `diffSummary` | plan panel, diff summary panel | [`AuxiliaryPanelsComponent`](../../src/views/webview/component/auxiliary-panels.ts) |
 | host → webview | `permissionRequest`, `confirmAction` | permission / confirm dialogs | [`PermissionDialog`](../../src/views/webview/widget/permission-dialog.ts), [`showConfirmDialog()`](../../src/views/webview/widget/confirm-dialog.ts) |
-| host → webview | `feature.multi-session.state`, `snapshot`, `delta`, `openManager` | multi-session header, overlay, surface switch | [`MultiSessionWebviewController`](../../src/features/multi-session/webview.ts) |
+| host → chat webview | `feature.multi-session.chatState`, `snapshot`, `delta` | multi-session active header, active transcript switch | [`MultiSessionWebviewController`](../../src/features/multi-session/webview.ts) |
+| host → manager panel | `feature.multi-session.managerState` | ACP Sessions panel list, aggregate, active marker | [`MultiSessionManagerPanelController`](../../src/features/multi-session/manager-panel.ts), [`manager-webview.ts`](../../src/features/multi-session/manager-webview.ts) |
 | webview → host | `ready`, `sendMessage`, `stop`, `searchFiles`, `openFile`, `permissionResponse`, `selectMode`, `selectModel`, `selectConfigOption`, `toggleModelStar` | host actions and ACP client calls | [`ChatViewProvider.resolveWebviewView()` message switch](../../src/views/chat.ts) |
 | webview → host | `feature.multi-session.*` | multi-session lifecycle and active surface | [`MultiSessionHostController`](../../src/features/multi-session/host.ts) via [`register-host.ts`](../../src/features/register-host.ts) |
 
@@ -226,5 +239,5 @@ Các message layout quan trọng:
 | Bottom input is non-scrolling and pinned by layout through `#chat-input-area { flex-shrink: 0; margin: 0 12px 12px; }`. | [`media/main.css`](../../media/main.css) `#chat-input-area` |
 | Visible keyboard/file guidance lives in `#input[data-placeholder]`; `#input-hint` is kept screen-reader-only for `aria-describedby`. | [`src/views/chat.ts`](../../src/views/chat.ts), [`media/main.css`](../../media/main.css) `#input:empty::before`, `.input-hint` |
 | Toolbar splits left controls and right send/stop controls using `#options-bar`, `#left-options`, `#right-options`. | [`media/main.css`](../../media/main.css) `#options-bar` |
-| Multi-session header is sticky at top and overlay is fixed full-webview. | [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts) `.multi-session-header`, `.multi-session-overlay` |
+| Multi-session header is sticky at top; the full session list is rendered only in the separate ACP Sessions panel. | [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts) `.multi-session-header`; [`src/features/multi-session/manager-styles.ts`](../../src/features/multi-session/manager-styles.ts) `.manager-shell` |
 | Assistant response navigator is attached inside the multi-session header, uses `margin-left: auto` and sticky right alignment, and is hidden until at least two completed assistant responses exist. Navigation aligns the first `.block-text` of the target assistant turn to the top of the transcript viewport, so preceding tool/image/action blocks do not become the top anchor. | [`src/features/assistant-turn-navigation/webview.ts`](../../src/features/assistant-turn-navigation/webview.ts), [`media/main.css`](../../media/main.css) `.assistant-turn-navigator-header`, `.assistant-turn-nav-btn` |

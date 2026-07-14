@@ -267,9 +267,7 @@ suite("multi-session feature", () => {
 
     await controller.switchAgent("opencode");
 
-    const state = [...messages]
-      .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
+    const state = controller.getManagerStateSnapshot();
     const snapshot = [...messages]
       .reverse()
       .find(
@@ -936,33 +934,21 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("session manager visibility is host-authoritative and activation closes it", async () => {
+  test("chat state excludes the full session list while manager state keeps summaries", () => {
     const { controller, messages } = createController();
 
-    await controller.handleMessage({ type: "feature.multi-session.manage" });
-    let state = [...messages]
+    const chatState = [...messages]
       .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
-    assert.strictEqual(state.managerOpen, true);
+      .find(
+        (message) => message.type === "feature.multi-session.chatState"
+      ) as any;
+    const managerState = controller.getManagerStateSnapshot();
 
-    const active = controller.getStateForTest().activeLocalSessionId!;
-    await controller.handleMessage({
-      type: "feature.multi-session.activate",
-      localSessionId: active,
-    });
-    state = [...messages]
-      .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
-    assert.strictEqual(state.managerOpen, false);
-
-    await controller.handleMessage({ type: "feature.multi-session.manage" });
-    await controller.handleMessage({
-      type: "feature.multi-session.hideManager",
-    });
-    state = [...messages]
-      .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
-    assert.strictEqual(state.managerOpen, false);
+    assert.strictEqual(Array.isArray(chatState.sessions), false);
+    assert.ok(chatState.active);
+    assert.strictEqual(chatState.aggregate.open, 1);
+    assert.strictEqual(managerState.sessions.length, 1);
+    assert.strictEqual(managerState.aggregate.open, 1);
     controller.dispose();
   });
 
@@ -1120,22 +1106,17 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("start chat opens the active chat surface instead of leaving manager on screen", async () => {
+  test("start chat opens the active chat surface", async () => {
     const { controller, messages, clients } = createController();
 
-    await controller.handleMessage({ type: "feature.multi-session.manage" });
     await controller.connectActive();
 
-    const state = [...messages]
-      .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
     const snapshot = [...messages]
       .reverse()
       .find(
         (message) => message.type === "feature.multi-session.snapshot"
       ) as any;
 
-    assert.strictEqual(state.managerOpen, false);
     assert.strictEqual(snapshot.isGenerating, false);
     assert.strictEqual(
       controller
@@ -1150,21 +1131,19 @@ suite("multi-session feature", () => {
   });
 
   test("failed start chat republishes draft state instead of leaving starting visible", async () => {
-    const { controller, messages } = createController((client) => {
+    const { controller } = createController((client) => {
       client.connectError = new Error("connect failed");
     });
 
     await assert.rejects(controller.connectActive(), /connect failed/);
 
-    const state = [...messages]
-      .reverse()
-      .find((message) => message.type === "feature.multi-session.state") as any;
+    const state = controller.getManagerStateSnapshot();
     const active = state.sessions.find(
       (session: any) => session.localSessionId === state.activeLocalSessionId
     );
 
-    assert.strictEqual(active.status, "draft");
-    assert.match(active.lastError, /connect failed/);
+    assert.strictEqual(active?.status, "draft");
+    assert.match(active?.lastError ?? "", /connect failed/);
     controller.dispose();
   });
 

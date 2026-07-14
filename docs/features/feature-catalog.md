@@ -126,17 +126,20 @@ Multi-session is enabled by default through `vscode-acp-chat.multiSession.enable
 
 User-visible behavior:
 
-- multiple local sessions can be created and switched from a sticky header or manager overlay;
+- multiple local sessions can be created from commands, the chat header, QuickPick, or the dedicated **ACP Sessions** manager panel;
 - the initial restored/opened draft session eagerly starts its ACP runtime when the chat webview is ready, but does not create an ACP session/history entry until a prompt or explicit session action needs one;
 - each session has independent transcript, draft, scroll state, ACP runtime, metadata, permissions, diffs, unread count, and status;
-- the manager shows running, idle, draft, permission-waiting, error, and closed sessions;
+- the chat webview shows only the active session detail plus compact aggregate counts; the separate manager panel shows running, idle, draft, permission-waiting, error, and closed sessions;
 - started and loaded sessions show the full ACP session id in manager metadata and its hover tooltip for debugging/resume traceability;
+- `vscode-acp-chat.switchSession` opens a native QuickPick to activate an existing session and focus the existing chat view;
 - `vscode-acp-chat.multiSession.maxConcurrentSessions` limits concurrently started local ACP processes; draft sessions without an eager-started runtime do not count.
 
 Main host/webview protocol messages:
 
-- webview → host: `feature.multi-session.ready`, `new`, `activate`, `stop`, `close`, `manage`, `hideManager`, `resync`, `reviewPermission`, `permission.respond`;
-- host → webview: `feature.multi-session.state`, `feature.multi-session.snapshot`, `feature.multi-session.delta`.
+- chat webview → host: `feature.multi-session.ready`, `new`, `activate`, `stop`, `close`, `openManagerPanel`, `quickSwitch`, `resync`, `reviewPermission`, `permission.respond`;
+- host → chat webview: `feature.multi-session.chatState`, `feature.multi-session.snapshot`, `feature.multi-session.delta`;
+- manager panel → host: `feature.multi-session.managerReady`, `managerResync`, `new`, `activate`, `stop`, `close`, `reviewPermission`;
+- host → manager panel: `feature.multi-session.managerState` summary messages.
 
 The webview requests resync if it detects a delta sequence gap and ignores stale deltas after activation revision changes.
 
@@ -232,7 +235,8 @@ There is also an internal source-registered `vscode-acp-chat.openDevTools` comma
 | `vscode-acp-chat.startChat`                   | Yes     | No         | No                             | Focuses chat and connects.                 |
 | `vscode-acp-chat.newChat`                     | Yes     | Yes        | No                             | Creates a new chat/session.                |
 | `vscode-acp-chat.clearChat`                   | Yes     | Yes        | No                             | Clears the current chat/session surface.   |
-| `vscode-acp-chat.manageSessions`              | Yes     | Yes        | No                             | Opens the multi-session manager.           |
+| `vscode-acp-chat.manageSessions`              | Yes     | Yes        | No                             | Opens the ACP Sessions manager panel.      |
+| `vscode-acp-chat.switchSession`                | Yes     | Yes        | No                             | Opens QuickPick to switch active session.  |
 | `vscode-acp-chat.loadHistory`                 | Yes     | Yes        | No                             | Lists and loads prior sessions.            |
 | `vscode-acp-chat.deleteHistorySession`        | Yes     | No         | No                             | Deletes a previous session when supported. |
 | `vscode-acp-chat.openSettings`                | No      | Yes        | No                             | Opens extension-scoped Settings UI.        |

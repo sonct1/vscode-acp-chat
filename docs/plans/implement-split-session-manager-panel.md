@@ -2,9 +2,9 @@
 
 | Attribute  | Value                                                                                                                                                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Draft                                                                                                                                                                                                                                       |
+| Status     | Implemented                                                                                                                                                                                                                                 |
 | Owner      | TBD                                                                                                                                                                                                                                         |
-| Phase      | Architecture and implementation planning                                                                                                                                                                                                    |
+| Phase      | Completed implementation                                                                                                                                                                                                                    |
 | Scope      | Extension Host multi-session controller, chat webview integration, dedicated session-manager webview panel, message contracts, performance throttling, tests                                                                                |
 | References | `docs/plans/implement-concurrent-multi-session-chat.md`, `src/features/multi-session/host.ts`, `src/features/multi-session/webview.ts`, `src/features/multi-session/contracts.ts`, `src/views/chat.ts`, `src/views/webview/main.ts` |
 
@@ -738,6 +738,28 @@ If `vsce` or `code` is unavailable, report that blocker explicitly. Do not commi
 - Do not implement single-process ACP multiplexing.
 - Do not solve markdown streaming quadratic rendering in this plan, except reducing manager-related traffic.
 - Do not move diff review UI into manager; manager only shows counts/status and routes to chat/review commands.
+
+## Completion notes
+
+Implemented on 2026-07-14:
+
+- Added split chat/manager contracts: `feature.multi-session.chatState` for chat and `feature.multi-session.managerState` for the separate panel.
+- Refactored chat webview multi-session UI to remove the full manager overlay/list and keep only active-session detail, aggregate counts, quick switch, and manager-panel actions.
+- Added `MultiSessionManagerPanelController`, independent `manager-webview.ts` browser bundle, panel styles, and VS Code QuickPick session switching.
+- Split host summary builders/coalescing from active transcript `snapshot`/`delta`; background appends no longer synchronously post full session lists to the chat webview.
+- Added package command contribution for `vscode-acp-chat.switchSession` and an esbuild entry for `dist/session-manager-webview.js`.
+- Updated feature/layout docs and tests for split manager behavior.
+
+Verification performed:
+
+```bash
+npm run check-types
+npm run compile-tests
+npm run compile
+npm test -- --grep "multi-session"
+```
+
+Full quality gates and local VSIX installation are tracked in the implementation report for this change.
 
 ## Revision history
 

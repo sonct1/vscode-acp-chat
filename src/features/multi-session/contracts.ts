@@ -72,21 +72,52 @@ export interface MultiSessionSnapshot {
   isGenerating: boolean;
 }
 
+export interface MultiSessionAggregate {
+  open: number;
+  running: number;
+  awaitingPermission: number;
+  unread: number;
+}
+
+export interface MultiSessionChatStateMessage {
+  type: "feature.multi-session.chatState";
+  enabled: boolean;
+  activeLocalSessionId?: string;
+  activationRevision: number;
+  active?: MultiSessionListItem;
+  aggregate: MultiSessionAggregate;
+}
+
 export interface MultiSessionStateMessage {
   type: "feature.multi-session.state";
   enabled: boolean;
   activeLocalSessionId?: string;
   activationRevision: number;
   sessions: MultiSessionListItem[];
-  aggregate: {
-    running: number;
-    awaitingPermission: number;
-    unread: number;
-  };
+  aggregate: Omit<MultiSessionAggregate, "open"> & { open?: number };
   agents?: MultiSessionAgentOption[];
   selectedAgentId?: string;
-  /** Host-authoritative visibility for the transient session manager drawer. */
+  /** Deprecated. Full session management now lives in a dedicated WebviewPanel. */
   managerOpen?: boolean;
+}
+
+export interface MultiSessionManagerStateMessage {
+  type: "feature.multi-session.managerState";
+  revision: number;
+  activeLocalSessionId?: string;
+  sessions: MultiSessionListItem[];
+  aggregate: MultiSessionAggregate;
+  agents: MultiSessionAgentOption[];
+  selectedAgentId: string;
+}
+
+export interface MultiSessionManagerPatchMessage {
+  type: "feature.multi-session.managerPatch";
+  revision: number;
+  upserts: MultiSessionListItem[];
+  removals: string[];
+  activeLocalSessionId?: string;
+  aggregate: MultiSessionAggregate;
 }
 
 export interface MultiSessionDeltaMessage {
@@ -98,14 +129,26 @@ export interface MultiSessionDeltaMessage {
 
 export type MultiSessionHostMessage =
   | { type: "feature.multi-session.ready" }
-  | { type: "feature.multi-session.new" }
-  | { type: "feature.multi-session.activate"; localSessionId: string }
+  | { type: "feature.multi-session.managerReady" }
+  | { type: "feature.multi-session.managerResync" }
+  | { type: "feature.multi-session.new"; focusChat?: boolean }
+  | {
+      type: "feature.multi-session.activate";
+      localSessionId: string;
+      focusChat?: boolean;
+    }
   | { type: "feature.multi-session.stop"; localSessionId?: string }
   | { type: "feature.multi-session.close"; localSessionId: string }
   | { type: "feature.multi-session.manage" }
+  | { type: "feature.multi-session.openManagerPanel" }
+  | { type: "feature.multi-session.quickSwitch" }
   | { type: "feature.multi-session.hideManager" }
   | { type: "feature.multi-session.resync" }
-  | { type: "feature.multi-session.reviewPermission"; localSessionId: string }
+  | {
+      type: "feature.multi-session.reviewPermission";
+      localSessionId: string;
+      focusChat?: boolean;
+    }
   | {
       type: "feature.multi-session.permission.respond";
       localSessionId: string;
