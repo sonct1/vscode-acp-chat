@@ -161,6 +161,8 @@ export class MultiSessionHostController implements vscode.Disposable {
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
   private defaultAgent: AgentConfig;
+  private readonly historySessionAgentById = new Map<string, string>();
+  private lastHistoryListAgentId: string | undefined;
   private readonly mutationCoordinator = new WorkspaceMutationCoordinator();
   private readonly catalog: SessionCatalogService;
   private documentSync?: DocumentSyncManager;
@@ -554,7 +556,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       }
     }
 
-    const session = this.createDraft("loading_history");
+    const historyAgent = this.resolveHistoryAgent(sessionId);
+    const session = this.createDraftForAgent(historyAgent, "loading_history");
     session.title = historyFallbackTitle(sessionId);
     this.activate(session.localSessionId);
 
@@ -602,45 +605,44 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   async listSessions(): Promise<SessionInfo[]> {
-    return this.catalog.listSessions(
-      this.defaultAgent,
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
+    const session = this.getActive() ?? this.createDraft();
+    const sessions = await this.catalog.listSessions(
+      session.agent,
+      this.getCatalogRuntime(session)
     );
+    this.lastHistoryListAgentId = session.agent.id;
+    for (const item of sessions) {
+      this.historySessionAgentById.set(item.sessionId, session.agent.id);
+    }
+    return sessions;
   }
 
   async deleteHistorySession(sessionId: string): Promise<void> {
+    const agent = this.resolveHistoryAgent(sessionId);
     await this.catalog.deleteSession(
-      this.defaultAgent,
+      agent,
       sessionId,
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
+      this.getCatalogRuntimeForAgent(agent.id)
     );
   }
 
   getSupportsLoadSession(): boolean {
-    return (
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
-        .supportsLoadSession ?? true
-    );
+    return this.getActive()?.sessionManager?.supportsLoadSession ?? true;
   }
 
   getSupportsListSessions(): boolean {
-    return (
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
-        .supportsListSessions ?? true
-    );
+    return this.getActive()?.sessionManager?.supportsListSessions ?? true;
   }
 
   getSupportsDeleteSession(): boolean {
-    return (
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
-        .supportsDeleteSession ?? true
-    );
+    return this.getActive()?.sessionManager?.supportsDeleteSession ?? true;
   }
 
   async getHistoryCapabilities(): Promise<CatalogCapabilities> {
+    const session = this.getActive() ?? this.createDraft();
     return this.catalog.getCapabilities(
-      this.defaultAgent,
-      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
+      session.agent,
+      this.getCatalogRuntime(session)
     );
   }
 
@@ -1352,6 +1354,15 @@ export class MultiSessionHostController implements vscode.Disposable {
       if (runtime) return runtime;
     }
     return undefined;
+  }
+
+  private resolveHistoryAgent(sessionId: string): AgentConfig {
+    const agentId =
+      this.historySessionAgentById.get(sessionId) ??
+      this.lastHistoryListAgentId ??
+      this.getActive()?.agent.id ??
+      this.defaultAgent.id;
+    return getAgent(agentId) ?? this.defaultAgent;
   }
 
   private rebindDocumentSync(session: ManagedSession): void {

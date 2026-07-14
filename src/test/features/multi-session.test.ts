@@ -34,6 +34,7 @@ class FakeSessionManager {
   supportsDeleteSession = true;
   newCalls = 0;
   loadCalls: string[] = [];
+  deleteCalls: string[] = [];
   listedSessions: Array<{
     sessionId: string;
     title: string;
@@ -60,7 +61,9 @@ class FakeSessionManager {
     return this.listedSessions;
   }
 
-  async deleteSession(): Promise<void> {}
+  async deleteSession(sessionId: string): Promise<void> {
+    this.deleteCalls.push(sessionId);
+  }
 }
 
 class FakeClient {
@@ -1050,7 +1053,7 @@ suite("multi-session feature", () => {
     }
   });
 
-  test("listing history sessions uses the default selected agent even when another session is active", async () => {
+  test("history list, load, and delete use the active listed agent when default differs", async () => {
     const state = new TestMemento();
     await state.update("vscode-acp-chat.selectedAgent", "pi");
     const { controller, clients, managers } = createController(undefined, {
@@ -1079,13 +1082,28 @@ suite("multi-session feature", () => {
 
     controller.activateSession(piSessionId);
     const sessions = await controller.listSessions();
+    await controller.loadHistorySession("pi-history");
+    await controller.deleteHistorySession("pi-history");
 
+    const active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId === controller.getStateForTest().activeLocalSessionId
+      );
+
+    assert.strictEqual(controller.getDefaultAgentId(), "opencode");
     assert.strictEqual(clients[0].agentId, "pi");
     assert.strictEqual(clients[1].agentId, "opencode");
+    assert.strictEqual(clients[2].agentId, "pi");
     assert.deepStrictEqual(
       sessions.map((session) => session.sessionId),
-      ["opencode-history"]
+      ["pi-history"]
     );
+    assert.strictEqual(active?.agentId, "pi");
+    assert.deepStrictEqual(managers[2].loadCalls, ["pi-history"]);
+    assert.deepStrictEqual(managers[0].deleteCalls, ["pi-history"]);
+    assert.deepStrictEqual(managers[1].deleteCalls, []);
     controller.dispose();
   });
 
