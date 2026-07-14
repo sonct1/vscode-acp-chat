@@ -2,7 +2,7 @@
 
 ## Tổng quan
 
-Bổ sung tính năng trong webview cho phép người dùng chuyển nhanh giữa các lượt trả lời đã hoàn tất của assistant/agent. Về mặt kỹ thuật, một lượt trả lời của assistant được xem là hoàn tất khi webview xử lý xong sự kiện `streamEnd` và đã có node DOM `.message.assistant` tương ứng. Kết quả mong muốn là một bộ điều hướng gọn trong khung chat, có nút trước/sau, phím tắt, bộ đếm `X / N`, scroll/focus ổn định để người dùng đọc lại cuộc hội thoại dài mà không phải lần lượt đi qua user message, system message hoặc tool details.
+Bổ sung tính năng trong webview cho phép người dùng chuyển nhanh giữa các lượt trả lời đã hoàn tất của assistant/agent. Về mặt kỹ thuật, một lượt trả lời của assistant được xem là hoàn tất khi webview xử lý xong sự kiện `streamEnd` và đã có node DOM `.message.assistant` tương ứng. Kết quả mong muốn là cụm icon previous/next gọn trong multi-session header, sticky ở góc phải, scroll/focus ổn định để người dùng đọc lại cuộc hội thoại dài mà không phải lần lượt đi qua user message, system message hoặc tool details. Khi assistant turn có tool/image/action block đứng trước phần trả lời, navigation phải anchor vào `.block-text` đầu tiên để câu trả lời nằm ở đầu viewport; nếu turn không có text block thì fallback về root `.message.assistant`.
 
 ## Phân tích hiện trạng extension
 
@@ -35,10 +35,10 @@ Cơ chế điều hướng sẵn có:
 - Đăng ký feature qua `src/features/register-webview.ts`, đúng quy ước tổ chức feature của repo. Core file chỉ nên thay đổi tối thiểu ở registry và, nếu thật sự cần, một helper/accessor nhỏ.
 - Xem completed assistant response là nguồn dữ liệu chuẩn: `.message.assistant` đã được finalize bởi `streamEnd` và có `.message-actions`.
 - Dùng `MutationObserver` trên `messageList.elements.messagesEl` để duy trì index sau live streaming, history replay, chat clear, và multi-session snapshot reset. Cách này tránh thêm nhánh feature-specific vào `MessageListComponent.handleStreamEnd()`.
-- UI giai đoạn đầu là floating navigator gọn bên trong `#messages-container`, không thêm nút vào từng message toolbar. Cách này ổn định hơn, không làm phình `.message-actions`, vẫn đáp ứng nhu cầu chuyển nhanh.
-- Khi điều hướng: disable auto-scroll, scroll response đích vào viewport, focus vào `.message.assistant`, và thêm highlight ngắn để người dùng định vị.
-- Theo dõi current response index dựa trên vị trí scroll/focus để counter vẫn đúng sau khi người dùng scroll thủ công hoặc chuyển session.
-- Phím tắt chỉ scoped trong webview và phải bỏ qua editable controls. Đề xuất ban đầu: `Alt+[` để về assistant response trước, `Alt+]` để tới assistant response kế tiếp. Hai phím này tránh đụng với navigation `ArrowUp`/`ArrowDown` hiện có.
+- UI hiện là cụm icon previous/next gọn trong multi-session header của ACP Chat webview, đặt sticky ở góc phải để không che nội dung chat, input panel, hoặc message action bars. Không thêm nút vào từng message toolbar.
+- Khi điều hướng: disable auto-scroll, scroll `.block-text` đầu tiên của response đích lên đầu transcript viewport, focus root `.message.assistant`, và thêm highlight ngắn để người dùng định vị. Nếu response không có `.block-text`, scroll root `.message.assistant` như fallback.
+- Theo dõi current response index dựa trên vị trí scroll/focus của cùng scroll target để trạng thái nút previous/next vẫn đúng sau khi người dùng scroll thủ công hoặc chuyển session.
+- Không dùng phím tắt `Alt+[` / `Alt+]` trong iteration này; điều hướng được thực hiện bằng icon trong header để tránh xung đột khi user đang nhập hoặc với keybindings của VS Code.
 
 ## Không nằm trong phạm vi
 
@@ -137,19 +137,20 @@ Cơ chế điều hướng sẵn có:
 
 #### Task 4: Implement jump previous/next
 
-**Mô tả:** Thêm method để nhảy tới completed assistant response trước/sau dựa trên scroll/focus hiện tại. Điều hướng phải giữ quyền kiểm soát của user bằng cách disable auto-scroll trước khi scroll/focus target.
+**Mô tả:** Thêm method để nhảy tới completed assistant response trước/sau dựa trên scroll/focus hiện tại. Điều hướng phải giữ quyền kiểm soát của user bằng cách disable auto-scroll trước khi scroll/focus target. Scroll target ưu tiên `.block-text` đầu tiên trong assistant turn để phần trả lời, không phải tool/image block phía trước, nằm trên cùng viewport.
 
 **Acceptance criteria:**
 
-- [ ] Previous/next bỏ qua user, system, error, và tool-detail-only scroll containers; target chỉ là assistant response container.
+- [ ] Previous/next bỏ qua user, system, error, và tool-detail-only scroll containers; navigable entry vẫn là completed assistant response.
 - [ ] Mỗi lần jump gọi `messageList.disableAutoScroll()` trước khi scroll để live generation không kéo user về cuối.
-- [ ] Target response nhận focus và có temporary visual highlight class.
+- [ ] Scroll target là `.block-text` đầu tiên của response; fallback về `.message.assistant` nếu response không có text block.
+- [ ] Target response root nhận focus và có temporary visual highlight class.
 - [ ] Boundary rõ ràng: previous disabled ở response đầu, next disabled ở response cuối.
 - [ ] Nếu chưa có response nào đang focus/visible, previous/next chọn response gần nhất theo scroll position.
 
 **Verification:**
 
-- [ ] Tests cover previous, next, first/last bounds, và focus target.
+- [ ] Tests cover previous, next, first/last bounds, scroll target, và focus target.
 - [ ] Manual check với cuộc hội thoại có ít nhất 5 assistant responses.
 
 **Dependencies:** Task 3
@@ -161,18 +162,18 @@ Cơ chế điều hướng sẵn có:
 
 **Estimated scope:** Medium: 2 files
 
-### Phase 3: UI và phím tắt
+### Phase 3: UI icon trong multi-session header
 
-#### Task 5: Render floating response navigator
+#### Task 5: Render assistant response navigator trong header
 
-**Mô tả:** Thêm navigator gọn bên trong `#messages-container`, gồm nút previous/next và counter `Assistant response X / N`. Ẩn hoặc disable navigator khi có ít hơn hai completed assistant responses.
+**Mô tả:** Thêm navigator gọn vào multi-session header của ACP Chat webview, gồm icon previous/next. Ẩn navigator khi có ít hơn hai completed assistant responses. Counter vẫn tồn tại cho accessibility/state nội bộ nhưng không hiển thị trong UI header.
 
 **Acceptance criteria:**
 
 - [ ] Navigator chỉ visible khi có ít nhất hai completed assistant responses.
-- [ ] Counter update sau khi điều hướng và sau manual scrolling.
+- [ ] State update sau khi điều hướng và sau manual scrolling.
 - [ ] Nút previous/next có accessible labels và disabled state.
-- [ ] UI không che input panel, multi-session header, hoặc message action bars ở các width sidebar phổ biến.
+- [ ] UI nằm trong multi-session header, sticky bên phải, không che input panel hoặc message action bars ở các width sidebar phổ biến.
 - [ ] Styling dùng VS Code theme variables và hoạt động trong dark/light theme.
 
 **Verification:**
@@ -190,21 +191,19 @@ Cơ chế điều hướng sẵn có:
 
 **Estimated scope:** Medium: 3 files
 
-#### Task 6: Thêm keyboard shortcuts scoped trong webview
+#### Task 6: Bỏ phím tắt webview-local khỏi phạm vi hiện tại
 
-**Mô tả:** Thêm phím tắt trong webview để chuyển nhanh giữa các response. Shortcut không được chạy khi user đang nhập trong input editor, search box, dropdown, hoặc control có thể edit khác.
+**Mô tả:** Không đăng ký `Alt+[` / `Alt+]`. Điều hướng dùng icon trong header để tránh xung đột keybindings và tránh phải xử lý editable-control contexts.
 
 **Acceptance criteria:**
 
-- [ ] `Alt+[` nhảy tới completed assistant response trước.
-- [ ] `Alt+]` nhảy tới completed assistant response sau.
-- [ ] Shortcut handler bỏ qua `input`, `textarea`, `select`, `[contenteditable]`, và interactive dropdown/menu contexts.
+- [ ] Không có handler `Alt+[` / `Alt+]` trong feature.
+- [ ] Nút previous/next có tooltip và `aria-label` rõ ràng.
 - [ ] Navigation `ArrowUp`/`ArrowDown` hiện tại trong message list không đổi.
-- [ ] Shortcut label xuất hiện trong tooltip hoặc `aria-label` của nút.
 
 **Verification:**
 
-- [ ] Tests cover shortcut dispatch và editable-control ignore behavior.
+- [ ] Tests cover button navigation và header placement.
 - [ ] Manual check khi focus ở input panel và khi focus ở message.
 
 **Dependencies:** Task 5
@@ -212,15 +211,14 @@ Cơ chế điều hướng sẵn có:
 **Files likely touched:**
 
 - `src/features/assistant-turn-navigation/webview.ts`
-- `src/test/webview.test.ts`
+- `src/test/features/assistant-turn-navigation.test.ts`
 
 **Estimated scope:** Small: 2 files
 
 ### Checkpoint: Feature usable
 
-- [ ] User có thể chuyển giữa completed assistant responses bằng nút.
-- [ ] User có thể chuyển giữa completed assistant responses bằng phím tắt.
-- [ ] Current response counter vẫn đúng sau manual scroll.
+- [ ] User có thể chuyển giữa completed assistant responses bằng icon previous/next trong multi-session header.
+- [ ] Current response state vẫn đúng sau manual scroll.
 - [ ] Chat rendering, action buttons, và keyboard navigation hiện có vẫn hoạt động.
 
 ### Phase 4: Hardening cho multi-session, history, và edge cases
@@ -257,7 +255,7 @@ Cơ chế điều hướng sẵn có:
 
 **Acceptance criteria:**
 
-- [ ] Tests cover response indexing, button navigation, keyboard navigation, clear/reset, multi-session snapshot replay, và no-response cases.
+- [ ] Tests cover response indexing, header button navigation, answer-text scroll target, clear/reset, multi-session snapshot replay, và no-response cases.
 - [ ] Existing tests cho action buttons, turn separation, streaming, và multi-session snapshots vẫn pass.
 - [ ] Tests không phụ thuộc vào implementation details ngoài public DOM classes và accessibility attributes.
 
@@ -329,9 +327,10 @@ Cơ chế điều hướng sẵn có:
 | --- | --- | --- |
 | Đếm raw `streamEnd` tạo phantom turns | High | Index finalized assistant DOM nodes, không index raw `streamEnd` events. |
 | Navigation đánh nhau với live auto-scroll | Medium | Luôn gọi `messageList.disableAutoScroll()` trước manual jump. |
+| Tool/image block đứng trước câu trả lời bị đưa lên đầu viewport | Medium | Scroll vào `.block-text` đầu tiên của assistant turn; chỉ fallback `.message.assistant` khi không có text block. |
 | Multi-session snapshot replay để lại stale entries | Medium | Rebuild từ DOM `#messages` hiện tại sau mutations và sau clear/reset; không lưu host/session id trong feature. |
-| Floating controls che nội dung chat ở sidebar hẹp | Medium | Control gọn, position trong `#messages-container`, CSS responsive, manual test width hẹp. |
-| Keyboard shortcuts xung đột khi đang nhập hoặc với default VS Code | Medium | Scope trong webview, bỏ qua editable controls, giữ shortcut dễ đổi. |
+| Header controls chen lấn title/status ở sidebar hẹp | Medium | Control chỉ gồm icon, đặt `margin-left:auto`, sticky bên phải, counter ẩn khỏi visual UI. |
+| Keyboard shortcuts xung đột khi đang nhập hoặc với default VS Code | Low | Không đăng ký `Alt+[` / `Alt+]` trong iteration hiện tại; dùng icon trong header. |
 | `MutationObserver` update quá nhiều khi streaming | Low | Debounce rebuild bằng `requestAnimationFrame` và chỉ index completed assistant nodes. |
 | Test brittle vì JSDOM không có real layout | Low | Unit-test index/state và stub scroll/focus; visual scroll placement kiểm tra thủ công. |
 
@@ -339,13 +338,14 @@ Cơ chế điều hướng sẵn có:
 
 - Có nên ẩn navigator khi chỉ có một assistant response không? Khuyến nghị: có, để giảm nhiễu UI.
 - Cancelled/error-ended response có nên navigable không? Khuyến nghị: có nếu tồn tại assistant message element, vì user vẫn cần xem partial output hoặc failed tool context.
-- Có nên thêm quick-pick/dropdown hiển thị toàn bộ response labels không? Khuyến nghị: defer. Previous/next + counter giải quyết nhu cầu chính với UI ít phức tạp hơn.
-- Có nên cấu hình shortcut qua VS Code keybindings không? Khuyến nghị: defer. Bắt đầu bằng webview-local shortcuts; chỉ thêm contributed commands nếu cần global shortcuts sau này.
+- Có nên thêm quick-pick/dropdown hiển thị toàn bộ response labels không? Khuyến nghị: defer. Previous/next icon controls giải quyết nhu cầu chính với UI ít phức tạp hơn.
+- Có nên cấu hình shortcut qua VS Code keybindings không? Khuyến nghị: defer. Iteration hiện tại không dùng phím tắt; chỉ thêm contributed commands nếu cần global shortcuts sau này.
 
 ## Definition of Done
 
-- Webview có compact assistant response navigator cho conversation có nhiều completed assistant responses.
-- Previous/next controls và keyboard shortcuts chỉ nhảy giữa completed assistant responses.
+- Webview có compact assistant response navigator trong multi-session header cho conversation có nhiều completed assistant responses.
+- Previous/next icon controls chỉ nhảy giữa completed assistant responses.
+- Navigation đưa phần trả lời `.block-text` của turn đích lên đầu transcript viewport, không neo vào tool/image/action blocks trước đó.
 - Navigation hoạt động sau live streaming, history replay, chat clear/reset, và multi-session switching.
 - Message rendering, action buttons, input behavior, và multi-session behavior hiện có không đổi.
 - Quality gates pass, production bundle build thành công, VSIX được package/install local, và user được nhắc reload VS Code.

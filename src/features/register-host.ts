@@ -4,10 +4,12 @@ import {
   registerAddToChatHostFeature,
   type ChatMentionTarget,
 } from "./add-to-chat/host";
+import { registerOpenSettingsHostFeature } from "./open-settings/host";
 
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
   multiSession?: MultiSessionHostController;
+  openSettings?: ReturnType<typeof registerOpenSettingsHostFeature>;
 }
 
 export function registerHostFeatures(options: {
@@ -35,6 +37,9 @@ export function registerExtensionHostFeatures(options: {
     addToChat: registerAddToChatHostFeature({
       context: options.context,
       getChatTarget: options.getChatTarget,
+    }),
+    openSettings: registerOpenSettingsHostFeature({
+      context: options.context,
     }),
   };
 }

@@ -10,7 +10,6 @@ const LABEL_MAX_LENGTH = 80;
 export class AssistantTurnNavigationWebviewFeature {
   private readonly doc: Document;
   private readonly win: Window;
-  private readonly messagesContainerEl: HTMLElement;
   private readonly messagesEl: HTMLElement;
   private readonly navigatorEl: HTMLElement;
   private readonly previousButton: HTMLButtonElement;
@@ -28,13 +27,10 @@ export class AssistantTurnNavigationWebviewFeature {
     ) as HTMLElement | null;
     if (target) this.setActiveByElement(target);
   };
-  private readonly onWindowKeyDown = (event: KeyboardEvent) =>
-    this.handleKeyDown(event);
 
   constructor(private readonly controller: WebviewController) {
     this.doc = controller.getDocument();
     this.win = controller.getWindow();
-    this.messagesContainerEl = controller.messageList.elements.containerEl;
     this.messagesEl = controller.messageList.elements.messagesEl;
 
     const { navigatorEl, previousButton, nextButton, counterEl } =
@@ -43,7 +39,7 @@ export class AssistantTurnNavigationWebviewFeature {
     this.previousButton = previousButton;
     this.nextButton = nextButton;
     this.counterEl = counterEl;
-    this.messagesContainerEl.appendChild(this.navigatorEl);
+    this.attachNavigator();
 
     const MutationObserverCtor = (
       this.win as Window & { MutationObserver: typeof MutationObserver }
@@ -53,7 +49,6 @@ export class AssistantTurnNavigationWebviewFeature {
 
     this.messagesEl.addEventListener("scroll", this.onMessagesScroll);
     this.messagesEl.addEventListener("focusin", this.onMessagesFocusIn);
-    this.win.addEventListener("keydown", this.onWindowKeyDown);
 
     this.rebuildEntries();
   }
@@ -70,7 +65,6 @@ export class AssistantTurnNavigationWebviewFeature {
     }
     this.messagesEl.removeEventListener("scroll", this.onMessagesScroll);
     this.messagesEl.removeEventListener("focusin", this.onMessagesFocusIn);
-    this.win.removeEventListener("keydown", this.onWindowKeyDown);
     this.entries.forEach((entry) =>
       entry.element.classList.remove("assistant-turn-highlight")
     );
@@ -99,14 +93,14 @@ export class AssistantTurnNavigationWebviewFeature {
     counterEl: HTMLElement;
   } {
     const navigatorEl = this.doc.createElement("div");
-    navigatorEl.className = "assistant-turn-navigator";
+    navigatorEl.className = "assistant-turn-navigator assistant-turn-navigator-header";
     navigatorEl.hidden = true;
     navigatorEl.setAttribute("role", "group");
     navigatorEl.setAttribute("aria-label", "Assistant response navigation");
 
     const previousButton = this.createButton(
       "chevron-up",
-      "Previous assistant response (Alt+[)",
+      "Previous assistant response",
       () => this.navigate("previous")
     );
     previousButton.classList.add("assistant-turn-prev");
@@ -118,13 +112,25 @@ export class AssistantTurnNavigationWebviewFeature {
 
     const nextButton = this.createButton(
       "chevron-down",
-      "Next assistant response (Alt+])",
+      "Next assistant response",
       () => this.navigate("next")
     );
     nextButton.classList.add("assistant-turn-next");
 
     navigatorEl.append(previousButton, counterEl, nextButton);
     return { navigatorEl, previousButton, nextButton, counterEl };
+  }
+
+  private attachNavigator(): void {
+    const header = this.doc.querySelector<HTMLElement>(".multi-session-header");
+    if (header) {
+      header.appendChild(this.navigatorEl);
+      return;
+    }
+
+    // Fallback for tests or single-session webview surfaces where the optional
+    // multi-session header has not been mounted yet.
+    this.controller.messageList.elements.containerEl.appendChild(this.navigatorEl);
   }
 
   private createButton(
@@ -170,6 +176,7 @@ export class AssistantTurnNavigationWebviewFeature {
       .filter((element) => element.querySelector(".message-actions"))
       .map((element, index) => ({
         element,
+        scrollTarget: this.findResponseScrollTarget(element),
         index,
         label: this.createLabel(element, index),
       }));
@@ -213,29 +220,8 @@ export class AssistantTurnNavigationWebviewFeature {
     return null;
   }
 
-  private handleKeyDown(event: KeyboardEvent): void {
-    if (event.defaultPrevented) return;
-    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    if (event.key !== "[" && event.key !== "]") return;
-    if (this.isEditableTarget(event.target)) return;
-
-    const didNavigate = this.navigate(event.key === "[" ? "previous" : "next");
-    if (!didNavigate) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-  }
-
-  private isEditableTarget(target: EventTarget | null): boolean {
-    if (!target || typeof (target as Element).closest !== "function") {
-      return false;
-    }
-    const element = target as Element;
-    return Boolean(
-      element.closest(
-        'input, textarea, select, [contenteditable], .custom-dropdown.open, .dropdown-popover, [role="listbox"], [role="menu"]'
-      )
-    );
+  private findResponseScrollTarget(element: HTMLElement): HTMLElement {
+    return element.querySelector<HTMLElement>(".block-text") ?? element;
   }
 
   private ensureActiveIndex(): void {
@@ -276,7 +262,7 @@ export class AssistantTurnNavigationWebviewFeature {
     let bestDistance = Number.POSITIVE_INFINITY;
 
     this.entries.forEach((entry, index) => {
-      const rect = entry.element.getBoundingClientRect();
+      const rect = entry.scrollTarget.getBoundingClientRect();
       const distance = Math.abs(rect.top - anchor);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -293,7 +279,7 @@ export class AssistantTurnNavigationWebviewFeature {
 
     this.activeIndex = index;
     this.controller.messageList.disableAutoScroll();
-    entry.element.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    entry.scrollTarget.scrollIntoView?.({ behavior: "smooth", block: "start" });
     entry.element.focus({ preventScroll: true });
     this.highlight(entry.element);
     this.updateNavigator();

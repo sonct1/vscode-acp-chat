@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+EXT_NAME="$(node -p "require('./package.json').name")"
+EXT_VERSION="$(node -p "require('./package.json').version")"
+EXT_PUBLISHER="$(node -p "require('./package.json').publisher")"
+VSIX_PATH="${TMPDIR:-/tmp}/${EXT_NAME}-${EXT_VERSION}.vsix"
+
+echo "==> Linting"
+npx eslint src
+
+echo "==> Building production bundle"
+npm run package
+
+echo "==> Packaging VSIX: ${VSIX_PATH}"
+npx vsce package --out "$VSIX_PATH"
+
+echo "==> Installing extension into VS Code"
+code --install-extension "$VSIX_PATH" --force
+
+echo "==> Installed extension version"
+code --list-extensions --show-versions | grep -E "^${EXT_PUBLISHER}\.${EXT_NAME}@" || true
+
+rm -f "$VSIX_PATH"
+echo "Done. Run 'Developer: Reload Window' in VS Code to use the updated extension."

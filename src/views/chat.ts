@@ -2097,12 +2097,12 @@ export class ChatViewProvider
         contenteditable="true"
         role="textbox"
         aria-multiline="true"
-        data-placeholder="Ask your agent... (type / for commands, @ for files)"
+        data-placeholder="Ask your agent... (Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.)"
         aria-label="Message input"
         aria-describedby="input-hint"
         aria-autocomplete="list"
         aria-controls="command-autocomplete"></div>
-      <div id="input-hint" class="input-hint">Press Enter to send, Shift+Enter for new line. Type / for commands.</div>
+      <div id="input-hint" class="input-hint">Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.</div>
     </div>
 
     <div id="options-bar" role="toolbar" aria-label="Session options">

@@ -77,7 +77,12 @@ function createWebviewHTML(): string {
   <div id="chat-input-area">
     <div id="input-container">
       <div id="command-autocomplete" role="listbox"></div>
-      <div id="input" contenteditable="true"></div>
+      <div
+        id="input"
+        contenteditable="true"
+        data-placeholder="Ask your agent... (Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.)"
+        aria-describedby="input-hint"></div>
+      <div id="input-hint" class="input-hint">Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.</div>
     </div>
     <div id="options-bar">
       <div id="left-options">
@@ -724,6 +729,29 @@ suite("Webview", () => {
       const messages = mockVsCode._getMessages();
       assert.ok(
         messages.some((m: unknown) => (m as { type: string }).type === "ready")
+      );
+    });
+
+    test("keeps input guidance in the placeholder", () => {
+      assert.strictEqual(
+        elements.inputEl.getAttribute("data-placeholder"),
+        "Ask your agent... (Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.)"
+      );
+      assert.strictEqual(
+        document.getElementById("input-hint")?.textContent,
+        "Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files."
+      );
+    });
+
+    test("agentChanged updates placeholder with input guidance", () => {
+      controller.handleMessage({
+        type: "agentChanged",
+        agentName: "Claude Code",
+      });
+
+      assert.strictEqual(
+        elements.inputEl.getAttribute("data-placeholder"),
+        "Ask claude code... (Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.)"
       );
     });
 

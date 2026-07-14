@@ -99,6 +99,7 @@ Docs routing:
 - Product scope: `docs/product/README.md`
 - Feature catalog: `docs/features/README.md`
 - Service architecture: `docs/architecture/README.md`
+- ACP chat layout source of truth: `docs/architecture/acp-chat-layout.md`; when changing layout, update this document in the same change.
 - ADRs: `docs/architecture/adr/README.md`
 - Technical designs: `docs/design/README.md`
 - Service interface contracts (REST APIs, events, payloads, errors): `docs/contracts/README.md`
@@ -120,5 +121,6 @@ Feature management:
 - Use `docs/features/README.md` to discover registered durable feature docs.
 - Use `docs/features/FEAT-NNNN-<slug>/` only when a feature spans product/design/API/implementation concerns.
 - Use Beads for active task graph, dependencies, status, and execution units.
+- When finishing implementation from a plan, update the plan file status/completion notes and update `docs/features/feature-catalog.md` for any feature behavior, UI, capability, or status changes.
 - Do not use feature docs or `docs/plans/` as backlog.
 - Do not create feature docs or beads for tiny one-shot fixes.

@@ -17,6 +17,7 @@ esbuild.js
 **/*.ts
 !dist/**
 opencode.jsonc
+scripts/**
 package-lock.json
 .mimocode/
 .versionrc

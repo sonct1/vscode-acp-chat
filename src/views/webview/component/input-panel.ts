@@ -118,7 +118,7 @@ export class InputPanelComponent implements MessageHandler {
   }
 
   setPlaceholder(agentName: string): void {
-    const placeholder = `Ask ${agentName.toLowerCase()}... (type / for commands, @ for files)`;
+    const placeholder = `Ask ${agentName.toLowerCase()}... (Press Enter to send, Shift+Enter for new line. Type / for commands, @ for files.)`;
     this.elements.inputEl.setAttribute("data-placeholder", placeholder);
   }
 

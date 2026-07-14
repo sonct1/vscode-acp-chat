@@ -85,6 +85,12 @@
         "icon": "$(history)"
       },
       {
+        "command": "vscode-acp-chat.openSettings",
+        "title": "Open ACP Settings",
+        "category": "ACP",
+        "icon": "$(gear)"
+      },
+      {
         "command": "vscode-acp-chat.deleteHistorySession",
         "title": "Delete History Session",
         "category": "ACP",
@@ -284,6 +290,11 @@
           "command": "vscode-acp-chat.loadHistory",
           "when": "view == vscode-acp-chat.chatView",
           "group": "navigation@4"
+        },
+        {
+          "command": "vscode-acp-chat.openSettings",
+          "when": "view == vscode-acp-chat.chatView",
+          "group": "navigation@5"
         }
       ],
       "commandPalette": [

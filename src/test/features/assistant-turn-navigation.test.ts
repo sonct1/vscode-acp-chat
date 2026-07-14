@@ -24,6 +24,7 @@ function createWebviewHTML(): string {
   return `<!DOCTYPE html><html><head></head><body>
     <div id="welcome-view" class="welcome-view"></div>
     <div id="agent-plan-container"></div>
+    <div class="multi-session-header"><button type="button" class="multi-session-open"></button><div class="multi-session-heading"><strong>New chat</strong><span>Idle · PI</span></div></div>
     <div id="messages-container"><div id="messages"></div></div>
     <div id="typing-indicator"></div>
     <div id="diff-summary-container"></div>
@@ -52,9 +53,8 @@ suite("assistant-turn-navigation feature", () => {
   let document: Document;
   let window: DOMWindow;
   let controller: WebviewController;
-  let messagesContainerEl: HTMLElement;
+  let headerEl: HTMLElement;
   let messagesEl: HTMLElement;
-  let inputEl: HTMLElement;
 
   setup(() => {
     dom = new JSDOM(createWebviewHTML(), {
@@ -70,9 +70,8 @@ suite("assistant-turn-navigation feature", () => {
       document,
       window as unknown as Window
     );
-    messagesContainerEl = document.getElementById("messages-container")!;
+    headerEl = document.querySelector(".multi-session-header")!;
     messagesEl = document.getElementById("messages")!;
-    inputEl = document.getElementById("input")!;
   });
 
   teardown(() => {
@@ -86,6 +85,30 @@ suite("assistant-turn-navigation feature", () => {
     controller.handleMessage({ type: "streamEnd" });
   }
 
+  function addToolThenCompletedAssistantTurn(
+    question: string,
+    answer: string
+  ): void {
+    controller.handleMessage({ type: "userMessage", text: question });
+    controller.handleMessage({ type: "streamStart" });
+    controller.handleMessage({
+      type: "toolCallStart",
+      toolCallId: `tool-${question}`,
+      name: "Edit",
+      kind: "edit",
+    });
+    controller.handleMessage({
+      type: "toolCallComplete",
+      toolCallId: `tool-${question}`,
+      status: "completed",
+      title: "Edit",
+      kind: "edit",
+      rawInput: { description: "edit" },
+    });
+    controller.handleMessage({ type: "streamChunk", text: answer });
+    controller.handleMessage({ type: "streamEnd" });
+  }
+
   async function settleNavigation(): Promise<void> {
     await Promise.resolve();
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -93,7 +116,7 @@ suite("assistant-turn-navigation feature", () => {
   }
 
   function getNavigator(): HTMLElement | null {
-    return messagesContainerEl.querySelector(".assistant-turn-navigator");
+    return headerEl.querySelector(".assistant-turn-navigator");
   }
 
   function getCounter(): string {
@@ -106,8 +129,8 @@ suite("assistant-turn-navigation feature", () => {
   function getNavButton(direction: "previous" | "next"): HTMLButtonElement {
     const label =
       direction === "previous"
-        ? "Previous assistant response (Alt+[)"
-        : "Next assistant response (Alt+])";
+        ? "Previous assistant response"
+        : "Next assistant response";
     const button = getNavigator()?.querySelector<HTMLButtonElement>(
       `button[aria-label="${label}"]`
     );
@@ -147,7 +170,7 @@ suite("assistant-turn-navigation feature", () => {
     };
 
     addCompletedAssistantTurn("Question 1", "Answer 1");
-    addCompletedAssistantTurn("Question 2", "Answer 2");
+    addToolThenCompletedAssistantTurn("Question 2", "Answer 2");
     addCompletedAssistantTurn("Question 3", "Answer 3");
     await settleNavigation();
 
@@ -160,7 +183,14 @@ suite("assistant-turn-navigation feature", () => {
     await settleNavigation();
 
     assert.strictEqual(document.activeElement, assistantMsgs[1]);
-    assert.strictEqual(scrollTargets.at(-1), assistantMsgs[1]);
+    assert.ok(
+      assistantMsgs[1].querySelector(".block-tool"),
+      "expected a tool block before the answer text"
+    );
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[1].querySelector(".block-text")
+    );
     assert.strictEqual(getCounter(), "Assistant 2 / 3");
     assert.strictEqual(
       assistantMsgs[1].classList.contains("assistant-turn-highlight"),
@@ -210,7 +240,11 @@ suite("assistant-turn-navigation feature", () => {
         }) as DOMRect,
     });
     [320, 80, 700].forEach((top, index) => {
-      Object.defineProperty(assistantMsgs[index], "getBoundingClientRect", {
+      const scrollTarget = assistantMsgs[index].querySelector<HTMLElement>(
+        ".block-text"
+      );
+      assert.ok(scrollTarget, "expected answer text block");
+      Object.defineProperty(scrollTarget, "getBoundingClientRect", {
         configurable: true,
         value: () =>
           ({
@@ -232,45 +266,6 @@ suite("assistant-turn-navigation feature", () => {
     assert.strictEqual(getCounter(), "Assistant 2 / 3");
     assert.strictEqual(getNavButton("previous").disabled, false);
     assert.strictEqual(getNavButton("next").disabled, false);
-  });
-
-  test("keyboard shortcuts navigate and ignore editable controls", async () => {
-    addCompletedAssistantTurn("Question 1", "Answer 1");
-    addCompletedAssistantTurn("Question 2", "Answer 2");
-    addCompletedAssistantTurn("Question 3", "Answer 3");
-    await settleNavigation();
-
-    const assistantMsgs = Array.from(
-      messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
-    );
-    assistantMsgs[1].focus();
-
-    window.dispatchEvent(
-      new window.KeyboardEvent("keydown", {
-        key: "]",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
-    await settleNavigation();
-
-    assert.strictEqual(document.activeElement, assistantMsgs[2]);
-    assert.strictEqual(getCounter(), "Assistant 3 / 3");
-
-    inputEl.focus();
-    inputEl.dispatchEvent(
-      new window.KeyboardEvent("keydown", {
-        key: "[",
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
-    await settleNavigation();
-
-    assert.strictEqual(document.activeElement, inputEl);
-    assert.strictEqual(getCounter(), "Assistant 3 / 3");
   });
 
   test("rebuilds after chat clear and multi-session snapshot replay", async () => {

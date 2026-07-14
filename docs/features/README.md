@@ -12,6 +12,6 @@ Do not put backlog items, active task status, sprint planning, one-shot bug note
 
 ## Feature catalog
 
-| Feature | Status | Owner | Related docs |
-| ------- | ------ | ----- | ------------ |
-| TBD     | TBD    | TBD   | TBD          |
+| Feature                        | Status                 | Owner                 | Related docs                             |
+| ------------------------------ | ---------------------- | --------------------- | ---------------------------------------- |
+| Existing extension feature set | Current implementation | Extension maintainers | [feature-catalog.md](feature-catalog.md) |
