@@ -26,9 +26,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-button-danger{color:var(--vscode-errorForeground)}
 .multi-session-button-danger:hover:not(:disabled){background:var(--vscode-inputValidation-errorBackground,var(--vscode-toolbar-hoverBackground,rgba(255,255,255,.12)))}
 .multi-session-open{flex-shrink:0;min-width:28px;padding-left:6px;padding-right:6px;overflow:hidden;text-overflow:ellipsis}
-.multi-session-open.has-attention{color:var(--vscode-foreground)}
-.multi-session-open-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 5px;border-radius:999px;font-size:10px;line-height:16px;color:var(--vscode-badge-foreground);background:var(--vscode-badge-background)}
-.multi-session-open-badge.permission{color:var(--vscode-foreground);background:var(--vscode-inputValidation-warningBackground,transparent);border:1px solid var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow))}
 .multi-session-overlay{position:fixed;inset:0;background:var(--vscode-sideBar-background);z-index:1000;display:flex;flex-direction:column;outline:none}
 .multi-session-overlay-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:8px 12px 10px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}
 .multi-session-overlay-head strong{display:block;font-size:13px;font-weight:600;line-height:1.3;color:var(--vscode-foreground)}

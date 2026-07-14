@@ -2,7 +2,7 @@
 
 | Attribute  | Value |
 | ---------- | ----- |
-| Status     | Implemented |
+| Status     | Implemented; corrected with disk verification |
 | Owner      | TBD |
 | Scope      | Extension Host, ACP tool-call output handling, diff tracking, multi-session routing, tests, docs |
 | References | `src/views/chat.ts`, `src/acp/session-output-pipeline.ts`, `src/acp/diff-manager.ts`, `src/acp/file-handler.ts`, `src/features/multi-session/host.ts`, `src/views/webview/widget/diff-summary.ts` |
@@ -74,7 +74,8 @@ completed tool call
 Yêu cầu hành vi:
 
 - Giữ nguyên inline diff trong tool block.
-- Bottom diff summary hiện với cùng file change nếu diff đủ an toàn để review/rollback.
+- Bottom diff summary hiện với cùng file change nếu diff đủ an toàn để review/rollback và nội dung file hiện tại khớp `newText`.
+- Structured diff không khớp disk vẫn render inline trong tool block nhưng không tạo actionable `DiffManager` entry.
 - Không tạo duplicate pending entry nếu cùng file đã được record bởi `FileHandler`.
 - Không record diff thiếu dữ liệu rollback an toàn.
 - Không giả định mọi built-in/custom agent đều emit structured diff; bridge chỉ record khi `content[{ type: "diff" }]` thật sự có mặt và hợp lệ.
@@ -152,13 +153,15 @@ API đề xuất:
 export interface StructuredDiffRecordOptions {
   cwd: string;
   diffManager: DiffManager;
+  readTextFile?: (path: string) => Promise<string | null>;
   onDidRecord?: (path: string, oldText: string | null, newText: string) => void;
+  onDidSkip?: (path: string, reason: "invalid" | "not-applied") => void;
 }
 
-export function recordStructuredDiffsFromContent(
+export async function recordStructuredDiffsFromContent(
   content: unknown,
   options: StructuredDiffRecordOptions
-): number;
+): Promise<number>;
 ```
 
 ### 2. Validate dữ liệu trước khi record
@@ -171,8 +174,9 @@ Chỉ record khi đủ điều kiện:
 | `path` | `string`, non-empty | cần file target |
 | `newText` | `string` | cần expected final file content |
 | `oldText` | `string` hoặc `null` | rollback/review an toàn |
+| current file content | bằng `newText` | chứng minh diff đã apply thật và có thể rollback an toàn |
 
-Không record nếu `oldText === undefined`.
+Không record nếu `oldText === undefined` hoặc file hiện tại không khớp `newText`.
 
 Lý do: `oldText: null` đang có nghĩa là file mới, rollback sẽ delete file. Nếu ép `undefined` thành `null`, discard có thể xoá nhầm file đã tồn tại.
 

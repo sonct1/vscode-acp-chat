@@ -4,6 +4,7 @@ import { SessionOutputPipeline } from "../acp/session-output-pipeline";
 suite("SessionOutputPipeline", () => {
   test("calls structured diff callback with final content before emitting completion", async () => {
     const callbackContents: unknown[] = [];
+    const events: string[] = [];
     const emitted: Array<{ type: string; content?: unknown }> = [];
     const pipeline = new SessionOutputPipeline({
       client: {} as any,
@@ -11,8 +12,13 @@ suite("SessionOutputPipeline", () => {
         clearLastFileContents: () => {},
         getLastFileContent: () => "before\n",
       } as any,
-      onStructuredDiffContent: (content) => callbackContents.push(content),
+      onStructuredDiffContent: async (content) => {
+        callbackContents.push(content);
+        await Promise.resolve();
+        events.push("callback");
+      },
       emit: (message) => {
+        events.push("emit");
         emitted.push({ type: message.type, content: message.content });
       },
     });
@@ -32,6 +38,7 @@ suite("SessionOutputPipeline", () => {
       },
     } as any);
 
+    assert.deepStrictEqual(events, ["callback", "emit"]);
     assert.strictEqual(callbackContents.length, 1);
     assert.deepStrictEqual(callbackContents[0], [
       {
@@ -59,7 +66,9 @@ suite("SessionOutputPipeline", () => {
         clearLastFileContents: () => {},
         getLastFileContent: () => undefined,
       } as any,
-      onStructuredDiffContent: (content) => callbackContents.push(content),
+      onStructuredDiffContent: (content) => {
+        callbackContents.push(content);
+      },
       emit: () => {},
     });
 
@@ -86,7 +95,9 @@ suite("SessionOutputPipeline", () => {
         clearLastFileContents: () => {},
         getLastFileContent: () => undefined,
       } as any,
-      onStructuredDiffContent: (content) => callbackContents.push(content),
+      onStructuredDiffContent: (content) => {
+        callbackContents.push(content);
+      },
       emit: () => {},
     });
 

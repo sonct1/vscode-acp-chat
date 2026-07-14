@@ -3488,11 +3488,15 @@ suite("Webview", () => {
         null
       );
       assert.strictEqual(openButton.textContent?.trim(), "");
+      assert.strictEqual(
+        openButton.querySelector(".multi-session-open-badge"),
+        null
+      );
       assert.strictEqual(document.querySelector(".multi-session-new"), null);
       assert.ok(status.textContent?.includes("Idle · Test Agent"));
       assert.strictEqual(
         openButton.getAttribute("aria-label"),
-        "Back to session manager. 1 session."
+        "Back to session manager."
       );
     });
 
@@ -4663,6 +4667,40 @@ suite("Webview", () => {
       assert.ok(
         elements.diffSummaryContainer.innerHTML.includes("diff-summary-list")
       );
+      assert.ok(elements.diffSummaryContainer.innerHTML.includes("file1.ts"));
+    });
+
+    test("diff action clicks wait for host diffSummary updates", () => {
+      const { controller, elements, mockVsCode } = setupController();
+      const changes = [
+        {
+          path: "/test/file1.ts",
+          relativePath: "file1.ts",
+          oldText: "old",
+          newText: "new",
+          status: "pending",
+        },
+      ];
+
+      controller.handleMessage({
+        type: "diffSummary",
+        changes,
+      } as any);
+      const toggleBtn = elements.diffSummaryContainer.querySelector(
+        ".toggle-expand"
+      ) as HTMLButtonElement;
+      toggleBtn.click();
+
+      const acceptBtn = elements.diffSummaryContainer.querySelector(
+        ".diff-item-btn.accept"
+      ) as HTMLButtonElement;
+      mockVsCode._clearMessages();
+      acceptBtn.click();
+
+      assert.deepStrictEqual(mockVsCode._getMessages(), [
+        { type: "acceptDiff", path: "/test/file1.ts" },
+      ]);
+      assert.strictEqual(elements.diffSummaryContainer.style.display, "block");
       assert.ok(elements.diffSummaryContainer.innerHTML.includes("file1.ts"));
     });
 

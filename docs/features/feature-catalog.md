@@ -94,7 +94,7 @@ Capabilities surfaced to users:
 
 ### File-change review and diff summary
 
-Agent file writes go through `FileHandler`, which snapshots previous content and records pending changes in `DiffManager`. Completed ACP tool calls that include valid structured diff content (`type: "diff"`, target path, `oldText`, and `newText`) are also bridged into the same `DiffManager`, so agents that report applied edits as structured diffs can populate the collective panel without using `client.fs.writeTextFile`. The diff summary panel shows changed files, line statistics, and actions:
+Agent file writes go through `FileHandler`, which snapshots previous content and records pending changes in `DiffManager`. Completed ACP tool calls that include valid structured diff content (`type: "diff"`, target path, `oldText`, and `newText`) are also bridged into the same `DiffManager` only when the current file content matches `newText`, so agents that report applied edits as structured diffs can populate the collective panel without using `client.fs.writeTextFile`. Structured diffs that are preview-only, stale, missing safe rollback data, or otherwise not applied to disk remain inline in the tool block and do not get accept/discard actions. The diff summary panel shows changed files, line statistics, and actions:
 
 - review a file in VS Code diff view;
 - accept one pending change;
@@ -102,7 +102,7 @@ Agent file writes go through `FileHandler`, which snapshots previous content and
 - accept all pending changes;
 - discard all pending changes.
 
-`vscode-acp-chat.enableDiffSummary` controls whether the collective changed-files panel is posted to the webview. Structured diffs are best-effort and shape-driven: malformed diffs and diffs without safe rollback data are skipped.
+`vscode-acp-chat.enableDiffSummary` controls whether the collective changed-files panel is posted to the webview. Structured diffs are best-effort and shape-driven: malformed diffs, diffs without safe rollback data, and diffs whose `newText` does not match the file on disk are skipped for the actionable summary.
 
 In multi-session mode, file mutations are coordinated per session. Accept/discard checks verify that the file still matches the session’s expected version; after a write, other sessions' pending diffs can be marked stale or conflicted.
 

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
 import * as fs from "fs";
+import * as os from "os";
 import * as vscode from "vscode";
 import * as path from "path";
 import { ChatViewProvider } from "../views/chat";
@@ -933,6 +934,11 @@ suite("ChatViewProvider", () => {
 
   suite("Tool Call Updates", () => {
     test("treats a completed tool_call as a complete event", async () => {
+      const filePath = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-summary-")),
+        "NewFile.kt"
+      );
+      fs.writeFileSync(filePath, "class NewFile\n");
       const provider = new ChatViewProvider(
         mockExtensionUri,
         acpClient as any,
@@ -941,59 +947,72 @@ suite("ChatViewProvider", () => {
       const messages: any[] = [];
       (provider as any).postMessage = (msg: any) => messages.push(msg);
 
-      await (provider as any).handleSessionUpdate({
-        sessionId: "test",
-        update: {
-          sessionUpdate: "tool_call",
-          toolCallId: "file-change-1",
-          title: "Editing files",
-          kind: "edit",
-          status: "completed",
-          content: [
-            {
-              type: "diff",
-              path: "/test/project/NewFile.kt",
-              oldText: null,
-              newText: "class NewFile\n",
-            },
-          ],
-        },
-      });
+      try {
+        await (provider as any).handleSessionUpdate({
+          sessionId: "test",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "file-change-1",
+            title: "Editing files",
+            kind: "edit",
+            status: "completed",
+            content: [
+              {
+                type: "diff",
+                path: filePath,
+                oldText: null,
+                newText: "class NewFile\n",
+              },
+            ],
+          },
+        });
 
-      const diffSummary = messages.find((m) => m.type === "diffSummary");
-      assert.ok(diffSummary, "structured diff should update the summary panel");
-      assert.deepStrictEqual(diffSummary.changes, [
-        {
-          path: "/test/project/NewFile.kt",
-          relativePath: vscode.workspace.asRelativePath("/test/project/NewFile.kt"),
-          oldText: null,
-          newText: "class NewFile\n",
-          status: "pending",
-        },
-      ]);
+        const diffSummary = messages.find((m) => m.type === "diffSummary");
+        assert.ok(
+          diffSummary,
+          "structured diff should update the summary panel"
+        );
+        assert.deepStrictEqual(diffSummary.changes, [
+          {
+            path: filePath,
+            relativePath: vscode.workspace.asRelativePath(filePath),
+            oldText: null,
+            newText: "class NewFile\n",
+            status: "pending",
+          },
+        ]);
 
-      const complete = messages.find((m) => m.type === "toolCallComplete");
-      assert.ok(complete, "completed tool_call should finalize the tool");
-      assert.strictEqual(complete.toolCallId, "file-change-1");
-      assert.strictEqual(complete.title, "Editing files");
-      assert.strictEqual(complete.kind, "edit");
-      assert.strictEqual(complete.status, "completed");
-      assert.deepStrictEqual(complete.content, [
-        {
-          type: "diff",
-          path: "/test/project/NewFile.kt",
-          oldText: null,
-          newText: "class NewFile\n",
-        },
-      ]);
-      assert.strictEqual(
-        (provider as any).toolCalls.has("file-change-1"),
-        false,
-        "completed tool_call should not leave stale tool call state"
-      );
+        const complete = messages.find((m) => m.type === "toolCallComplete");
+        assert.ok(complete, "completed tool_call should finalize the tool");
+        assert.strictEqual(complete.toolCallId, "file-change-1");
+        assert.strictEqual(complete.title, "Editing files");
+        assert.strictEqual(complete.kind, "edit");
+        assert.strictEqual(complete.status, "completed");
+        assert.deepStrictEqual(complete.content, [
+          {
+            type: "diff",
+            path: filePath,
+            oldText: null,
+            newText: "class NewFile\n",
+          },
+        ]);
+        assert.strictEqual(
+          (provider as any).toolCalls.has("file-change-1"),
+          false,
+          "completed tool_call should not leave stale tool call state"
+        );
+      } finally {
+        provider.dispose();
+        fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
+      }
     });
 
     test("does not post bottom diff summary when disabled", async () => {
+      const filePath = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-disabled-")),
+        "Disabled.kt"
+      );
+      fs.writeFileSync(filePath, "after\n");
       const config = vscode.workspace.getConfiguration("vscode-acp-chat");
       const previous = config.inspect<boolean>("enableDiffSummary")?.globalValue;
       await config.update(
@@ -1001,12 +1020,12 @@ suite("ChatViewProvider", () => {
         false,
         vscode.ConfigurationTarget.Global
       );
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
       try {
-        const provider = new ChatViewProvider(
-          mockExtensionUri,
-          acpClient as any,
-          memento as any
-        );
         const messages: any[] = [];
         (provider as any).postMessage = (msg: any) => messages.push(msg);
 
@@ -1021,7 +1040,7 @@ suite("ChatViewProvider", () => {
             content: [
               {
                 type: "diff",
-                path: "/test/project/Disabled.kt",
+                path: filePath,
                 oldText: "before\n",
                 newText: "after\n",
               },
@@ -1033,14 +1052,15 @@ suite("ChatViewProvider", () => {
         assert.ok(!messages.some((m) => m.type === "diffSummary"));
         assert.deepStrictEqual((provider as any).diffManager.getPendingChanges(), [
           {
-            path: "/test/project/Disabled.kt",
+            path: filePath,
             oldText: "before\n",
             newText: "after\n",
             status: "pending",
           },
         ]);
-        provider.dispose();
       } finally {
+        provider.dispose();
+        fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
         await config.update(
           "enableDiffSummary",
           previous,

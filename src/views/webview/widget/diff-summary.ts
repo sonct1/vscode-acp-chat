@@ -165,14 +165,12 @@ export class DiffSummary {
     const acceptAllBtn = this.container.querySelector(".accept-all");
     acceptAllBtn?.addEventListener("click", () => {
       this.vscode.postMessage({ type: "acceptAllDiffs" });
-      this.setChanges([]);
     });
 
     // Discard all changes
     const rollbackAllBtn = this.container.querySelector(".rollback-all");
     rollbackAllBtn?.addEventListener("click", () => {
       this.vscode.postMessage({ type: "rollbackAllDiffs" });
-      this.setChanges([]);
     });
 
     // Per-file review
@@ -188,7 +186,6 @@ export class DiffSummary {
       btn.addEventListener("click", () => {
         const path = (btn as HTMLElement).dataset.path;
         this.vscode.postMessage({ type: "acceptDiff", path });
-        this.setChanges(this.changes.filter((c) => c.path !== path));
       });
     });
 
@@ -199,7 +196,6 @@ export class DiffSummary {
         btn.addEventListener("click", () => {
           const path = (btn as HTMLElement).dataset.path;
           this.vscode.postMessage({ type: "rollbackDiff", path });
-          this.setChanges(this.changes.filter((c) => c.path !== path));
         });
       });
   }

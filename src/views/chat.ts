@@ -1269,7 +1269,7 @@ export class ChatViewProvider
     const duration = state.startTime ? Date.now() - state.startTime : undefined;
 
     if (update.status === "completed") {
-      recordStructuredDiffsFromContent(content, {
+      await recordStructuredDiffsFromContent(content, {
         cwd: getWorkspaceRoot(),
         diffManager: this.diffManager,
       });

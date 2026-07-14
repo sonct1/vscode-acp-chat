@@ -121,7 +121,7 @@ export class MultiSessionWebviewController {
       this.activationRevision = msg.activationRevision;
     }
     this.clearOptimisticLoadingIfSettled();
-    this.renderHeader(msg.aggregate.running, msg.aggregate.awaitingPermission);
+    this.renderHeader();
     this.renderOverlay();
     this.renderLoading();
     this.persistState();
@@ -204,13 +204,8 @@ export class MultiSessionWebviewController {
     this.persistState();
   }
 
-  private renderHeader(running?: number, permission?: number): void {
+  private renderHeader(): void {
     const active = this.getActiveSession();
-    const runningCount = running ?? countSessions(this.sessions, isRunningStatus);
-    const permissionCount =
-      permission ??
-      this.sessions.filter((session) => session.pendingPermissionCount > 0)
-        .length;
 
     this.title.textContent = active?.title ?? "Untitled chat";
     this.status.textContent = active
@@ -222,21 +217,8 @@ export class MultiSessionWebviewController {
       Boolean(active && isRunningStatus(active.status))
     );
 
-    const count = this.sessions.length;
-    const attentionLabel = permissionCount
-      ? `!${permissionCount}`
-      : runningCount
-        ? `${runningCount}`
-        : "";
-    this.sessionsButton.innerHTML = `<span class="codicon codicon-arrow-left" aria-hidden="true"></span>${attentionLabel ? `<span class="multi-session-open-badge${permissionCount ? " permission" : ""}">${attentionLabel}</span>` : ""}`;
-    this.sessionsButton.setAttribute(
-      "aria-label",
-      describeSessionManagerButton(count, runningCount, permissionCount)
-    );
-    this.sessionsButton.classList.toggle(
-      "has-attention",
-      permissionCount > 0 || runningCount > 0
-    );
+    this.sessionsButton.innerHTML = `<span class="codicon codicon-arrow-left" aria-hidden="true"></span>`;
+    this.sessionsButton.setAttribute("aria-label", "Back to session manager.");
   }
 
   private renderOverlay(): void {
@@ -427,7 +409,10 @@ export class MultiSessionWebviewController {
     const last = focusable[focusable.length - 1];
     const activeElement = this.doc.activeElement;
 
-    if (event.shiftKey && (activeElement === first || activeElement === this.overlay)) {
+    if (
+      event.shiftKey &&
+      (activeElement === first || activeElement === this.overlay)
+    ) {
       event.preventDefault();
       last.focus();
       return;
@@ -602,7 +587,9 @@ export class MultiSessionWebviewController {
     this.activeLocalSessionId = state?.multiSession?.activeLocalSessionId;
   }
 
-  private persistState(overrides: Partial<MultiSessionWebviewState> = {}): void {
+  private persistState(
+    overrides: Partial<MultiSessionWebviewState> = {}
+  ): void {
     const existingState = this.bridge.getWebviewState();
     const normalizedState: MultiSessionWebviewState = {
       ...(existingState ?? { isConnected: false, inputValue: "" }),
@@ -686,13 +673,6 @@ function button(
   return el;
 }
 
-function countSessions(
-  sessions: MultiSessionListItem[],
-  predicate: (status: string) => boolean
-): number {
-  return sessions.filter((session) => predicate(session.status)).length;
-}
-
 function setStatusClasses(el: HTMLElement, status?: string): void {
   const statusClasses = Array.from(el.classList).filter((className) =>
     className.startsWith("multi-session-status-")
@@ -701,21 +681,6 @@ function setStatusClasses(el: HTMLElement, status?: string): void {
   if (status) {
     el.classList.add(`multi-session-status-${status}`);
   }
-}
-
-function describeSessionManagerButton(
-  count: number,
-  running: number,
-  permission: number
-): string {
-  const parts = [`Back to session manager. ${count} ${plural(count, "session")}.`];
-  if (running > 0) parts.push(`${running} ${plural(running, "session")} running.`);
-  if (permission > 0) {
-    parts.push(
-      `${permission} ${plural(permission, "session")} needs permission.`
-    );
-  }
-  return parts.join(" ");
 }
 
 function buildSessionMeta(session: MultiSessionListItem): string {
@@ -765,7 +730,9 @@ function statusIcon(doc: Document, status: string): HTMLElement {
 
   icon.classList.add(
     "codicon",
-    status === "draft" ? "codicon-circle-large-outline" : "codicon-circle-filled"
+    status === "draft"
+      ? "codicon-circle-large-outline"
+      : "codicon-circle-filled"
   );
   return icon;
 }
@@ -779,10 +746,6 @@ function createBadge(
   badge.className = `multi-session-badge multi-session-badge-${tone}`;
   badge.textContent = label;
   return badge;
-}
-
-function plural(count: number, singular: string): string {
-  return count === 1 ? singular : `${singular}s`;
 }
 
 function compareSessions(

@@ -729,8 +729,8 @@ export class MultiSessionHostController implements vscode.Disposable {
             this.sendState();
           }
         },
-        onStructuredDiffContent: (content) => {
-          recordStructuredDiffsFromContent(content, {
+        onStructuredDiffContent: async (content) => {
+          await recordStructuredDiffsFromContent(content, {
             cwd: session.cwd,
             diffManager: resources.diffManager,
             onDidRecord: (path, oldText, newText) =>
