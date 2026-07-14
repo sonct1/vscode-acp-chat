@@ -3467,14 +3467,8 @@ suite("Webview", () => {
       const switchButton = document.querySelector(
         ".multi-session-open"
       ) as HTMLButtonElement;
-      const managerButton = document.querySelector(
-        ".multi-session-manager"
-      ) as HTMLButtonElement;
       const status = document.querySelector(
         ".multi-session-status"
-      ) as HTMLElement;
-      const aggregate = document.querySelector(
-        ".multi-session-aggregate"
       ) as HTMLElement;
 
       assert.ok(switchButton.querySelector(".codicon-list-selection"));
@@ -3482,31 +3476,29 @@ suite("Webview", () => {
         switchButton.getAttribute("aria-label"),
         "Switch chat session"
       );
-      assert.strictEqual(
-        managerButton.getAttribute("aria-label"),
-        "Open session manager"
-      );
+      assert.strictEqual(document.querySelector(".multi-session-manager"), null);
+      assert.strictEqual(document.querySelector(".multi-session-aggregate"), null);
       assert.ok(status.textContent?.includes("Idle · Test Agent"));
-      assert.ok(aggregate.textContent?.includes("Sessions 2"));
-      assert.ok(aggregate.textContent?.includes("Unread 3"));
     });
 
-    test("header buttons post quick switch and manager panel actions", () => {
+    test("header switch button posts quick switch action", () => {
       (document.querySelector(".multi-session-open") as HTMLButtonElement).click();
-      (document.querySelector(".multi-session-manager") as HTMLButtonElement).click();
 
       assert.ok(
         mockVsCode
           ._getMessages()
-          .some((message: any) => message.type === "feature.multi-session.quickSwitch")
+          .some(
+            (message: any) => message.type === "feature.multi-session.quickSwitch"
+          )
       );
-      assert.ok(
+      assert.strictEqual(
         mockVsCode
           ._getMessages()
           .some(
             (message: any) =>
               message.type === "feature.multi-session.openManagerPanel"
-          )
+          ),
+        false
       );
     });
 

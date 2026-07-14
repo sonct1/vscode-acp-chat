@@ -744,7 +744,7 @@ If `vsce` or `code` is unavailable, report that blocker explicitly. Do not commi
 Implemented on 2026-07-14:
 
 - Added split chat/manager contracts: `feature.multi-session.chatState` for chat and `feature.multi-session.managerState` for the separate panel.
-- Refactored chat webview multi-session UI to remove the full manager overlay/list and keep only active-session detail, aggregate counts, quick switch, and manager-panel actions.
+- Refactored chat webview multi-session UI to remove the full manager overlay/list and keep only active-session detail plus quick switch; aggregate counts and manager actions live outside the chat surface.
 - Added `MultiSessionManagerPanelController`, independent `manager-webview.ts` browser bundle, panel styles, and VS Code QuickPick session switching.
 - Split host summary builders/coalescing from active transcript `snapshot`/`delta`; background appends no longer synchronously post full session lists to the chat webview.
 - Added package command contribution for `vscode-acp-chat.switchSession` and an esbuild entry for `dist/session-manager-webview.js`.

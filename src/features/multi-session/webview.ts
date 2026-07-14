@@ -34,7 +34,6 @@ export class MultiSessionWebviewController {
   private loading: HTMLElement;
   private title: HTMLElement;
   private status: HTMLElement;
-  private aggregateEl: HTMLElement;
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
   private active: MultiSessionListItem | undefined;
@@ -62,9 +61,6 @@ export class MultiSessionWebviewController {
     ) as HTMLElement;
     this.status = this.header.querySelector(
       ".multi-session-status"
-    ) as HTMLElement;
-    this.aggregateEl = this.header.querySelector(
-      ".multi-session-aggregate"
     ) as HTMLElement;
     this.header.hidden = true;
     this.loading.hidden = true;
@@ -238,30 +234,16 @@ export class MultiSessionWebviewController {
       Boolean(active && isRunningStatus(active.status))
     );
 
-    const parts = [
-      `Sessions ${this.aggregate.open}`,
-      `Running ${this.aggregate.running}`,
-      `Waiting ${this.aggregate.awaitingPermission}`,
-      `Unread ${this.aggregate.unread}`,
-    ];
-    this.aggregateEl.textContent = parts.join(" · ");
   }
 
   private createHeader(): HTMLElement {
     const header = this.doc.createElement("div");
     header.className = "multi-session-header";
-    header.innerHTML = `<button type="button" class="multi-session-open multi-session-button multi-session-button-ghost" aria-label="Switch chat session"><span class="codicon codicon-list-selection" aria-hidden="true"></span></button><div class="multi-session-heading"><strong class="multi-session-title"></strong><span class="multi-session-status"></span><span class="multi-session-aggregate"></span></div><button type="button" class="multi-session-manager multi-session-button multi-session-button-secondary" aria-label="Open session manager"><span class="codicon codicon-list-tree" aria-hidden="true"></span><span>Manager</span></button>`;
+    header.innerHTML = `<button type="button" class="multi-session-open multi-session-button multi-session-button-ghost" aria-label="Switch chat session"><span class="codicon codicon-list-selection" aria-hidden="true"></span></button><div class="multi-session-heading"><strong class="multi-session-title"></strong><span class="multi-session-status"></span></div>`;
     header
       .querySelector(".multi-session-open")
       ?.addEventListener("click", () => {
         this.vscode.postMessage({ type: "feature.multi-session.quickSwitch" });
-      });
-    header
-      .querySelector(".multi-session-manager")
-      ?.addEventListener("click", () => {
-        this.vscode.postMessage({
-          type: "feature.multi-session.openManagerPanel",
-        });
       });
     return header;
   }

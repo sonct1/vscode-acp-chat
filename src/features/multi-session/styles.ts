@@ -4,7 +4,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-heading{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .multi-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600;line-height:1.25;color:var(--vscode-foreground)}
 .multi-session-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.25;color:var(--vscode-descriptionForeground)}
-.multi-session-aggregate{opacity:.9}
 .multi-session-status::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--vscode-descriptionForeground);vertical-align:1px;opacity:.75}
 .multi-session-status.busy::before{width:8px;height:8px;border:1.5px solid currentColor;border-right-color:transparent;background:transparent;animation:multi-session-spin .8s linear infinite;vertical-align:-1px;opacity:1}
 .multi-session-status.multi-session-status-awaiting_permission::before{background:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow));opacity:1}
@@ -21,8 +20,6 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-button-ghost{color:var(--vscode-descriptionForeground);background:transparent}
 .multi-session-button-ghost:hover:not(:disabled){color:var(--vscode-foreground)}
 .multi-session-open{flex-shrink:0;min-width:28px;padding-left:6px;padding-right:6px;overflow:hidden;text-overflow:ellipsis}
-.multi-session-manager{flex-shrink:0}
 @keyframes multi-session-spin{to{transform:rotate(360deg)}}
-@media(max-width:420px){.multi-session-manager span:not(.codicon){display:none}.multi-session-heading .multi-session-aggregate{display:none}}
 @media(prefers-reduced-motion:reduce){.multi-session-status.busy::before,.multi-session-spinner{animation:none}}
 `;
