@@ -12,6 +12,7 @@ Typical files:
 Current plans:
 
 - [Add Selection/File/Folder to Chat](./implement-add-to-chat-context.md) — add editor selection, Explorer file, and Explorer folder resources to the chat composer as mention chips.
+- [Agent Selection and New Session](./implement-agent-selection-new-session.md) — keep the selected-agent marker correct across reopen/reload and make agent selection start a new chat/session with that agent.
 - [Assistant Turn Navigation](./implement-assistant-turn-navigation.md) — jump quickly between completed assistant response turns in the chat transcript.
 - [Chat Font Size Setting](./implement-chat-font-size-setting.md) — add a configurable font size for the ACP Chat webview transcript and prompt input.
 - [Clickable Chat Resource Links](./implement-clickable-chat-resource-links.md) — auto-detect file paths and web URLs in assistant responses so they can be clicked from the webview.
