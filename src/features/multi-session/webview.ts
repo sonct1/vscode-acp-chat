@@ -476,12 +476,13 @@ export class MultiSessionWebviewController {
     session: MultiSessionListItem,
     isActive: boolean
   ): HTMLButtonElement {
+    const metaText = buildSessionMeta(session);
     const action = this.doc.createElement("button");
     action.type = "button";
     action.className = "multi-session-item-main";
     action.setAttribute(
       "aria-label",
-      `${isActive ? "Current session" : "Open session"} ${session.title}. ${formatStatus(session.status)}. ${session.agentName}.`
+      `${isActive ? "Current session" : "Open session"} ${session.title}. ${metaText}.`
     );
     action.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -496,7 +497,8 @@ export class MultiSessionWebviewController {
     title.textContent = session.title;
     const meta = this.doc.createElement("span");
     meta.className = "multi-session-item-meta";
-    meta.textContent = buildSessionMeta(session);
+    meta.textContent = metaText;
+    meta.title = metaText;
 
     content.append(title, meta);
     action.append(icon, content, this.createSessionBadges(session));
@@ -684,7 +686,11 @@ function setStatusClasses(el: HTMLElement, status?: string): void {
 }
 
 function buildSessionMeta(session: MultiSessionListItem): string {
-  return [formatStatus(session.status), session.agentName].join(" · ");
+  const parts = [formatStatus(session.status), session.agentName];
+  if (session.acpSessionId) {
+    parts.push(session.acpSessionId);
+  }
+  return parts.join(" · ");
 }
 
 function agentIconClass(agentId: string): string {

@@ -3934,6 +3934,7 @@ suite("Webview", () => {
     });
 
     test("renders the session manager as accessible list rows with badges", () => {
+      const fullSessionId = "019f5f61-1234-4567-89ab-full-session-id";
       controller.handleMessage({
         type: "feature.multi-session.state",
         enabled: true,
@@ -3942,6 +3943,7 @@ suite("Webview", () => {
         sessions: [
           {
             localSessionId: "local-a",
+            acpSessionId: fullSessionId,
             agentId: "test-agent",
             agentName: "Test Agent",
             title: "A",
@@ -3981,6 +3983,12 @@ suite("Webview", () => {
       const mainAction = activeItem.querySelector(
         ".multi-session-item-main"
       ) as HTMLButtonElement;
+      const activeMeta = activeItem.querySelector(
+        ".multi-session-item-meta"
+      ) as HTMLElement;
+      const draftMeta = permissionItem.querySelector(
+        ".multi-session-item-meta"
+      ) as HTMLElement;
 
       assert.strictEqual(list.getAttribute("role"), "list");
       assert.strictEqual(mainAction.tagName, "BUTTON");
@@ -3988,6 +3996,23 @@ suite("Webview", () => {
         activeItem.querySelector(".multi-session-badge-active"),
         null
       );
+      assert.strictEqual(
+        activeMeta.textContent,
+        `Idle · Test Agent · ${fullSessionId}`
+      );
+      assert.strictEqual(
+        activeMeta.getAttribute("title"),
+        activeMeta.textContent
+      );
+      assert.strictEqual(
+        draftMeta.textContent,
+        "Awaiting permission · Test Agent"
+      );
+      assert.strictEqual(
+        draftMeta.getAttribute("title"),
+        draftMeta.textContent
+      );
+      assert.ok(!draftMeta.textContent?.includes("undefined"));
       assert.ok(
         permissionItem.querySelector(".multi-session-badge-permission")
       );

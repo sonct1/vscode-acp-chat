@@ -47,6 +47,31 @@ import type {
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
 const AGENT_PREFS_KEY = "vscode-acp-chat.agentPreferences.v1";
 
+function historyFallbackTitle(sessionId: string): string {
+  return `History ${sessionId}`;
+}
+
+function newSessionFallbackTitle(
+  agent: AgentConfig,
+  sessionId: string
+): string {
+  return agent.id === "pi" ? `Pi ${sessionId}` : "New chat";
+}
+
+function realSessionTitle(info: SessionInfo | undefined): string | undefined {
+  const title = typeof info?.title === "string" ? info.title.trim() : "";
+  if (!info || !title) return undefined;
+
+  const fallbackTitles = new Set([
+    `Session ${info.sessionId}`,
+    historyFallbackTitle(info.sessionId),
+    `Pi ${info.sessionId}`,
+    "New chat",
+    "Untitled chat",
+  ]);
+  return fallbackTitles.has(title) ? undefined : title;
+}
+
 export interface MultiSessionRuntimeClient {
   readonly client: ACPClient;
   readonly manager: AgentSessionManager;
@@ -489,11 +514,20 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
 
     const session = this.createDraft("loading_history");
-    session.title = `History ${sessionId.slice(0, 8)}`;
+    session.title = historyFallbackTitle(sessionId);
     this.activate(session.localSessionId);
 
     try {
       await this.ensureRuntime(session, false);
+      const historyTitle = await this.resolveHistorySessionTitle(
+        session,
+        sessionId
+      );
+      if (historyTitle) {
+        session.title = historyTitle;
+        this.touch(session);
+        this.sendState();
+      }
       if (!session.sessionManager?.supportsLoadSession) {
         throw new Error(
           `Agent "${session.agent.name}" does not support loading history sessions.`
@@ -773,7 +807,10 @@ export class MultiSessionHostController implements vscode.Disposable {
       const response = await session.sessionManager!.newSession(session.cwd);
       session.acpSessionId = response.sessionId;
       this.rebindDocumentSync(session);
-      session.title = "New chat";
+      session.title = newSessionFallbackTitle(
+        session.agent,
+        response.sessionId
+      );
       session.metadata = clientMetadata(session.client!);
       await this.restoreSessionPreferences(session);
       session.status = "idle";
@@ -1046,6 +1083,26 @@ export class MultiSessionHostController implements vscode.Disposable {
     return this.activeLocalSessionId
       ? this.sessions.get(this.activeLocalSessionId)
       : undefined;
+  }
+
+  private async resolveHistorySessionTitle(
+    session: ManagedSession,
+    sessionId: string
+  ): Promise<string | undefined> {
+    try {
+      const sessions = await this.catalog.listSessions(
+        session.agent,
+        this.getCatalogRuntime(session)
+      );
+      const info = sessions.find((item) => item.sessionId === sessionId);
+      return realSessionTitle(info);
+    } catch (error) {
+      console.debug(
+        "[MultiSession] Failed to resolve history session title:",
+        error
+      );
+      return undefined;
+    }
   }
 
   private getCatalogRuntime(
@@ -1395,14 +1452,15 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     await client.setConfigOption(thoughtOption.id, savedModeId);
     await this.updateAgentPreference(session.agent.id, (current) => {
-      const { modeId: _modeId, ...rest } = current;
-      return {
-        ...rest,
+      const updated: AgentPreference = {
+        ...current,
         configOptionValues: {
           ...current.configOptionValues,
           [thoughtOption.id]: savedModeId,
         },
       };
+      delete updated.modeId;
+      return updated;
     });
   }
 

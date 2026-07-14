@@ -129,6 +129,7 @@ User-visible behavior:
 - multiple local sessions can be created and switched from a sticky header or manager overlay;
 - each session has independent transcript, draft, scroll state, ACP runtime, metadata, permissions, diffs, unread count, and status;
 - the manager shows running, idle, draft, permission-waiting, error, and closed sessions;
+- started and loaded sessions show the full ACP session id in manager metadata and its hover tooltip for debugging/resume traceability;
 - `vscode-acp-chat.multiSession.maxConcurrentSessions` limits concurrently started local ACP processes; draft sessions do not count.
 
 Main host/webview protocol messages:
@@ -140,7 +141,7 @@ The webview requests resync if it detects a delta sequence gap and ignores stale
 
 ### Session history and retention
 
-History support is agent-capability gated. If the selected agent supports listing/loading/deleting sessions, the extension uses native ACP session APIs. The local `AgentSessionManager` also records session metadata per agent so agents without native `session/list` can still show locally known sessions where load is possible. The bundled Pi adapter defaults `vscode-acp-chat.pi.historyLoadMode` to `full`, replaying the active-path transcript from Pi JSONL session files during `session/load`; `compacted` preserves the previous behavior of replaying Pi's compacted `get_messages` RPC response. Full replay is display-only and does not resend the raw transcript to the model when continuing a chat.
+History support is agent-capability gated. If the selected agent supports listing/loading/deleting sessions, the extension uses native ACP session APIs. The local `AgentSessionManager` also records session metadata per agent so agents without native `session/list` can still show locally known sessions where load is possible. Loaded history sessions use the catalog/user-provided title when one is available; otherwise their fallback title uses the full ACP session id, and the manager metadata still shows the full id. The bundled Pi adapter defaults `vscode-acp-chat.pi.historyLoadMode` to `full`, replaying the active-path transcript from Pi JSONL session files during `session/load`; `compacted` preserves the previous behavior of replaying Pi's compacted `get_messages` RPC response. Full replay is display-only and does not resend the raw transcript to the model when continuing a chat.
 
 Commands:
 

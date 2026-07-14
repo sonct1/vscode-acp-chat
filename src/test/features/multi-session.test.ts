@@ -34,12 +34,19 @@ class FakeSessionManager {
   supportsDeleteSession = true;
   newCalls = 0;
   loadCalls: string[] = [];
+  listedSessions: Array<{
+    sessionId: string;
+    title: string;
+    cwd: string;
+    updatedAt: string;
+  }> = [];
+  nextSessionIds: string[] = [];
 
   syncCapabilities(): void {}
 
   async newSession(): Promise<{ sessionId: string }> {
     this.newCalls += 1;
-    return { sessionId: `acp-${this.newCalls}` };
+    return { sessionId: this.nextSessionIds.shift() ?? `acp-${this.newCalls}` };
   }
 
   async loadSession(sessionId: string): Promise<{ sessionId: string }> {
@@ -47,8 +54,10 @@ class FakeSessionManager {
     return { sessionId };
   }
 
-  async listSessions(): Promise<[]> {
-    return [];
+  async listSessions(): Promise<
+    Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }>
+  > {
+    return this.listedSessions;
   }
 
   async deleteSession(): Promise<void> {}
@@ -180,17 +189,24 @@ class FakeClient {
   }
 }
 
-function createController(configureClient?: (client: FakeClient) => void) {
+function createController(
+  configureClient?: (client: FakeClient) => void,
+  options: {
+    state?: TestMemento;
+    configureManager?: (manager: FakeSessionManager) => void;
+  } = {}
+) {
   const messages: Record<string, unknown>[] = [];
   const clients: FakeClient[] = [];
   const managers: FakeSessionManager[] = [];
   const controller = new MultiSessionHostController({
-    globalState: new TestMemento(),
+    globalState: options.state ?? new TestMemento(),
     postMessage: (message) => messages.push(message),
     clientFactory: () => {
       const client = new FakeClient();
       configureClient?.(client);
       const manager = new FakeSessionManager();
+      options.configureManager?.(manager);
       clients.push(client);
       managers.push(manager);
       return {
@@ -833,6 +849,86 @@ suite("multi-session feature", () => {
     await controller.loadHistorySession("history-1");
     assert.strictEqual(managers[0].loadCalls.length, 1);
     assert.strictEqual(controller.getStateForTest().sessions.length, count);
+    controller.dispose();
+  });
+
+  test("loading history uses a catalog title when available", async () => {
+    const fullSessionId = "019f5f61-1234-4567-89ab-full-history-id";
+    const { controller } = createController(undefined, {
+      configureManager: (manager) => {
+        manager.listedSessions = [
+          {
+            sessionId: fullSessionId,
+            title: "Backend debug",
+            cwd: "/workspace",
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+      },
+    });
+
+    await controller.loadHistorySession(fullSessionId);
+
+    const state = controller.getStateForTest();
+    const active = state.sessions.find(
+      (session) => session.localSessionId === state.activeLocalSessionId
+    );
+    assert.strictEqual(active?.title, "Backend debug");
+    assert.strictEqual(active?.acpSessionId, fullSessionId);
+    controller.dispose();
+  });
+
+  test("loading history falls back to the full session id", async () => {
+    const fullSessionId = "019f5f61-1234-4567-89ab-full-history-id";
+    const { controller } = createController();
+
+    await controller.loadHistorySession(fullSessionId);
+
+    const state = controller.getStateForTest();
+    const active = state.sessions.find(
+      (session) => session.localSessionId === state.activeLocalSessionId
+    );
+    assert.strictEqual(active?.title, `History ${fullSessionId}`);
+    controller.dispose();
+  });
+
+  test("new Pi sessions use the full session id until a title update arrives", async () => {
+    const state = new TestMemento();
+    await state.update("vscode-acp-chat.selectedAgent", "pi");
+    const fullSessionId = "019f5f61-1234-4567-89ab-new-pi-session-id";
+    const { controller, clients } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.nextSessionIds = [fullSessionId];
+      },
+    });
+
+    await controller.newChat();
+
+    const initialState = controller.getStateForTest();
+    let active = initialState.sessions.find(
+      (session) => session.localSessionId === initialState.activeLocalSessionId
+    );
+    assert.strictEqual(active?.title, `Pi ${fullSessionId}`);
+    assert.strictEqual(active?.acpSessionId, fullSessionId);
+
+    clients[0].sessionUpdate?.({
+      sessionId: fullSessionId,
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Backend debug",
+      },
+    });
+    await (controller as any).sessions
+      .get(active!.localSessionId)
+      .queue.waitForIdle();
+
+    active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) => session.localSessionId === active?.localSessionId
+      );
+    assert.strictEqual(active?.title, "Backend debug");
     controller.dispose();
   });
 
