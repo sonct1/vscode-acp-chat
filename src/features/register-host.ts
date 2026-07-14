@@ -7,9 +7,14 @@ import {
 import { registerOpenSettingsHostFeature } from "./open-settings/host";
 import { registerChatFontSizeHostFeature } from "./chat-font-size/host";
 import { registerClickableResourceLinksHostFeature } from "./clickable-resource-links/host";
+import {
+  registerAgentSelectionHostFeature,
+  type AgentSelectionTarget,
+} from "./agent-selection/host";
 
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
+  agentSelection?: ReturnType<typeof registerAgentSelectionHostFeature>;
   chatFontSize?: ReturnType<typeof registerChatFontSizeHostFeature>;
   clickableResourceLinks?: ReturnType<
     typeof registerClickableResourceLinksHostFeature
@@ -49,12 +54,16 @@ export function registerHostFeatures(options: {
 
 export function registerExtensionHostFeatures(options: {
   context: vscode.ExtensionContext;
-  getChatTarget: () => ChatMentionTarget | undefined;
+  getChatTarget: () => (ChatMentionTarget & AgentSelectionTarget) | undefined;
 }): HostFeatureRegistry {
   return {
     addToChat: registerAddToChatHostFeature({
       context: options.context,
       getChatTarget: options.getChatTarget,
+    }),
+    agentSelection: registerAgentSelectionHostFeature({
+      context: options.context,
+      getTarget: options.getChatTarget,
     }),
     openSettings: registerOpenSettingsHostFeature({
       context: options.context,

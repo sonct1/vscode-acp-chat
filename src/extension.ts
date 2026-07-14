@@ -320,32 +320,6 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Switch to a different AI agent
-  context.subscriptions.push(
-    vscode.commands.registerCommand("vscode-acp-chat.selectAgent", async () => {
-      const agents = getAgentsWithStatus();
-      const availableAgents = agents.filter((a) => a.available);
-      const currentAgentId = acpClient?.getAgentId();
-
-      const items = availableAgents.map((a) => ({
-        label: a.name,
-        description: a.id,
-        id: a.id,
-        picked: a.id === currentAgentId,
-        detail: a.id === currentAgentId ? "$(check) Currently selected" : "",
-      }));
-
-      const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: "Select an AI agent",
-        title: "VSCode ACP: Select Agent",
-      });
-
-      if (selected) {
-        await chatProvider?.switchAgent(selected.id);
-      }
-    })
-  );
-
   context.subscriptions.push({
     dispose: () => {
       acpClient?.dispose();

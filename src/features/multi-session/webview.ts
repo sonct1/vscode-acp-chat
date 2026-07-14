@@ -26,7 +26,13 @@ interface ChatAggregate {
   open: number;
   running: number;
   awaitingPermission: number;
-  unread: number;
+}
+
+interface SnapshotReplay {
+  localSessionId: string;
+  activationRevision: number;
+  lastSeq: number;
+  pendingDeltas: MultiSessionDeltaMessage[];
 }
 
 export class MultiSessionWebviewController {
@@ -41,12 +47,12 @@ export class MultiSessionWebviewController {
     open: 0,
     running: 0,
     awaitingPermission: 0,
-    unread: 0,
   };
   private lastSeqBySession: Record<string, number> = {};
   private drafts: Record<string, string> = {};
   private scrollTop: Record<string, number> = {};
   private optimisticLoadingText: string | undefined;
+  private snapshotReplay: SnapshotReplay | undefined;
 
   constructor(
     private readonly vscode: VsCodeApi,
@@ -115,7 +121,6 @@ export class MultiSessionWebviewController {
         open: msg.aggregate.open ?? msg.sessions.length,
         running: msg.aggregate.running,
         awaitingPermission: msg.aggregate.awaitingPermission,
-        unread: msg.aggregate.unread,
       },
     });
   }
@@ -137,7 +142,11 @@ export class MultiSessionWebviewController {
     }
     this.active = msg.active ?? this.active;
     this.aggregate = msg.aggregate;
-    this.clearOptimisticLoadingIfSettled();
+    if (activeChanged && msg.activeLocalSessionId) {
+      this.showOptimisticLoading("Opening chat…");
+    } else {
+      this.clearOptimisticLoadingIfSettled();
+    }
     this.renderHeader();
     this.renderLoading();
     if (activeChanged) {
@@ -153,48 +162,75 @@ export class MultiSessionWebviewController {
     this.activeLocalSessionId = msg.activeLocalSessionId;
     this.activationRevision = msg.activationRevision;
     this.active = msg.session;
-    this.bridge.reset();
-    for (const event of msg.transcript) {
-      await this.bridge.dispatch(event.message as ExtensionMessage);
-    }
+    this.showOptimisticLoading("Loading chat…");
+
+    const replay: SnapshotReplay = {
+      localSessionId: msg.activeLocalSessionId,
+      activationRevision: msg.activationRevision,
+      lastSeq: msg.lastSeq,
+      pendingDeltas: [],
+    };
+    this.snapshotReplay = replay;
     this.lastSeqBySession[msg.activeLocalSessionId] = msg.lastSeq;
-    if (msg.metadata) {
+    await this.yieldToBrowser();
+
+    try {
+      this.bridge.reset();
+      for (const event of msg.transcript) {
+        await this.bridge.dispatch(event.message as ExtensionMessage);
+      }
+      if (msg.metadata) {
+        await this.bridge.dispatch({
+          ...(msg.metadata as ExtensionMessage),
+          type: "sessionMetadata",
+        });
+      } else {
+        await this.bridge.dispatch({
+          type: "sessionMetadata",
+          modes: null,
+          models: null,
+          genericConfigOptions: [],
+        });
+      }
+      if (msg.contextUsage) {
+        await this.bridge.dispatch({ type: "contextUsage", ...msg.contextUsage });
+      } else {
+        await this.bridge.dispatch({
+          type: "contextUsage",
+          used: null,
+          size: null,
+          cost: null,
+        });
+      }
       await this.bridge.dispatch({
-        ...(msg.metadata as ExtensionMessage),
-        type: "sessionMetadata",
+        type: "diffSummary",
+        changes: msg.diffChanges ?? [],
       });
-    } else {
-      await this.bridge.dispatch({
-        type: "sessionMetadata",
-        modes: null,
-        models: null,
-        genericConfigOptions: [],
-      });
+      for (const permission of msg.pendingPermissions ?? []) {
+        await this.bridge.dispatch(permission as ExtensionMessage);
+      }
+      this.bridge.setGenerating(msg.isGenerating);
+      this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
+      this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
+      this.clearOptimisticLoadingIfSettled();
+      this.renderHeader();
+      this.renderLoading();
+      this.persistState();
+    } catch (error) {
+      this.optimisticLoadingText = undefined;
+      this.renderLoading();
+      throw error;
+    } finally {
+      if (this.snapshotReplay === replay) {
+        this.snapshotReplay = undefined;
+      }
     }
-    if (msg.contextUsage) {
-      await this.bridge.dispatch({ type: "contextUsage", ...msg.contextUsage });
-    } else {
-      await this.bridge.dispatch({
-        type: "contextUsage",
-        used: null,
-        size: null,
-        cost: null,
-      });
+
+    for (const delta of replay.pendingDeltas.sort(
+      (a, b) => a.event.seq - b.event.seq
+    )) {
+      await this.applyDelta(delta);
     }
-    await this.bridge.dispatch({
-      type: "diffSummary",
-      changes: msg.diffChanges ?? [],
-    });
-    for (const permission of msg.pendingPermissions ?? []) {
-      await this.bridge.dispatch(permission as ExtensionMessage);
-    }
-    this.bridge.setGenerating(msg.isGenerating);
-    this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
-    this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
-    this.clearOptimisticLoadingIfSettled();
-    this.renderHeader();
-    this.renderLoading();
-    this.persistState();
   }
 
   private async applyDelta(msg: MultiSessionDeltaMessage): Promise<void> {
@@ -204,6 +240,19 @@ export class MultiSessionWebviewController {
     ) {
       return;
     }
+
+    const replay = this.snapshotReplay;
+    if (
+      replay &&
+      replay.localSessionId === msg.localSessionId &&
+      replay.activationRevision === msg.activationRevision
+    ) {
+      if (msg.event.seq > replay.lastSeq) {
+        replay.pendingDeltas.push(msg);
+      }
+      return;
+    }
+
     const lastSeq = this.lastSeqBySession[msg.localSessionId] ?? 0;
     if (msg.event.seq <= lastSeq) return;
     if (msg.event.seq !== lastSeq + 1) {
@@ -233,7 +282,6 @@ export class MultiSessionWebviewController {
       "busy",
       Boolean(active && isRunningStatus(active.status))
     );
-
   }
 
   private createHeader(): HTMLElement {
@@ -263,6 +311,17 @@ export class MultiSessionWebviewController {
     this.renderLoading();
   }
 
+  private async yieldToBrowser(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const win = this.doc.defaultView;
+      if (win) {
+        win.setTimeout(resolve, 0);
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
   private renderLoading(): void {
     const active = this.active;
     const stateLoading = Boolean(
@@ -285,6 +344,7 @@ export class MultiSessionWebviewController {
     if (!active) return;
     if (
       active.lastError ||
+      active.status === "draft" ||
       active.status === "idle" ||
       active.status === "running" ||
       active.status === "awaiting_permission" ||

@@ -17,6 +17,14 @@ button,input,select{font:inherit}
 .manager-button-primary:hover:not(:disabled){background:var(--vscode-button-hoverBackground)}
 .manager-button-secondary{background:var(--vscode-button-secondaryBackground,transparent);border-color:var(--vscode-button-border,var(--vscode-panel-border))}
 .manager-button-danger{color:var(--vscode-errorForeground)}
+.manager-button-icon{width:28px;height:28px;min-height:28px;justify-content:center;gap:0;padding:0;border-color:transparent;background:transparent;color:var(--vscode-descriptionForeground)}
+.manager-button-icon .codicon{font-size:15px;color:inherit}
+.manager-button-icon.manager-button-primary{color:var(--vscode-focusBorder);background:transparent;border-color:transparent}
+.manager-button-icon.manager-button-secondary{background:transparent;border-color:transparent}
+.manager-button-icon.manager-button-danger{background:transparent;border-color:transparent;color:var(--vscode-errorForeground)}
+.manager-button-icon:hover:not(:disabled),.manager-button-icon.manager-button-primary:hover:not(:disabled){background:var(--vscode-toolbar-hoverBackground,rgba(255,255,255,.12))}
+.manager-button-icon[aria-pressed="true"]{background:var(--vscode-toolbar-activeBackground,var(--vscode-list-activeSelectionBackground));color:var(--vscode-foreground)}
+.manager-button-icon[aria-busy="true"]{color:var(--vscode-progressBar-background,var(--vscode-focusBorder))}
 .manager-list{display:flex;flex-direction:column;overflow:auto}
 .manager-empty{padding:28px 16px;color:var(--vscode-descriptionForeground);text-align:center}
 .session-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:12px 16px;border-bottom:1px solid var(--vscode-panel-border)}

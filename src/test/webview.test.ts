@@ -22,6 +22,7 @@ import {
 import { computeLineDiff } from "../utils/diff";
 import { EventBus } from "../views/webview/event-bus";
 import { MULTI_SESSION_STYLES } from "../features/multi-session/styles";
+import { MultiSessionWebviewController } from "../features/multi-session/webview";
 
 function createMockVsCodeApi(): VsCodeApi & {
   _getMessages: () => unknown[];
@@ -3436,7 +3437,7 @@ suite("Webview", () => {
         type: "feature.multi-session.chatState",
         enabled: true,
         activationRevision: 0,
-        aggregate: { open: 0, running: 0, awaitingPermission: 0, unread: 0 },
+        aggregate: { open: 0, running: 0, awaitingPermission: 0 },
       } as any);
 
       assert.strictEqual(header.hidden, false);
@@ -3456,12 +3457,9 @@ suite("Webview", () => {
           status: "idle",
           createdAt: 1,
           updatedAt: 1,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
-        aggregate: { open: 2, running: 0, awaitingPermission: 0, unread: 3 },
+        aggregate: { open: 2, running: 0, awaitingPermission: 0 },
       } as any);
 
       const switchButton = document.querySelector(
@@ -3502,6 +3500,203 @@ suite("Webview", () => {
       );
     });
 
+    test("shows optimistic loading immediately when switching active sessions", async () => {
+      await controller.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      const loading = document.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+      assert.strictEqual(loading.hidden, true);
+
+      controller.handleMessage({
+        type: "feature.multi-session.chatState",
+        enabled: true,
+        activeLocalSessionId: "local-b",
+        activationRevision: 2,
+        active: {
+          localSessionId: "local-b",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "B",
+          status: "running",
+          createdAt: 2,
+          updatedAt: 2,
+          pendingPermissionCount: 0,
+        },
+        aggregate: { open: 2, running: 1, awaitingPermission: 0 },
+      } as any);
+
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Opening chat"));
+    });
+
+    test("clears optimistic loading when snapshot replay fails", async () => {
+      const localDom = new JSDOM("<!DOCTYPE html><html><head></head><body></body></html>", {
+        url: "https://localhost",
+      });
+      const localDoc = localDom.window.document;
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: () => {},
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        localDoc,
+        {
+          reset: () => {},
+          dispatch: async () => {
+            throw new Error("replay failed");
+          },
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 0,
+          setScrollTop: () => {},
+          getWebviewState: () => undefined,
+          saveWebviewState: () => {},
+        }
+      );
+
+      await assert.rejects(async () => {
+        await feature.handleMessage({
+          type: "feature.multi-session.snapshot",
+          activeLocalSessionId: "local-a",
+          activationRevision: 1,
+          session: {
+            localSessionId: "local-a",
+            agentId: "test-agent",
+            agentName: "Test Agent",
+            title: "A",
+            status: "running",
+            createdAt: 1,
+            updatedAt: 1,
+            pendingPermissionCount: 0,
+          },
+          transcript: [
+            { seq: 1, createdAt: 1, message: { type: "streamStart" } },
+          ],
+          lastSeq: 1,
+          metadata: null,
+          contextUsage: null,
+          diffChanges: [],
+          pendingPermissions: [],
+          isGenerating: true,
+        } as any);
+      }, /replay failed/);
+
+      const loading = localDoc.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+      assert.strictEqual(loading.hidden, true);
+      localDom.window.close();
+    });
+
+    test("buffers deltas that arrive while snapshot replay is in progress", async () => {
+      const localMessages: unknown[] = [];
+      const dispatched: string[] = [];
+      let feature!: MultiSessionWebviewController;
+      feature = new MultiSessionWebviewController(
+        {
+          postMessage: (message: unknown) => localMessages.push(message),
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        document,
+        {
+          reset: () => dispatched.push("reset"),
+          dispatch: async (message: any) => {
+            dispatched.push(
+              message.type === "streamChunk"
+                ? `${message.type}:${message.text}`
+                : message.type
+            );
+            if (message.type === "streamChunk" && message.text === "A") {
+              await feature.handleMessage({
+                type: "feature.multi-session.delta",
+                localSessionId: "local-a",
+                activationRevision: 1,
+                event: {
+                  seq: 3,
+                  createdAt: 3,
+                  message: { type: "streamChunk", text: "B" },
+                },
+              } as any);
+            }
+          },
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 0,
+          setScrollTop: () => {},
+          getWebviewState: () => undefined,
+          saveWebviewState: () => {},
+        }
+      );
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "running",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [
+          { seq: 1, createdAt: 1, message: { type: "streamStart" } },
+          { seq: 2, createdAt: 2, message: { type: "streamChunk", text: "A" } },
+        ],
+        lastSeq: 2,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: true,
+      } as any);
+
+      assert.deepStrictEqual(dispatched, [
+        "reset",
+        "streamStart",
+        "streamChunk:A",
+        "sessionMetadata",
+        "contextUsage",
+        "diffSummary",
+        "streamChunk:B",
+      ]);
+      assert.strictEqual(
+        localMessages.some(
+          (message: any) => message.type === "feature.multi-session.resync"
+        ),
+        false
+      );
+    });
+
     test("serializes multi-session snapshot replay before following deltas", async () => {
       await controller.handleMessage({
         type: "feature.multi-session.state",
@@ -3517,13 +3712,10 @@ suite("Webview", () => {
             status: "running",
             createdAt: 1,
             updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
+              pendingPermissionCount: 0,
           },
         ],
-        aggregate: { running: 1, awaitingPermission: 0, unread: 0 },
+        aggregate: { running: 1, awaitingPermission: 0 },
       } as any);
 
       await controller.handleMessage({
@@ -3538,10 +3730,7 @@ suite("Webview", () => {
           status: "running",
           createdAt: 1,
           updatedAt: 1,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
         transcript: [
           { seq: 1, createdAt: 1, message: { type: "streamStart" } },
@@ -3591,12 +3780,9 @@ suite("Webview", () => {
           status: "idle",
           createdAt: 1,
           updatedAt: 1,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
-        aggregate: { open: 2, running: 0, awaitingPermission: 0, unread: 0 },
+        aggregate: { open: 2, running: 0, awaitingPermission: 0 },
       } as any);
 
       elements.inputEl.innerHTML = "hello";
@@ -3633,10 +3819,7 @@ suite("Webview", () => {
           status: "idle",
           createdAt: 1,
           updatedAt: 2,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
         transcript: [
           {
@@ -3678,13 +3861,10 @@ suite("Webview", () => {
             status: "starting",
             createdAt: 1,
             updatedAt: 1,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
+              pendingPermissionCount: 0,
           },
         ],
-        aggregate: { running: 1, awaitingPermission: 0, unread: 0 },
+        aggregate: { running: 1, awaitingPermission: 0 },
       } as any);
 
       const loading = document.querySelector(
@@ -3712,13 +3892,10 @@ suite("Webview", () => {
             status: "idle",
             createdAt: 1,
             updatedAt: 2,
-            unreadCount: 0,
-            pendingPermissionCount: 0,
-            diffCount: 0,
-            conflictedDiffCount: 0,
+              pendingPermissionCount: 0,
           },
         ],
-        aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+        aggregate: { running: 0, awaitingPermission: 0 },
       } as any);
 
       assert.strictEqual(loading.hidden, true);
@@ -3738,10 +3915,7 @@ suite("Webview", () => {
           status: "loading_history",
           createdAt: 1,
           updatedAt: 1,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
         transcript: [],
         lastSeq: 0,

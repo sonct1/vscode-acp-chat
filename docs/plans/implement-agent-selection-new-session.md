@@ -2,7 +2,7 @@
 
 | Attribute  | Value |
 | ---------- | ----- |
-| Status     | Planned |
+| Status     | Completed |
 | Owner      | TBD |
 | Scope      | Select Agent QuickPick, selected-agent source of truth, multi-session/legacy session lifecycle, tests, feature docs |
 | References | `src/extension.ts`, `src/views/chat.ts`, `src/features/register-host.ts`, `src/features/multi-session/host.ts`, `src/test/features/multi-session.test.ts` |
@@ -40,9 +40,11 @@ Luồng hiện tại bị tách source of truth:
 
 ## Quyết định hành vi
 
-### 1. `Currently selected` biểu thị selected/default agent
+### 1. Selected marker biểu thị selected/default agent
 
-Trong multi-session mode, nhãn này biểu thị agent đã chọn làm mặc định cho thao tác tạo chat mới, không đọc từ singleton client và không suy ra từ một session cũ đang chạy nền.
+Trong multi-session mode, marker này biểu thị agent đã chọn làm mặc định cho thao tác tạo chat mới, không đọc từ singleton client và không suy ra từ một session cũ đang chạy nền.
+
+UI picker phải giữ style flat/native của VS Code: dùng `QuickPickItem` đơn giản, không mô phỏng card/list custom, không thêm separator/emoji/detail dài, không dùng `picked` cho single-select. Agent đang selected được đánh dấu bằng Codicon check ngay trong label, ví dụ `$(check) OpenCode`; các agent khác giữ label trần. Agent id nằm trong `description` để vẫn search được bằng `matchOnDescription`.
 
 Sau khi user chọn agent, chat mới của agent đó được activate ngay nên selected/default agent và active session agent sẽ đồng nhất tại thời điểm hoàn tất thao tác.
 
@@ -124,7 +126,8 @@ interface AgentSelectionTarget {
 - [ ] `vscode-acp-chat.selectAgent` được đăng ký qua `registerExtensionHostFeatures()`.
 - [ ] `src/extension.ts` không còn chứa logic dựng item hoặc xử lý agent switch.
 - [ ] QuickPick vẫn chỉ hiển thị agent available như hiện tại.
-- [ ] Item khớp `getSelectedAgentId()` có `picked` và `$(check) Currently selected`.
+- [ ] Item khớp `getSelectedAgentId()` có label flat dạng `$(check) Agent Name`; các item khác không có marker, không dùng `picked` trong single-select.
+- [ ] QuickPick bật `matchOnDescription` để search theo agent id trong `description` mà không cần UI custom.
 - [ ] Cancel QuickPick không gọi target action.
 - [ ] Logic tạo item được tách thành helper thuần để unit test marker mà không cần mở UI thật.
 
@@ -210,8 +213,8 @@ Tạo `src/test/features/agent-selection.test.ts`.
 
 **Acceptance criteria:**
 
-- [ ] Đúng item có `Currently selected` dựa trên target getter.
-- [ ] Không item nào khác có marker.
+- [ ] Đúng item có Codicon check label dựa trên target getter.
+- [ ] Không item nào khác có marker, detail phụ, hoặc `picked` state.
 - [ ] Chọn item gọi `selectAgentAndStartNewChat(id)` đúng một lần.
 - [ ] Cancel không gọi action.
 - [ ] Available-agent filtering không bị thay đổi.
@@ -272,7 +275,7 @@ Nếu tên test không hỗ trợ regex trên runner hiện tại, chạy test s
 
 Manual verification:
 
-- [ ] Mở **Select Agent**, chọn OpenCode, mở lại picker: OpenCode có `Currently selected`.
+- [ ] Mở **Select Agent**, chọn OpenCode, mở lại picker: OpenCode có marker `$(check)` trong label, list vẫn flat/native như QuickPick VS Code.
 - [ ] Reload bằng `Developer: Reload Window`, mở picker: marker vẫn ở OpenCode.
 - [ ] Ngay sau khi chọn OpenCode, chat mới được active và đã có ACP session của OpenCode.
 - [ ] Chọn Claude Code: tạo thêm chat/session Claude Code; session OpenCode cũ vẫn còn trong manager.
@@ -302,9 +305,28 @@ Sau khi install VSIX, yêu cầu chạy `Developer: Reload Window` để extensi
 - Không thêm setting để chọn giữa “switch only” và “switch + new chat” trong phase này.
 - Không thay đổi semantics của `Switch Chat Session`; command đó vẫn chỉ activate session hiện hữu.
 
+## Completion notes
+
+Implemented on 2026-07-14:
+
+- Moved Select Agent command UI into `src/features/agent-selection/host.ts` and registered it through `registerExtensionHostFeatures()`.
+- Added selected-agent getters on `ChatViewProvider` and `MultiSessionHostController` so the QuickPick marker reads the multi-session default agent or legacy client agent without snapshot side effects.
+- Added multi-session `selectAgentAndNewChat()` that persists the selected/default agent, creates an independent active session for that agent, focuses chat, and starts one ACP session without mutating/cancelling existing sessions.
+- Added legacy `selectAgentAndStartNewChat()` lifecycle that resets the chat surface, sets/persists the agent, connects, syncs capabilities, and creates one ACP session.
+- Added focused tests for QuickPick marker/cancel/action behavior, multi-session persistence/same-agent/running-session/failure behavior, and legacy single-session count/cancel/error behavior.
+- Updated feature catalog and layout docs to reflect select-agent + new-session behavior.
+
+Verification run during implementation:
+
+```bash
+npm run check-types
+npm run compile-tests
+npm test -- --grep "agent-selection|multi-session|ChatViewProvider"
+```
+
 ## Definition of done
 
-- `Currently selected` luôn lấy từ đúng selected-agent source of truth và restore đúng.
+- Selected-agent marker luôn lấy từ đúng source of truth, restore đúng, và giữ UI flat/native tương thích VS Code.
 - Chọn agent tạo, activate và focus một chat/session mới của agent đó.
 - Multi-session giữ nguyên mọi session cũ; legacy reset chat sạch và tạo đúng một session.
 - Tests cover marker, persistence/reload, same-agent selection, running-session isolation, legacy single-session count và failure paths.

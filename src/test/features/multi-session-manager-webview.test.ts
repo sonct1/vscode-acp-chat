@@ -32,7 +32,7 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 2, running: 1, awaitingPermission: 1, unread: 3 },
+          aggregate: { open: 2, running: 1, awaitingPermission: 1 },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -45,10 +45,7 @@ suite("multi-session manager webview", () => {
               status: "running",
               createdAt: 1,
               updatedAt: 2,
-              unreadCount: 0,
               pendingPermissionCount: 0,
-              diffCount: 1,
-              conflictedDiffCount: 0,
             },
             {
               localSessionId: "local-b",
@@ -58,27 +55,27 @@ suite("multi-session manager webview", () => {
               status: "awaiting_permission",
               createdAt: 1,
               updatedAt: 3,
-              unreadCount: 3,
               pendingPermissionCount: 1,
-              diffCount: 0,
-              conflictedDiffCount: 0,
             },
           ],
         },
       })
     );
 
-    assert.ok(
-      dom.window.document
-        .querySelector(".manager-summary")
-        ?.textContent?.includes("Running 1")
-    );
+    const summary = dom.window.document.querySelector(".manager-summary")?.textContent ?? "";
+    assert.ok(summary.includes("Running 1"));
+    assert.ok(summary.includes("Waiting 1"));
+    assert.ok(summary.includes("Open 2"));
+    assert.ok(!summary.includes("Unread"));
     assert.strictEqual(
       dom.window.document.querySelectorAll(".session-row").length,
       2
     );
     assert.ok(dom.window.document.querySelector(".session-row.active"));
     assert.ok(dom.window.document.querySelector(".badge-permission"));
+    assert.ok(!dom.window.document.body.textContent?.includes("unread"));
+    assert.ok(!dom.window.document.body.textContent?.includes("diff"));
+    assert.ok(!dom.window.document.body.textContent?.includes("conflicted"));
   });
 
   test("running filter includes starting/loading/cancelling states", () => {
@@ -89,7 +86,7 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 2, running: 1, awaitingPermission: 0, unread: 0 },
+          aggregate: { open: 2, running: 1, awaitingPermission: 0 },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -101,10 +98,7 @@ suite("multi-session manager webview", () => {
               status: "starting",
               createdAt: 1,
               updatedAt: 2,
-              unreadCount: 0,
               pendingPermissionCount: 0,
-              diffCount: 0,
-              conflictedDiffCount: 0,
             },
             {
               localSessionId: "local-b",
@@ -114,10 +108,7 @@ suite("multi-session manager webview", () => {
               status: "idle",
               createdAt: 1,
               updatedAt: 1,
-              unreadCount: 0,
               pendingPermissionCount: 0,
-              diffCount: 0,
-              conflictedDiffCount: 0,
             },
           ],
         },
@@ -149,7 +140,7 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 1, running: 0, awaitingPermission: 1, unread: 0 },
+          aggregate: { open: 1, running: 0, awaitingPermission: 1 },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -161,18 +152,39 @@ suite("multi-session manager webview", () => {
               status: "awaiting_permission",
               createdAt: 1,
               updatedAt: 1,
-              unreadCount: 0,
               pendingPermissionCount: 1,
-              diffCount: 0,
-              conflictedDiffCount: 0,
             },
           ],
         },
       })
     );
 
-    const stopButton = [...dom.window.document.querySelectorAll("button")].find(
-      (button) => button.textContent === "Stop"
+    const reviewButton = dom.window.document.querySelector(
+      'button[aria-label="Review permission"]'
+    ) as HTMLButtonElement;
+    assert.ok(reviewButton.querySelector(".codicon-eye"));
+    reviewButton.click();
+
+    const busyReviewButton = dom.window.document.querySelector(
+      'button[aria-label="Opening permission review"]'
+    ) as HTMLButtonElement;
+    assert.ok(busyReviewButton.querySelector(".codicon-loading"));
+    assert.strictEqual(busyReviewButton.getAttribute("aria-busy"), "true");
+    assert.strictEqual(
+      dom.window.document.querySelector('button[aria-label="Opening chat"]'),
+      null
+    );
+    assert.ok(
+      messages.some(
+        (message: any) =>
+          message.type === "feature.multi-session.reviewPermission" &&
+          message.localSessionId === "local-a" &&
+          message.focusChat === true
+      )
+    );
+
+    const stopButton = dom.window.document.querySelector(
+      'button[aria-label="Stop chat"]'
     ) as HTMLButtonElement;
     assert.ok(stopButton);
     stopButton.click();
@@ -185,6 +197,48 @@ suite("multi-session manager webview", () => {
     );
   });
 
+  test("keeps same-priority sessions ordered by creation time instead of activity", () => {
+    new MultiSessionManagerWebview(dom.window.document);
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: {
+          type: "feature.multi-session.managerState",
+          revision: 1,
+          activeLocalSessionId: "local-b",
+          aggregate: { open: 2, running: 0, awaitingPermission: 0 },
+          agents: [],
+          selectedAgentId: "test-agent",
+          sessions: [
+            {
+              localSessionId: "local-a",
+              agentId: "test-agent",
+              agentName: "Test Agent",
+              title: "Older but recently updated",
+              status: "idle",
+              createdAt: 1,
+              updatedAt: 100,
+              pendingPermissionCount: 0,
+            },
+            {
+              localSessionId: "local-b",
+              agentId: "test-agent",
+              agentName: "Test Agent",
+              title: "Newer but quiet",
+              status: "idle",
+              createdAt: 2,
+              updatedAt: 10,
+              pendingPermissionCount: 0,
+            },
+          ],
+        },
+      })
+    );
+
+    const rows = [...dom.window.document.querySelectorAll(".session-row")];
+    assert.ok(rows[0]?.textContent?.includes("Newer but quiet"));
+    assert.ok(rows[1]?.textContent?.includes("Older but recently updated"));
+  });
+
   test("row actions post selected localSessionId", () => {
     new MultiSessionManagerWebview(dom.window.document);
     dom.window.dispatchEvent(
@@ -193,7 +247,7 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 1, running: 0, awaitingPermission: 0, unread: 0 },
+          aggregate: { open: 1, running: 0, awaitingPermission: 0 },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -205,20 +259,26 @@ suite("multi-session manager webview", () => {
               status: "idle",
               createdAt: 1,
               updatedAt: 1,
-              unreadCount: 0,
               pendingPermissionCount: 0,
-              diffCount: 0,
-              conflictedDiffCount: 0,
             },
           ],
         },
       })
     );
 
-    const openButton = [...dom.window.document.querySelectorAll("button")].find(
-      (button) => button.textContent === "Open Chat"
+    const openButton = dom.window.document.querySelector(
+      'button[aria-label="Open chat"]'
     ) as HTMLButtonElement;
+    assert.ok(openButton.querySelector(".codicon-comment"));
+    assert.strictEqual(openButton.textContent, "");
     openButton.click();
+
+    const openingButton = dom.window.document.querySelector(
+      'button[aria-label="Opening chat"]'
+    ) as HTMLButtonElement;
+    assert.ok(openingButton.querySelector(".codicon-loading"));
+    assert.strictEqual(openingButton.getAttribute("aria-busy"), "true");
+    assert.strictEqual(openingButton.textContent, "");
 
     assert.ok(
       messages.some(

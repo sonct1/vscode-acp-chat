@@ -25,7 +25,7 @@ export class MultiSessionManagerPanelController implements vscode.Disposable {
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
-        retainContextWhenHidden: true,
+        retainContextWhenHidden: false,
         localResourceRoots: [this.extensionUri],
       }
     );

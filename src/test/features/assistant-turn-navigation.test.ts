@@ -292,13 +292,10 @@ suite("assistant-turn-navigation feature", () => {
           status: "idle",
           createdAt: 1,
           updatedAt: 1,
-          unreadCount: 0,
           pendingPermissionCount: 0,
-          diffCount: 0,
-          conflictedDiffCount: 0,
         },
       ],
-      aggregate: { running: 0, awaitingPermission: 0, unread: 0 },
+      aggregate: { running: 0, awaitingPermission: 0 },
     } as any);
 
     await controller.handleMessage({
@@ -313,10 +310,7 @@ suite("assistant-turn-navigation feature", () => {
         status: "idle",
         createdAt: 1,
         updatedAt: 1,
-        unreadCount: 0,
         pendingPermissionCount: 0,
-        diffCount: 0,
-        conflictedDiffCount: 0,
       },
       transcript: [
         { seq: 1, createdAt: 1, message: { type: "userMessage", text: "Q1" } },

@@ -169,6 +169,11 @@
           "default": true,
           "description": "Enable concurrent multi-session chat. When disabled, the legacy single-session workflow is used."
         },
+        "vscode-acp-chat.multiSession.lowResourceMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reduce CPU and memory usage in multi-session mode by disabling per-session diff tracking, file watchers, conflict telemetry, and manager diff badges. Disable this when you need multi-session diff review actions."
+        },
         "vscode-acp-chat.multiSession.maxConcurrentSessions": {
           "type": "number",
           "default": 4,

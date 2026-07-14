@@ -35,10 +35,7 @@ export interface MultiSessionListItem {
   status: MultiSessionStatus;
   createdAt: number;
   updatedAt: number;
-  unreadCount: number;
   pendingPermissionCount: number;
-  diffCount: number;
-  conflictedDiffCount: number;
   lastError?: string;
 }
 
@@ -76,7 +73,6 @@ export interface MultiSessionAggregate {
   open: number;
   running: number;
   awaitingPermission: number;
-  unread: number;
 }
 
 export interface MultiSessionChatStateMessage {

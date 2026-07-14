@@ -7,6 +7,10 @@ export interface FileChange {
   status: "pending" | "accepted" | "rolledback";
 }
 
+export interface DiffManagerOptions {
+  enabled?: boolean;
+}
+
 export class DiffManager {
   // TODO: Diff state is not restored after webview reload.
   //
@@ -21,9 +25,13 @@ export class DiffManager {
   // agentChanged semantics. To be addressed in a future architecture refactor.
   private changes: Map<string, FileChange> = new Map();
   private onDidChangeCallbacks: Array<(changes: FileChange[]) => void> = [];
-  private fileWatcher: vscode.FileSystemWatcher;
+  private fileWatcher: vscode.FileSystemWatcher | undefined;
+  private readonly enabled: boolean;
 
-  constructor() {
+  constructor(options: DiffManagerOptions = {}) {
+    this.enabled = options.enabled ?? true;
+    if (!this.enabled) return;
+
     this.fileWatcher = vscode.workspace.createFileSystemWatcher("**/*");
     this.fileWatcher.onDidDelete((uri) => {
       const change = this.changes.get(uri.fsPath);
@@ -35,6 +43,10 @@ export class DiffManager {
         }
       }
     });
+  }
+
+  public isEnabled(): boolean {
+    return this.enabled;
   }
 
   public onDidChange(
@@ -60,6 +72,8 @@ export class DiffManager {
     oldText: string | null,
     newText: string
   ): boolean {
+    if (!this.enabled) return false;
+
     const existing = this.changes.get(path);
     if (existing && existing.status === "pending") {
       if (existing.oldText === oldText && existing.newText === newText) {
@@ -88,6 +102,8 @@ export class DiffManager {
   }
 
   public accept(path: string): void {
+    if (!this.enabled) return;
+
     const change = this.changes.get(path);
     if (change) {
       change.status = "accepted";
@@ -96,6 +112,8 @@ export class DiffManager {
   }
 
   public async rollback(path: string): Promise<void> {
+    if (!this.enabled) return;
+
     const change = this.changes.get(path);
     if (change && change.status === "pending") {
       try {
@@ -130,6 +148,8 @@ export class DiffManager {
   }
 
   public removeChange(path: string): void {
+    if (!this.enabled) return;
+
     if (this.changes.delete(path)) {
       this.notify();
     }
@@ -140,6 +160,8 @@ export class DiffManager {
   }
 
   public acceptAll(): void {
+    if (!this.enabled) return;
+
     for (const change of this.changes.values()) {
       if (change.status === "pending") {
         change.status = "accepted";
@@ -149,6 +171,8 @@ export class DiffManager {
   }
 
   public async rollbackAll(): Promise<void> {
+    if (!this.enabled) return;
+
     const pending = this.getPendingChanges();
     for (const change of pending) {
       await this.rollback(change.path);
@@ -156,6 +180,8 @@ export class DiffManager {
   }
 
   public clear(): void {
+    if (!this.enabled) return;
+
     this.changes.clear();
     this.notify();
   }
@@ -165,8 +191,6 @@ export class DiffManager {
   }
 
   public dispose(): void {
-    if (this.fileWatcher) {
-      this.fileWatcher.dispose();
-    }
+    this.fileWatcher?.dispose();
   }
 }

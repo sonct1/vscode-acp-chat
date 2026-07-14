@@ -206,8 +206,9 @@ function createController(
   const controller = new MultiSessionHostController({
     globalState: options.state ?? new TestMemento(),
     postMessage: (message) => messages.push(message),
-    clientFactory: () => {
+    clientFactory: (agent) => {
       const client = new FakeClient();
+      client.agentId = agent.id;
       configureClient?.(client);
       const manager = new FakeSessionManager();
       options.configureManager?.(manager);
@@ -239,7 +240,7 @@ suite("multi-session feature", () => {
     );
   });
 
-  test("adjacent stream chunks compact snapshots but keep raw deltas", () => {
+  test("adjacent stream chunks compact snapshots while preserving sequence metadata", () => {
     const store = new TranscriptStore();
     const a = store.append({ type: "streamChunk", text: "hel" });
     const b = store.append({ type: "streamChunk", text: "lo" });
@@ -251,6 +252,7 @@ suite("multi-session feature", () => {
       store.snapshot().map((event) => event.message.text),
       ["hello", "ab"]
     );
+    assert.strictEqual(store.length, 4);
     assert.strictEqual(store.lastSeq, 4);
   });
 
@@ -262,30 +264,95 @@ suite("multi-session feature", () => {
     assert.strictEqual(store.snapshot()[0].message.text, "original");
   });
 
-  test("switching the selected agent updates draft sessions and state", async () => {
-    const { controller, messages } = createController();
+  test("selecting an agent persists it and starts a new active session without mutating the old draft", async () => {
+    const state = new TestMemento();
+    const { controller, clients, managers } = createController(undefined, {
+      state,
+    });
+    const originalSession = controller.getStateForTest().sessions[0];
 
-    await controller.switchAgent("opencode");
+    await controller.selectAgentAndNewChat("opencode");
 
-    const state = controller.getManagerStateSnapshot();
-    const snapshot = [...messages]
-      .reverse()
-      .find(
-        (message) => message.type === "feature.multi-session.snapshot"
-      ) as any;
-
-    assert.strictEqual(state.selectedAgentId, "opencode");
-    assert.ok(
-      state.agents.some(
-        (agent: { id: string; name: string }) =>
-          agent.id === "opencode" && agent.name === "OpenCode"
-      )
+    const managerState = controller.getManagerStateSnapshot();
+    const sessions = controller.getStateForTest().sessions;
+    const activeSession = sessions.find(
+      (session) => session.localSessionId === managerState.activeLocalSessionId
     );
-    assert.strictEqual(
-      controller.getStateForTest().sessions[0].agentName,
-      "OpenCode"
+
+    assert.strictEqual(controller.getDefaultAgentId(), "opencode");
+    assert.strictEqual(state.get("vscode-acp-chat.selectedAgent"), "opencode");
+    assert.strictEqual(managerState.selectedAgentId, "opencode");
+    assert.strictEqual(sessions.length, 2);
+    assert.strictEqual(sessions[0].localSessionId, originalSession.localSessionId);
+    assert.strictEqual(sessions[0].agentId, originalSession.agentId);
+    assert.strictEqual(activeSession?.agentId, "opencode");
+    assert.strictEqual(activeSession?.agentName, "OpenCode");
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].agentId, "opencode");
+    assert.strictEqual(clients[0].connectCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 1);
+
+    const restored = createController(undefined, { state }).controller;
+    assert.strictEqual(restored.getDefaultAgentId(), "opencode");
+    restored.dispose();
+    controller.dispose();
+  });
+
+  test("selecting the current agent still creates a new ACP session", async () => {
+    const state = new TestMemento();
+    await state.update("vscode-acp-chat.selectedAgent", "opencode");
+    const { controller, clients, managers } = createController(undefined, {
+      state,
+    });
+
+    await controller.selectAgentAndNewChat("opencode");
+
+    const sessions = controller.getStateForTest().sessions;
+    assert.strictEqual(sessions.length, 2);
+    assert.strictEqual(sessions[1].agentId, "opencode");
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].agentId, "opencode");
+    assert.strictEqual(managers[0].newCalls, 1);
+    controller.dispose();
+  });
+
+  test("selecting an agent does not cancel a running session and keeps failure isolated", async () => {
+    let clientCount = 0;
+    const { controller, clients, managers } = createController((client) => {
+      clientCount += 1;
+      if (clientCount === 2) {
+        client.connectError = new Error("opencode failed");
+      }
+    });
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const runningState = controller.getStateForTest();
+    const runningSession = runningState.activeLocalSessionId!;
+    const runningAgentId = runningState.sessions.find(
+      (session) => session.localSessionId === runningSession
+    )?.agentId;
+
+    await controller.selectAgentAndNewChat("opencode");
+
+    const state = controller.getStateForTest();
+    const oldSession = state.sessions.find(
+      (session) => session.localSessionId === runningSession
     );
-    assert.strictEqual(snapshot.session.agentName, "OpenCode");
+    const activeSession = state.sessions.find(
+      (session) => session.localSessionId === state.activeLocalSessionId
+    );
+
+    assert.strictEqual(clients[0].cancelCalls, 0);
+    assert.strictEqual(oldSession?.status, "running");
+    assert.strictEqual(oldSession?.agentId, runningAgentId);
+    assert.strictEqual(activeSession?.agentId, "opencode");
+    assert.strictEqual(activeSession?.status, "draft");
+    assert.strictEqual(activeSession?.lastError, "opencode failed");
+    assert.strictEqual(clients.length, 2);
+    assert.strictEqual(managers[1].newCalls, 0);
+
+    clients[0].resolvePrompt();
+    await prompt;
     controller.dispose();
   });
 
@@ -344,7 +411,7 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("background updates increment unread and retain duplicate tool ids per runtime", async () => {
+  test("background updates retain transcripts and duplicate tool ids per runtime", async () => {
     const { controller, messages, clients } = createController();
     const promptA = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -375,10 +442,25 @@ suite("multi-session feature", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const stateA = controller
-      .getStateForTest()
-      .sessions.find((session) => session.localSessionId === sessionA)!;
-    assert.ok(stateA.unreadCount > 0);
+    await controller.handleMessage({
+      type: "feature.multi-session.activate",
+      localSessionId: sessionA,
+    });
+    const snapshotA = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.multi-session.snapshot" &&
+          message.activeLocalSessionId === sessionA
+      ) as any;
+    assert.ok(
+      snapshotA.transcript.some(
+        (event: any) =>
+          typeof event.message.toolCallId === "string" &&
+          event.message.toolCallId === "same-id" &&
+          JSON.stringify(event.message).includes("A tool")
+      )
+    );
     assert.ok(
       messages.some(
         (message) =>
@@ -393,7 +475,10 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("structured tool diffs are scoped to the owning session", async () => {
+  test("structured tool diffs are scoped to the owning session when low-resource mode is disabled", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", false, true);
     const tmpRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "vscode-acp-chat-scoped-")
     );
@@ -454,18 +539,6 @@ suite("multi-session feature", () => {
         (controller as any).sessions.get(sessionB).queue.waitForIdle(),
       ]);
 
-      const state = controller.getStateForTest();
-      assert.strictEqual(
-        state.sessions.find((session) => session.localSessionId === sessionA)
-          ?.diffCount,
-        1
-      );
-      assert.strictEqual(
-        state.sessions.find((session) => session.localSessionId === sessionB)
-          ?.diffCount,
-        1
-      );
-
       await controller.handleMessage({
         type: "feature.multi-session.activate",
         localSessionId: sessionA,
@@ -503,10 +576,51 @@ suite("multi-session feature", () => {
       await Promise.all([promptA, promptB]);
       controller.dispose();
       fs.rmSync(tmpRoot, { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
     }
   });
 
-  test("structured tool diff does not duplicate a matching writeTextFile change", async () => {
+  test("low-resource mode leaves file writes usable without diff state", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", true, true);
+    const tmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "vscode-acp-chat-low-resource-write-")
+    );
+    const filePath = path.join(tmpRoot, "created.ts");
+    const { controller, clients } = createController();
+    const prompt = controller.sendActiveMessage("write");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      await clients[0].writeTextFile?.({
+        path: filePath,
+        content: "created",
+      });
+      const sessionId = controller.getStateForTest().activeLocalSessionId!;
+      const session = (controller as any).sessions.get(sessionId);
+
+      assert.strictEqual(fs.readFileSync(filePath, "utf8"), "created");
+      assert.strictEqual(session.resources.diffManager.isEnabled(), false);
+      assert.deepStrictEqual(session.resources.diffManager.getPendingChanges(), []);
+      assert.deepStrictEqual(controller.getChatStateSnapshot().aggregate, {
+        open: 1,
+        running: 1,
+        awaitingPermission: 0,
+      });
+    } finally {
+      clients[0].resolvePrompt();
+      await prompt;
+      controller.dispose();
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
+    }
+  });
+
+  test("structured tool diff does not duplicate a matching writeTextFile change when low-resource mode is disabled", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", false, true);
     const { controller, clients } = createController();
     const prompt = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -541,20 +655,25 @@ suite("multi-session feature", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const active = controller
-        .getStateForTest()
-        .sessions.find((session) => session.localSessionId === sessionId)!;
-      assert.strictEqual(active.diffCount, 1);
-      assert.strictEqual(active.conflictedDiffCount, 0);
+      assert.strictEqual(
+        (controller as any).sessions
+          .get(sessionId)
+          .resources.diffManager.getPendingChanges().length,
+        1
+      );
     } finally {
       clients[0].resolvePrompt();
       await prompt;
       controller.dispose();
       fs.rmSync(path.dirname(duplicatePath), { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
     }
   });
 
-  test("mismatched structured tool diff is not actionable or stale-marking", async () => {
+  test("mismatched structured tool diff is not actionable or stale-marking when low-resource mode is disabled", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", false, true);
     const mismatchPath = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-mismatch-")),
       "mismatch.ts"
@@ -611,16 +730,19 @@ suite("multi-session feature", () => {
         .get(controller.getStateForTest().activeLocalSessionId!)
         .queue.waitForIdle();
 
-      const state = controller.getStateForTest();
-      const sessionAState = state.sessions.find(
-        (session) => session.localSessionId === sessionA
-      )!;
-      const sessionBState = state.sessions.find(
-        (session) => session.localSessionId !== sessionA
-      )!;
-      assert.strictEqual(sessionAState.diffCount, 1);
-      assert.strictEqual(sessionAState.conflictedDiffCount, 0);
-      assert.strictEqual(sessionBState.diffCount, 0);
+      assert.strictEqual(
+        (controller as any).sessions
+          .get(sessionA)
+          .resources.diffManager.getPendingChanges().length,
+        1
+      );
+      const sessionB = controller.getStateForTest().activeLocalSessionId!;
+      assert.strictEqual(
+        (controller as any).sessions
+          .get(sessionB)
+          .resources.diffManager.getPendingChanges().length,
+        0
+      );
 
       clients[1].resolvePrompt();
       await promptB;
@@ -629,10 +751,93 @@ suite("multi-session feature", () => {
       await promptA;
       controller.dispose();
       fs.rmSync(path.dirname(mismatchPath), { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
     }
   });
 
-  test("structured tool diffs mark other sessions pending on the same path as conflicted", async () => {
+  test("structured tool diffs skip conflict bookkeeping in low-resource mode", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", true, true);
+    const conflictPath = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-low-conflict-")),
+      "conflict.ts"
+    );
+    fs.writeFileSync(conflictPath, "from a");
+    const { controller, clients } = createController();
+    const promptA = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionA = controller.getStateForTest().activeLocalSessionId!;
+
+    try {
+      clients[0].sessionUpdate?.({
+        sessionId: "a",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "edit-a",
+          title: "Edit",
+          kind: "edit",
+          status: "completed",
+          content: [
+            {
+              type: "diff",
+              path: conflictPath,
+              oldText: "base",
+              newText: "from a",
+            },
+          ],
+        },
+      });
+      await (controller as any).sessions.get(sessionA).queue.waitForIdle();
+
+      await controller.newChat();
+      const promptB = controller.sendActiveMessage("B");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fs.writeFileSync(conflictPath, "from b");
+      clients[1].sessionUpdate?.({
+        sessionId: "b",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "edit-b",
+          title: "Edit",
+          kind: "edit",
+          status: "completed",
+          content: [
+            {
+              type: "diff",
+              path: conflictPath,
+              oldText: "from a",
+              newText: "from b",
+            },
+          ],
+        },
+      });
+      await (controller as any).sessions
+        .get(controller.getStateForTest().activeLocalSessionId!)
+        .queue.waitForIdle();
+
+      const sessionARecord = (controller as any).sessions.get(sessionA);
+      assert.strictEqual(sessionARecord.conflictedDiffPaths, undefined);
+      assert.deepStrictEqual(
+        sessionARecord.resources.diffManager.getPendingChanges(),
+        []
+      );
+
+      clients[1].resolvePrompt();
+      await promptB;
+    } finally {
+      clients[0].resolvePrompt();
+      await promptA;
+      controller.dispose();
+      fs.rmSync(path.dirname(conflictPath), { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
+    }
+  });
+
+  test("structured tool diffs mark other sessions pending on the same path as conflicted when low-resource mode is disabled", async () => {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    await config.update("multiSession.lowResourceMode", false, true);
     const conflictPath = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-conflict-")),
       "conflict.ts"
@@ -690,11 +895,12 @@ suite("multi-session feature", () => {
         .get(controller.getStateForTest().activeLocalSessionId!)
         .queue.waitForIdle();
 
-      const sessionAState = controller
-        .getStateForTest()
-        .sessions.find((session) => session.localSessionId === sessionA)!;
-      assert.strictEqual(sessionAState.diffCount, 1);
-      assert.strictEqual(sessionAState.conflictedDiffCount, 1);
+      const sessionARecord = (controller as any).sessions.get(sessionA);
+      assert.strictEqual(
+        sessionARecord.resources.diffManager.getPendingChanges().length,
+        1
+      );
+      assert.strictEqual(sessionARecord.conflictedDiffPaths.size, 1);
 
       clients[1].resolvePrompt();
       await promptB;
@@ -703,6 +909,7 @@ suite("multi-session feature", () => {
       await promptA;
       controller.dispose();
       fs.rmSync(path.dirname(conflictPath), { recursive: true, force: true });
+      await config.update("multiSession.lowResourceMode", original, true);
     }
   });
 
@@ -843,6 +1050,45 @@ suite("multi-session feature", () => {
     }
   });
 
+  test("listing history sessions uses the default selected agent even when another session is active", async () => {
+    const state = new TestMemento();
+    await state.update("vscode-acp-chat.selectedAgent", "pi");
+    const { controller, clients, managers } = createController(undefined, {
+      state,
+    });
+    const piSessionId = controller.getStateForTest().activeLocalSessionId!;
+
+    await controller.connectActive();
+    await controller.selectAgentAndNewChat("opencode");
+    managers[0].listedSessions = [
+      {
+        sessionId: "pi-history",
+        title: "Pi history",
+        cwd: "/workspace",
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    managers[1].listedSessions = [
+      {
+        sessionId: "opencode-history",
+        title: "OpenCode history",
+        cwd: "/workspace",
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+
+    controller.activateSession(piSessionId);
+    const sessions = await controller.listSessions();
+
+    assert.strictEqual(clients[0].agentId, "pi");
+    assert.strictEqual(clients[1].agentId, "opencode");
+    assert.deepStrictEqual(
+      sessions.map((session) => session.sessionId),
+      ["opencode-history"]
+    );
+    controller.dispose();
+  });
+
   test("loading an already-open history session only activates it", async () => {
     const { controller, managers } = createController();
     await controller.loadHistorySession("history-1");
@@ -931,6 +1177,21 @@ suite("multi-session feature", () => {
         (session) => session.localSessionId === active?.localSessionId
       );
     assert.strictEqual(active?.title, "Backend debug");
+    controller.dispose();
+  });
+
+  test("session summaries derive running status from runtime flags", () => {
+    const { controller } = createController();
+    const activeId = controller.getStateForTest().activeLocalSessionId!;
+    const session = (controller as any).sessions.get(activeId);
+    session.status = "idle";
+    session.isGenerating = true;
+
+    const active = controller
+      .getStateForTest()
+      .sessions.find((item) => item.localSessionId === activeId)!;
+
+    assert.strictEqual(active.status, "running");
     controller.dispose();
   });
 

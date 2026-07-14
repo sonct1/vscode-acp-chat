@@ -16,7 +16,6 @@ export async function showMultiSessionQuickSwitch(
     description: [
       session.localSessionId === state.activeLocalSessionId ? "Active" : "",
       session.pendingPermissionCount > 0 ? "Needs permission" : formatStatus(session.status),
-      session.unreadCount > 0 ? `${session.unreadCount} unread` : "",
       session.agentName,
     ]
       .filter(Boolean)
@@ -47,7 +46,7 @@ function compareSessions(
         : session.status === "draft"
           ? 2
           : 3;
-  return rank(a) - rank(b) || b.updatedAt - a.updatedAt;
+  return rank(a) - rank(b) || b.createdAt - a.createdAt;
 }
 
 function statusGlyph(session: MultiSessionListItem): string {

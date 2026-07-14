@@ -372,3 +372,15 @@ code --install-extension .tmp/vscode-acp-chat-flat-ui-refresh.vsix --force
 - Focus, hover, selected, error, permission, running states vẫn rõ và accessible.
 - Không đổi ACP protocol/session behavior.
 - Relevant tests, package build, VSIX install local hoàn tất hoặc blocker được báo rõ.
+
+## Implementation status
+
+Status: Implemented on 2026-07-14.
+
+Completion notes:
+
+- Added shared flat UI CSS variables in `media/vscode.css` for radius, border, panel/input/popup backgrounds, and hover state.
+- Flattened the chat transcript, autocomplete/dropdowns, tooltip/image preview, plan/diff/tool surfaces, permission/confirm dialogs, assistant actions, and context usage focus indicator in `media/main.css`; the composer now keeps a border-based inset surface with side spacing and smooth rounded corners.
+- Aligned multi-session header and manager styling with the same flat radius/border/hover rules in `src/features/multi-session/styles.ts` and `src/features/multi-session/manager-styles.ts`.
+- Updated layout/feature docs to note that transcript fade placeholders are hidden and the chat surface now uses flat VS Code-native treatment.
+- No ACP protocol, session lifecycle, command contribution, or message contract changes were made by this refresh.

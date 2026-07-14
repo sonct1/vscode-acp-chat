@@ -15,6 +15,11 @@ interface MockMemento {
 interface MockACPClient {
   setAgent: (config: unknown) => void;
   getAgentId: () => string;
+  getAgentName: () => string;
+  getState: () => string;
+  getAgentCapabilities: () => unknown;
+  getNesDocumentCapabilities: () => unknown;
+  clearLastUsageUpdate: () => void;
   setOnStateChange: (callback: (state: string) => void) => () => void;
   setOnSessionUpdate: (callback: (update: unknown) => void) => () => void;
   setOnStderr: (callback: (data: string) => void) => () => void;
@@ -28,7 +33,7 @@ interface MockACPClient {
   setOnPermissionRequest: (callback: unknown) => void;
   isConnected: () => boolean;
   connect: () => Promise<void>;
-  newSession: (dir: string) => Promise<void>;
+  newSession: (dir: string) => Promise<{ sessionId: string }>;
   setMode: (modeId: string) => Promise<void>;
   setModel: (modelId: string) => Promise<void>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
@@ -58,6 +63,13 @@ class TestMemento implements MockMemento {
 
 class TestACPClient implements MockACPClient {
   private agentIdValue = "test-agent";
+  public connectCallCount = 0;
+  public newSessionCallCount = 0;
+  public cancelCallCount = 0;
+  public clearLastUsageUpdateCallCount = 0;
+  public isConnectedValue = false;
+  public connectError?: Error;
+  public newSessionError?: Error;
   private setModeCallCount = 0;
   private setModelCallCount = 0;
   private setConfigOptionCallCount = 0;
@@ -73,6 +85,30 @@ class TestACPClient implements MockACPClient {
   }
   getAgentId(): string {
     return this.agentIdValue;
+  }
+  getAgentName(): string {
+    return this.agentIdValue;
+  }
+  getState(): string {
+    return this.isConnectedValue ? "connected" : "disconnected";
+  }
+  getAgentCapabilities(): unknown {
+    return {
+      loadSession: true,
+      sessionCapabilities: { list: true, delete: true },
+    };
+  }
+  getNesDocumentCapabilities(): unknown {
+    return {
+      didOpen: false,
+      didChange: null,
+      didClose: false,
+      didSave: false,
+      didFocus: false,
+    };
+  }
+  clearLastUsageUpdate(): void {
+    this.clearLastUsageUpdateCallCount += 1;
   }
   setOnStateChange(): () => void {
     return () => {};
@@ -92,10 +128,18 @@ class TestACPClient implements MockACPClient {
   setOnReleaseTerminal(): void {}
   setOnPermissionRequest(): void {}
   isConnected(): boolean {
-    return false;
+    return this.isConnectedValue;
   }
-  async connect(): Promise<void> {}
-  async newSession(): Promise<void> {}
+  async connect(): Promise<void> {
+    this.connectCallCount += 1;
+    if (this.connectError) throw this.connectError;
+    this.isConnectedValue = true;
+  }
+  async newSession(): Promise<{ sessionId: string }> {
+    this.newSessionCallCount += 1;
+    if (this.newSessionError) throw this.newSessionError;
+    return { sessionId: `test-session-${this.newSessionCallCount}` };
+  }
 
   async setMode(modeId: string): Promise<void> {
     this.setModeCallCount++;
@@ -122,6 +166,14 @@ class TestACPClient implements MockACPClient {
     };
   }
 
+  async cancel(): Promise<void> {
+    this.cancelCallCount += 1;
+  }
+
+  getCurrentSessionId(): string | null {
+    return null;
+  }
+
   dispose(): void {}
 
   getSetModeCallCount(): number {
@@ -139,6 +191,13 @@ class TestACPClient implements MockACPClient {
   resetCallCounts(): void {
     this.setModeCallCount = 0;
     this.setModelCallCount = 0;
+    this.connectCallCount = 0;
+    this.newSessionCallCount = 0;
+    this.cancelCallCount = 0;
+    this.clearLastUsageUpdateCallCount = 0;
+    this.isConnectedValue = false;
+    this.connectError = undefined;
+    this.newSessionError = undefined;
     this.setConfigOptionCallCount = 0;
     this.lastSetModeId = null;
     this.lastSetModelId = null;
@@ -1947,6 +2006,95 @@ suite("ChatViewProvider", () => {
       provider.resolveWebviewView(mockView as any, {} as any, {} as any);
       return { messageHandler: messageHandler! };
     }
+
+    test("getSelectedAgentId returns the legacy client agent id", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+
+      await (provider as any).selectAgentAndStartNewChat("opencode");
+
+      assert.strictEqual(provider.getSelectedAgentId(), "opencode");
+      provider.dispose();
+    });
+
+    test("legacy agent selection resets chat and creates exactly one session", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+
+      await provider.selectAgentAndStartNewChat("opencode");
+
+      assert.strictEqual(acpClient.getAgentId(), "opencode");
+      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "opencode");
+      assert.strictEqual(acpClient.connectCallCount, 1);
+      assert.strictEqual(acpClient.newSessionCallCount, 1);
+      assert.ok(messages.some((message) => message.type === "chatCleared"));
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.type === "agentChanged" && message.agentId === "opencode"
+        )
+      );
+      provider.dispose();
+    });
+
+    test("legacy agent selection cancellation while generating keeps existing agent", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).isGenerating = true;
+
+      const selection = provider.selectAgentAndStartNewChat("opencode");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const confirmation = messages.find(
+        (message) => message.type === "confirmAction"
+      );
+      assert.ok(confirmation);
+      (provider as any).pendingConfirmations.get(confirmation.requestId)?.(false);
+      await selection;
+
+      assert.strictEqual(acpClient.getAgentId(), "test-agent");
+      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "test-agent");
+      assert.strictEqual(acpClient.cancelCallCount, 0);
+      assert.strictEqual(acpClient.newSessionCallCount, 0);
+      assert.ok(!messages.some((message) => message.type === "chatCleared"));
+      provider.dispose();
+    });
+
+    test("legacy agent selection reports session errors without retrying session creation", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      acpClient.newSessionError = new Error("session failed");
+
+      await provider.selectAgentAndStartNewChat("opencode");
+
+      assert.strictEqual(acpClient.getAgentId(), "opencode");
+      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "opencode");
+      assert.strictEqual(acpClient.connectCallCount, 1);
+      assert.strictEqual(acpClient.newSessionCallCount, 1);
+      assert.ok(
+        messages.some(
+          (message) => message.type === "error" && message.text === "session failed"
+        )
+      );
+      provider.dispose();
+    });
 
     test("falls back to legacy new chat for stale multi-session webview messages", async () => {
       const provider = new ChatViewProvider(

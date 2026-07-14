@@ -1,7 +1,6 @@
 import type { MultiSessionRenderMessage, TranscriptEvent } from "./contracts";
 
 export class TranscriptStore {
-  private rawEvents: TranscriptEvent[] = [];
   private compactedEvents: TranscriptEvent[] = [];
   private nextSeq = 1;
 
@@ -11,8 +10,6 @@ export class TranscriptStore {
       message: { ...message },
       createdAt: Date.now(),
     };
-    this.rawEvents.push(event);
-
     const last = this.compactedEvents[this.compactedEvents.length - 1];
     if (
       last &&
@@ -38,21 +35,13 @@ export class TranscriptStore {
     }));
   }
 
-  raw(): TranscriptEvent[] {
-    return this.rawEvents.map((event) => ({
-      ...event,
-      message: { ...event.message },
-    }));
-  }
-
   clear(): void {
-    this.rawEvents = [];
     this.compactedEvents = [];
     this.nextSeq = 1;
   }
 
   get length(): number {
-    return this.rawEvents.length;
+    return this.lastSeq;
   }
 
   get lastSeq(): number {

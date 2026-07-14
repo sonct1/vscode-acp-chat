@@ -6,6 +6,7 @@ import type {
 import { MANAGER_STYLES } from "./manager-styles";
 
 type VsCodeApi = { postMessage(message: unknown): void };
+type PendingActivation = { localSessionId: string; action: "open" | "review" };
 
 declare const acquireVsCodeApi: () => VsCodeApi;
 
@@ -13,7 +14,8 @@ export class MultiSessionManagerWebview {
   private readonly vscode = acquireVsCodeApi();
   private readonly sessions = new Map<string, MultiSessionListItem>();
   private activeLocalSessionId: string | undefined;
-  private aggregate = { open: 0, running: 0, awaitingPermission: 0, unread: 0 };
+  private pendingActivation: PendingActivation | undefined;
+  private aggregate = { open: 0, running: 0, awaitingPermission: 0 };
   private filter = "all";
   private query = "";
   private summaryEl!: HTMLElement;
@@ -35,7 +37,7 @@ export class MultiSessionManagerWebview {
   }
 
   private renderShell(): void {
-    this.doc.body.innerHTML = `<main class="manager-shell"><header class="manager-header"><div class="manager-title"><h1>ACP Sessions</h1><div class="manager-summary" aria-live="polite"></div></div><div class="manager-actions"><button type="button" class="manager-button manager-button-primary" data-action="new"><span class="codicon codicon-add"></span>New</button><button type="button" class="manager-button manager-button-secondary" data-action="refresh"><span class="codicon codicon-refresh"></span>Refresh</button></div></header><section class="manager-filters" aria-label="Session filters"><select class="manager-select" aria-label="Status filter"><option value="all">All</option><option value="running">Running</option><option value="awaiting_permission">Waiting</option><option value="idle">Idle</option><option value="draft">Draft</option><option value="error">Error</option></select><input class="manager-search" type="search" placeholder="Search title, agent, status, session id…" aria-label="Search sessions"></section><section class="manager-list" role="list" aria-label="ACP sessions"></section></main>`;
+    this.doc.body.innerHTML = `<main class="manager-shell"><header class="manager-header"><div class="manager-title"><h1>ACP Sessions</h1><div class="manager-summary" aria-live="polite"></div></div><div class="manager-actions"><button type="button" class="manager-button manager-button-icon manager-button-primary" data-action="new" aria-label="New chat" title="New chat"><span class="codicon codicon-add" aria-hidden="true"></span></button><button type="button" class="manager-button manager-button-icon manager-button-secondary" data-action="refresh" aria-label="Refresh sessions" title="Refresh sessions"><span class="codicon codicon-refresh" aria-hidden="true"></span></button></div></header><section class="manager-filters" aria-label="Session filters"><select class="manager-select" aria-label="Status filter"><option value="all">All</option><option value="running">Running</option><option value="awaiting_permission">Waiting</option><option value="idle">Idle</option><option value="draft">Draft</option><option value="error">Error</option></select><input class="manager-search" type="search" placeholder="Search title, agent, status, session id…" aria-label="Search sessions"></section><section class="manager-list" role="list" aria-label="ACP sessions"></section></main>`;
     this.summaryEl = this.doc.querySelector(".manager-summary") as HTMLElement;
     this.listEl = this.doc.querySelector(".manager-list") as HTMLElement;
     this.filterEl = this.doc.querySelector(".manager-select") as HTMLSelectElement;
@@ -79,13 +81,16 @@ export class MultiSessionManagerWebview {
       this.sessions.set(session.localSessionId, session);
     }
     this.activeLocalSessionId = message.activeLocalSessionId;
+    if (this.pendingActivation?.localSessionId === this.activeLocalSessionId) {
+      this.pendingActivation = undefined;
+    }
     this.aggregate = message.aggregate;
     this.renderSummary();
     this.renderList();
   }
 
   private renderSummary(): void {
-    this.summaryEl.textContent = `Running ${this.aggregate.running} · Waiting ${this.aggregate.awaitingPermission} · Unread ${this.aggregate.unread} · Open ${this.aggregate.open}`;
+    this.summaryEl.textContent = `Running ${this.aggregate.running} · Waiting ${this.aggregate.awaitingPermission} · Open ${this.aggregate.open}`;
   }
 
   private renderList(): void {
@@ -112,7 +117,11 @@ export class MultiSessionManagerWebview {
     }
 
     for (const session of sessions) {
-      const signature = rowSignature(session, this.activeLocalSessionId);
+      const signature = rowSignature(
+        session,
+        this.activeLocalSessionId,
+        this.pendingActivation
+      );
       const existing = this.listEl.querySelector<HTMLElement>(
         `.session-row[data-session-id="${cssEscape(session.localSessionId)}"]`
       );
@@ -165,29 +174,47 @@ export class MultiSessionManagerWebview {
 
     const actions = this.doc.createElement("div");
     actions.className = "row-actions";
+    const isOpening =
+      this.pendingActivation?.localSessionId === session.localSessionId &&
+      this.pendingActivation.action === "open";
+    const isReviewing =
+      this.pendingActivation?.localSessionId === session.localSessionId &&
+      this.pendingActivation.action === "review";
     if (session.pendingPermissionCount > 0) {
       actions.append(
-        this.button("Review", "secondary", () =>
-          this.vscode.postMessage({
-            type: "feature.multi-session.reviewPermission",
-            localSessionId: session.localSessionId,
-            focusChat: true,
-          })
+        this.button(
+          isReviewing ? "Opening permission review" : "Review permission",
+          isReviewing
+            ? "codicon-loading codicon-modifier-spin"
+            : "codicon-eye",
+          "secondary",
+          () =>
+            this.activateSession("review", session.localSessionId, {
+              type: "feature.multi-session.reviewPermission",
+              localSessionId: session.localSessionId,
+              focusChat: true,
+            }),
+          { busy: isReviewing }
         )
       );
     }
     actions.append(
-      this.button("Open Chat", "primary", () =>
-        this.vscode.postMessage({
-          type: "feature.multi-session.activate",
-          localSessionId: session.localSessionId,
-          focusChat: true,
-        })
+      this.button(
+        isOpening ? "Opening chat" : "Open chat",
+        isOpening ? "codicon-loading codicon-modifier-spin" : "codicon-comment",
+        "primary",
+        () =>
+          this.activateSession("open", session.localSessionId, {
+            type: "feature.multi-session.activate",
+            localSessionId: session.localSessionId,
+            focusChat: true,
+          }),
+        { pressed: isActive, busy: isOpening }
       )
     );
     if (isStoppableStatus(session.status)) {
       actions.append(
-        this.button("Stop", "danger", () =>
+        this.button("Stop chat", "codicon-debug-stop", "danger", () =>
           this.vscode.postMessage({
             type: "feature.multi-session.stop",
             localSessionId: session.localSessionId,
@@ -196,7 +223,7 @@ export class MultiSessionManagerWebview {
       );
     } else {
       actions.append(
-        this.button("Close", "secondary", () =>
+        this.button("Close chat", "codicon-close", "secondary", () =>
           this.vscode.postMessage({
             type: "feature.multi-session.close",
             localSessionId: session.localSessionId,
@@ -260,27 +287,42 @@ export class MultiSessionManagerWebview {
     if (session.pendingPermissionCount > 0) {
       badges.append(badge(this.doc, `${session.pendingPermissionCount} permission`, "permission"));
     }
-    if (session.unreadCount > 0) {
-      badges.append(badge(this.doc, `${session.unreadCount} unread`, "unread"));
-    }
-    if (session.diffCount > 0) {
-      badges.append(badge(this.doc, `${session.diffCount} diff`, "diff"));
-    }
-    if (session.conflictedDiffCount > 0) {
-      badges.append(badge(this.doc, `${session.conflictedDiffCount} conflicted`, "diff"));
-    }
     return badges;
+  }
+
+  private activateSession(
+    action: PendingActivation["action"],
+    localSessionId: string,
+    message: { type: string; localSessionId: string; focusChat?: boolean }
+  ): void {
+    this.pendingActivation = { localSessionId, action };
+    this.renderList();
+    this.vscode.postMessage(message);
   }
 
   private button(
     label: string,
+    iconClass: string,
     variant: "primary" | "secondary" | "danger",
-    onClick: () => void
+    onClick: () => void,
+    options: { pressed?: boolean; busy?: boolean } = {}
   ): HTMLButtonElement {
     const button = this.doc.createElement("button");
     button.type = "button";
-    button.className = `manager-button manager-button-${variant}`;
-    button.textContent = label;
+    button.className = `manager-button manager-button-icon manager-button-${variant}`;
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    if (options.pressed !== undefined) {
+      button.setAttribute("aria-pressed", String(options.pressed));
+    }
+    if (options.busy) {
+      button.setAttribute("aria-busy", "true");
+    }
+
+    const icon = this.doc.createElement("span");
+    icon.className = `codicon ${iconClass}`;
+    icon.setAttribute("aria-hidden", "true");
+    button.append(icon);
     button.addEventListener("click", onClick);
     return button;
   }
@@ -320,11 +362,16 @@ function buildSessionMeta(session: MultiSessionListItem): string {
 
 function rowSignature(
   session: MultiSessionListItem,
-  activeLocalSessionId: string | undefined
+  activeLocalSessionId: string | undefined,
+  pendingActivation: PendingActivation | undefined
 ): string {
   return JSON.stringify({
     session,
     active: session.localSessionId === activeLocalSessionId,
+    opening:
+      pendingActivation?.localSessionId === session.localSessionId
+        ? pendingActivation.action
+        : undefined,
   });
 }
 
@@ -346,7 +393,7 @@ function compareSessions(
         : s.status === "draft"
           ? 2
           : 3;
-  return rank(a) - rank(b) || b.updatedAt - a.updatedAt;
+  return rank(a) - rank(b) || b.createdAt - a.createdAt;
 }
 
 function isRunningStatus(status: string): boolean {

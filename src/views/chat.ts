@@ -692,7 +692,6 @@ export class ChatViewProvider
               open: 0,
               running: 0,
               awaitingPermission: 0,
-              unread: 0,
             },
           });
           this.postMessage({
@@ -1648,12 +1647,22 @@ export class ChatViewProvider
     }
   }
 
+  public getSelectedAgentId(): string {
+    return this.features.multiSession
+      ? this.features.multiSession.getDefaultAgentId()
+      : this.acpClient.getAgentId();
+  }
+
   public async switchAgent(agentId: string): Promise<void> {
+    await this.selectAgentAndStartNewChat(agentId);
+  }
+
+  public async selectAgentAndStartNewChat(agentId: string): Promise<void> {
     if (this.features.multiSession) {
-      await this.features.multiSession.switchAgent(agentId);
+      await this.features.multiSession.selectAgentAndNewChat(agentId);
       return;
     }
-    await this.handleAgentChange(agentId);
+    await this.handleAgentChangeAndNewChat(agentId);
   }
 
   private async handleAgentChange(agentId: string): Promise<void> {
@@ -1785,7 +1794,67 @@ export class ChatViewProvider
       if (!ok) return;
     }
 
+    this.resetLegacyChatSurface();
+
+    try {
+      if (this.acpClient.isConnected()) {
+        const workingDir = getWorkspaceRoot();
+        await this.sessionManager.newSession(workingDir);
+        this.hasSession = true;
+        this.sendSessionMetadata();
+      }
+    } catch (error) {
+      console.error("[Chat] Failed to create new session:", error);
+    }
+  }
+
+  private async handleAgentChangeAndNewChat(agentId: string): Promise<void> {
+    const agent = getAgent(agentId);
+    if (!agent) return;
+
+    if (this.isGenerating) {
+      const currentAgentName = this.acpClient.getAgentName();
+      const ok = await this.ensureIdleIfGenerating(
+        `confirm-switchAgent-${Date.now()}`,
+        "switchAgent",
+        `Switch Agent: ${currentAgentName} → ${agent.name}`
+      );
+      if (!ok) return;
+    }
+
+    this.resetLegacyChatSurface();
+    this.acpClient.setAgent(agent);
+    await this.globalState.update(SELECTED_AGENT_KEY, agentId);
+    this.postMessage({
+      type: "agentChanged",
+      agentId,
+      agentName: agent.name,
+    });
+
+    try {
+      const workingDir = getWorkspaceRoot();
+      if (!this.acpClient.isConnected()) {
+        await this.acpClient.connect(workingDir);
+      }
+      this.sessionManager.syncCapabilities();
+      this.documentSyncManager.syncCapabilities();
+      await this.sessionManager.newSession(workingDir);
+      this.hasSession = true;
+      this.sendSessionMetadata();
+      this.postMessage({
+        type: "connectionState",
+        state: this.acpClient.getState(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[Chat] Failed to select agent and create session:", error);
+      this.postMessage({ type: "error", text: message });
+    }
+  }
+
+  private resetLegacyChatSurface(): void {
     this.userMessageBuffer = "";
+    this.userMessageImages = [];
     this.hasSession = false;
     this.hasRestoredModeModel = false;
     this.clearToolCallMetadata();
@@ -1799,17 +1868,6 @@ export class ChatViewProvider
     });
     this.acpClient.clearLastUsageUpdate();
     this.sendContextUsage();
-
-    try {
-      if (this.acpClient.isConnected()) {
-        const workingDir = getWorkspaceRoot();
-        await this.sessionManager.newSession(workingDir);
-        this.hasSession = true;
-        this.sendSessionMetadata();
-      }
-    } catch (error) {
-      console.error("[Chat] Failed to create new session:", error);
-    }
   }
 
   private handleClearChat(): void {

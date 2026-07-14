@@ -120,6 +120,12 @@ interface SessionResources {
   terminalHandler: TerminalHandler;
 }
 
+function isLowResourceMode(): boolean {
+  return vscode.workspace
+    .getConfiguration("vscode-acp-chat")
+    .get<boolean>("multiSession.lowResourceMode", true);
+}
+
 interface ManagedSession {
   localSessionId: string;
   acpSessionId?: string;
@@ -130,13 +136,12 @@ interface ManagedSession {
   status: MultiSessionStatus;
   createdAt: number;
   updatedAt: number;
-  unreadCount: number;
   lastError?: string;
   transcript: TranscriptStore;
   metadata: Partial<SessionMetadata> | null;
   contextUsage: ContextUsageUpdate | null;
   permissionQueue: PermissionPending[];
-  conflictedDiffPaths: Set<string>;
+  conflictedDiffPaths?: Set<string>;
   stderrBuffer: string;
   isGenerating: boolean;
   isLoadingHistory: boolean;
@@ -412,7 +417,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (!session) return;
     session.transcript.clear();
     session.resources?.diffManager.clear();
-    session.conflictedDiffPaths.clear();
+    session.conflictedDiffPaths?.clear();
     session.contextUsage = null;
     session.output?.reset();
     this.touch(session);
@@ -476,6 +481,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         images,
         mentions
       );
+      await session.queue!.waitForIdle();
       await session.output!.finalizePendingToolCalls(response.stopReason);
       this.append(session, {
         type: "streamEnd",
@@ -596,37 +602,45 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   async listSessions(): Promise<SessionInfo[]> {
-    const session = this.getActive() ?? this.createDraft();
-    const runtime = this.getCatalogRuntime(session);
-    return this.catalog.listSessions(session.agent, runtime);
+    return this.catalog.listSessions(
+      this.defaultAgent,
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
+    );
   }
 
   async deleteHistorySession(sessionId: string): Promise<void> {
-    const session = this.getActive() ?? this.createDraft();
     await this.catalog.deleteSession(
-      session.agent,
+      this.defaultAgent,
       sessionId,
-      this.getCatalogRuntime(session)
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
     );
   }
 
   getSupportsLoadSession(): boolean {
-    return this.getActive()?.sessionManager?.supportsLoadSession ?? true;
+    return (
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
+        .supportsLoadSession ?? true
+    );
   }
 
   getSupportsListSessions(): boolean {
-    return this.getActive()?.sessionManager?.supportsListSessions ?? true;
+    return (
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
+        .supportsListSessions ?? true
+    );
   }
 
   getSupportsDeleteSession(): boolean {
-    return this.getActive()?.sessionManager?.supportsDeleteSession ?? true;
+    return (
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)?.manager
+        .supportsDeleteSession ?? true
+    );
   }
 
   async getHistoryCapabilities(): Promise<CatalogCapabilities> {
-    const session = this.getActive() ?? this.createDraft();
     return this.catalog.getCapabilities(
-      session.agent,
-      this.getCatalogRuntime(session)
+      this.defaultAgent,
+      this.getCatalogRuntimeForAgent(this.defaultAgent.id)
     );
   }
 
@@ -652,21 +666,36 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.addMention(selection);
   }
 
+  getDefaultAgentId(): string {
+    return this.defaultAgent.id;
+  }
+
   async switchAgent(agentId: string): Promise<void> {
+    await this.selectAgentAndNewChat(agentId);
+  }
+
+  async selectAgentAndNewChat(agentId: string): Promise<void> {
     const agent = getAgent(agentId);
     if (!agent) return;
+
     this.defaultAgent = agent;
     await this.globalState.update(SELECTED_AGENT_KEY, agentId);
 
-    const active = this.getActive();
-    if (active && active.status === "draft" && !active.client) {
-      active.agent = agent;
-      active.title = "Untitled chat";
-      active.eagerRuntimeAttempted = false;
-      this.touch(active);
-      this.sendSnapshot();
+    const session = this.createDraftForAgent(agent);
+    this.activate(session.localSessionId, { focusChat: true });
+
+    try {
+      await this.ensureRuntime(session, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      session.status = "draft";
+      session.lastError = message;
+      this.append(session, { type: "error", text: message });
+      this.sendState();
+      if (session.localSessionId === this.activeLocalSessionId) {
+        this.sendSnapshot();
+      }
     }
-    this.sendState();
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string {
@@ -696,21 +725,27 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private createDraft(status: MultiSessionStatus = "draft"): ManagedSession {
+    return this.createDraftForAgent(this.defaultAgent, status);
+  }
+
+  private createDraftForAgent(
+    agent: AgentConfig,
+    status: MultiSessionStatus = "draft"
+  ): ManagedSession {
     const now = Date.now();
     const session: ManagedSession = {
       localSessionId: `local-${now}-${Math.random().toString(36).slice(2)}`,
-      agent: this.defaultAgent,
+      agent,
       cwd: getWorkspaceRoot(),
       title: "Untitled chat",
       status,
       createdAt: now,
       updatedAt: now,
-      unreadCount: 0,
       transcript: new TranscriptStore(),
       metadata: null,
       contextUsage: null,
       permissionQueue: [],
-      conflictedDiffPaths: new Set<string>(),
+      conflictedDiffPaths: isLowResourceMode() ? undefined : new Set<string>(),
       stderrBuffer: "",
       isGenerating: false,
       isLoadingHistory: false,
@@ -763,30 +798,36 @@ export class MultiSessionHostController implements vscode.Disposable {
   private ensureResources(session: ManagedSession): SessionResources {
     if (session.resources) return session.resources;
 
-    const diffManager = new DiffManager();
+    const trackDiffs = !isLowResourceMode();
+    const diffManager = new DiffManager({ enabled: trackDiffs });
     const fileHandler = new FileHandler(
       diffManager,
       this.mutationCoordinator.forOwner(session.localSessionId)
     );
     const terminalHandler = new TerminalHandler();
     session.resources = { diffManager, fileHandler, terminalHandler };
+    if (trackDiffs && !session.conflictedDiffPaths) {
+      session.conflictedDiffPaths = new Set<string>();
+    }
 
-    diffManager.onDidChange((changes) => {
-      this.append(session, {
-        type: "diffSummary",
-        localSessionId: session.localSessionId,
-        changes: changes.map((change) => ({
-          path: change.path,
-          relativePath: vscode.workspace.asRelativePath(change.path),
-          oldText: change.oldText,
-          newText: change.newText,
-          status: session.conflictedDiffPaths.has(change.path)
-            ? "conflicted"
-            : change.status,
-        })),
+    if (trackDiffs) {
+      diffManager.onDidChange((changes) => {
+        this.append(session, {
+          type: "diffSummary",
+          localSessionId: session.localSessionId,
+          changes: changes.map((change) => ({
+            path: change.path,
+            relativePath: vscode.workspace.asRelativePath(change.path),
+            oldText: change.oldText,
+            newText: change.newText,
+            status: this.hasConflictedDiffPath(session, change.path)
+              ? "conflicted"
+              : change.status,
+          })),
+        });
+        this.sendState();
       });
-      this.sendState();
-    });
+    }
     return session.resources;
   }
 
@@ -872,6 +913,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         }
       },
       onStructuredDiffContent: async (content) => {
+        if (!resources.diffManager.isEnabled()) return;
         await recordStructuredDiffsFromContent(content, {
           cwd: session.cwd,
           diffManager: resources.diffManager,
@@ -1045,9 +1087,6 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.touch(session);
 
     if (session.localSessionId !== this.activeLocalSessionId) {
-      session.unreadCount += 1;
-      this.scheduleChatState();
-      this.scheduleManagerState();
       return;
     }
 
@@ -1076,7 +1115,6 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (!session) return;
     this.activeLocalSessionId = localSessionId;
     this.activationRevision += 1;
-    session.unreadCount = 0;
     this.rebindDocumentSync(session);
     this.sendChatStateNow();
     this.sendManagerStateNow();
@@ -1201,11 +1239,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     const awaitingPermission = sessions.filter(
       (session) => session.status === "awaiting_permission"
     ).length;
-    const unread = sessions.reduce(
-      (sum, session) => sum + session.unreadCount,
-      0
-    );
-    return { open: sessions.length, running, awaitingPermission, unread };
+    return { open: sessions.length, running, awaitingPermission };
   }
 
   private getAgentOptions(): Array<{ id: string; name: string }> {
@@ -1223,6 +1257,14 @@ export class MultiSessionHostController implements vscode.Disposable {
       : "ACP: Idle";
   }
 
+  private effectiveStatus(session: ManagedSession): MultiSessionStatus {
+    if (session.permissionQueue.length > 0) return "awaiting_permission";
+    if (session.isGenerating) return "running";
+    if (session.isLoadingHistory) return "loading_history";
+    if (session.sendInFlight) return "running";
+    return session.status;
+  }
+
   private toListItem(session: ManagedSession): MultiSessionListItem {
     return {
       localSessionId: session.localSessionId,
@@ -1230,13 +1272,10 @@ export class MultiSessionHostController implements vscode.Disposable {
       agentId: session.agent.id,
       agentName: session.agent.name,
       title: session.title,
-      status: session.status,
+      status: this.effectiveStatus(session),
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-      unreadCount: session.unreadCount,
       pendingPermissionCount: session.permissionQueue.length,
-      diffCount: session.resources?.diffManager.getPendingChanges().length ?? 0,
-      conflictedDiffCount: session.conflictedDiffPaths.size,
       lastError: session.lastError,
     };
   }
@@ -1254,11 +1293,20 @@ export class MultiSessionHostController implements vscode.Disposable {
         relativePath: vscode.workspace.asRelativePath(change.path),
         oldText: change.oldText,
         newText: change.newText,
-        status: session.conflictedDiffPaths.has(change.path)
+        status: this.hasConflictedDiffPath(session, change.path)
           ? "conflicted"
           : change.status,
       })) ?? []
     );
+  }
+
+  private hasConflictedDiffPath(session: ManagedSession, path: string): boolean {
+    return session.conflictedDiffPaths?.has(path) ?? false;
+  }
+
+  private getConflictedDiffPaths(session: ManagedSession): Set<string> {
+    session.conflictedDiffPaths ??= new Set<string>();
+    return session.conflictedDiffPaths;
   }
 
   private getActive(): ManagedSession | undefined {
@@ -1293,6 +1341,17 @@ export class MultiSessionHostController implements vscode.Disposable {
     return session.client && session.sessionManager
       ? { client: session.client, manager: session.sessionManager }
       : undefined;
+  }
+
+  private getCatalogRuntimeForAgent(
+    agentId: string
+  ): MultiSessionRuntimeClient | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.agent.id !== agentId) continue;
+      const runtime = this.getCatalogRuntime(session);
+      if (runtime) return runtime;
+    }
+    return undefined;
   }
 
   private rebindDocumentSync(session: ManagedSession): void {
@@ -1430,7 +1489,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (!session || !change) return;
     const matches = await this.mutationCoordinator.matchesCurrent(change);
     if (!matches) {
-      session.conflictedDiffPaths.add(path);
+      this.getConflictedDiffPaths(session).add(path);
       this.emitDiffSnapshot(session);
       await vscode.window.showWarningMessage(
         `Cannot accept ${vscode.workspace.asRelativePath(path)} because the file changed after this session wrote it.`
@@ -1439,7 +1498,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       return;
     }
     session.resources?.diffManager.accept(path);
-    session.conflictedDiffPaths.delete(path);
+    session.conflictedDiffPaths?.delete(path);
   }
 
   private async rollbackDiff(path: string): Promise<void> {
@@ -1450,9 +1509,9 @@ export class MultiSessionHostController implements vscode.Disposable {
     const result = await this.mutationCoordinator.safeRollback(change);
     if (result.ok) {
       session.resources!.diffManager.removeChange(path);
-      session.conflictedDiffPaths.delete(path);
+      session.conflictedDiffPaths?.delete(path);
     } else if (result.conflict) {
-      session.conflictedDiffPaths.add(path);
+      this.getConflictedDiffPaths(session).add(path);
       this.append(session, {
         type: "error",
         text: result.message ?? "Rollback conflict",
@@ -1482,6 +1541,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private emitDiffSnapshot(session: ManagedSession): void {
+    if (!session.resources?.diffManager.isEnabled()) return;
     this.append(session, {
       type: "diffSummary",
       localSessionId: session.localSessionId,
@@ -1490,11 +1550,12 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private markOtherDiffsStale(ownerId: string | undefined, path: string): void {
+    if (isLowResourceMode()) return;
     for (const session of this.sessions.values()) {
       if (session.localSessionId === ownerId) continue;
       const change = session.resources?.diffManager.getChange(path);
       if (!change || change.status !== "pending") continue;
-      session.conflictedDiffPaths.add(path);
+      this.getConflictedDiffPaths(session).add(path);
       this.emitDiffSnapshot(session);
     }
     this.sendState();

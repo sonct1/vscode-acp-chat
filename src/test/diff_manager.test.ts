@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import * as vscode from "vscode";
 import { DiffManager } from "../acp/diff-manager";
 
 suite("DiffManager Test Suite", () => {
@@ -83,5 +84,44 @@ suite("DiffManager Test Suite", () => {
     diffManager.recordChange("file2.ts", "old2", "new2");
     diffManager.acceptAll();
     assert.strictEqual(diffManager.isEmpty(), true);
+  });
+
+  test("Disabled mode does not create a watcher or retain pending changes", () => {
+    const originalCreateFileSystemWatcher = vscode.workspace.createFileSystemWatcher;
+    let watcherCreated = false;
+    (vscode.workspace as any).createFileSystemWatcher = (...args: unknown[]) => {
+      watcherCreated = true;
+      return (originalCreateFileSystemWatcher as any).apply(
+        vscode.workspace,
+        args
+      );
+    };
+
+    const disabled = new DiffManager({ enabled: false });
+    let notifyCount = 0;
+    disabled.onDidChange(() => {
+      notifyCount += 1;
+    });
+
+    try {
+      const recorded = disabled.recordChange(
+        "/path/to/file.ts",
+        "old content",
+        "new content"
+      );
+      disabled.accept("/path/to/file.ts");
+      disabled.clear();
+
+      assert.strictEqual(disabled.isEnabled(), false);
+      assert.strictEqual(watcherCreated, false);
+      assert.strictEqual(recorded, false);
+      assert.deepStrictEqual(disabled.getPendingChanges(), []);
+      assert.strictEqual(disabled.getChange("/path/to/file.ts"), undefined);
+      assert.strictEqual(notifyCount, 0);
+    } finally {
+      disabled.dispose();
+      (vscode.workspace as any).createFileSystemWatcher =
+        originalCreateFileSystemWatcher;
+    }
   });
 });

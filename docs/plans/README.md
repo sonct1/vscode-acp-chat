@@ -25,8 +25,10 @@ Current plans:
 - [Full ACP Session ID Display](./implement-full-session-id-display.md) — show the complete ACP/Pi session id in multi-session UI metadata and remove short-id fallbacks.
 - [Split Multi-Session Manager Panel](./implement-split-session-manager-panel.md) — move full session management out of the chat webview into a dedicated panel plus quick switch flow.
 - [Multi-Session Chat Surface DOM Cache](./implement-multi-session-dom-surface-cache.md) — cache rendered transcript DOM per session inside the existing chat webview to avoid full replay on repeated switches.
+- [Multi-Session Input Draft Preservation](./implement-multi-session-input-draft-preservation.md) — preserve follow-up prompt drafts typed while an agent is running when final multi-session snapshots replay.
 - [Eager Multi-Session Runtime Loading](./implement-eager-multi-session-runtime.md) — auto-start the restored/opened multi-session draft's ACP runtime without creating an ACP session until user action.
 - [Searchable Model Picker](./implement-searchable-model-picker.md) — add search/filter support to the model selection dropdown.
 - [Secondary Sidebar Settings Action](./implement-secondary-sidebar-settings-action.md) — add a settings gear action to the ACP Chat secondary sidebar title area.
+- [Low-Resource Multi-Session Telemetry](./implement-low-resource-multi-session-telemetry.md) — remove live unread/diff/conflict session telemetry and disable costly multi-session bookkeeping for lower CPU/RAM use.
 
 Do not put long-lived technical design, API contracts, backlog items, active task status, or operational runbooks here. Use Beads for executable tasks and status.
