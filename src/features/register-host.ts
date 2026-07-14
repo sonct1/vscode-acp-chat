@@ -6,10 +6,14 @@ import {
 } from "./add-to-chat/host";
 import { registerOpenSettingsHostFeature } from "./open-settings/host";
 import { registerChatFontSizeHostFeature } from "./chat-font-size/host";
+import { registerClickableResourceLinksHostFeature } from "./clickable-resource-links/host";
 
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
   chatFontSize?: ReturnType<typeof registerChatFontSizeHostFeature>;
+  clickableResourceLinks?: ReturnType<
+    typeof registerClickableResourceLinksHostFeature
+  >;
   multiSession?: MultiSessionHostController;
   openSettings?: ReturnType<typeof registerOpenSettingsHostFeature>;
 }
@@ -23,6 +27,7 @@ export function registerHostFeatures(options: {
     chatFontSize: registerChatFontSizeHostFeature({
       postMessage: options.postMessage,
     }),
+    clickableResourceLinks: registerClickableResourceLinksHostFeature(),
   };
 
   if (MultiSessionHostController.isEnabled()) {

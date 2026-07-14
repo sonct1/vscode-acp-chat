@@ -59,9 +59,12 @@ export class DiffManager {
     path: string,
     oldText: string | null,
     newText: string
-  ): void {
+  ): boolean {
     const existing = this.changes.get(path);
     if (existing && existing.status === "pending") {
+      if (existing.oldText === oldText && existing.newText === newText) {
+        return false;
+      }
       this.changes.set(path, {
         ...existing,
         newText,
@@ -75,6 +78,7 @@ export class DiffManager {
       });
     }
     this.notify();
+    return true;
   }
 
   public getPendingChanges(): FileChange[] {

@@ -9,6 +9,7 @@ import {
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
 import { FileHandler } from "../acp/file-handler";
+import { recordStructuredDiffsFromContent } from "../acp/structured-diff-recorder";
 import { TerminalHandler } from "../acp/terminal-handler";
 import {
   AgentSessionManager,
@@ -49,6 +50,7 @@ interface WebviewMessage {
     | "sendMessage"
     | "ready"
     | "feature.multi-session.new"
+    | "feature.clickable-resource-links.openExternal"
     | "selectMode"
     | "selectModel"
     | "selectConfigOption"
@@ -84,6 +86,7 @@ interface WebviewMessage {
   }>;
   path?: string;
   href?: string;
+  url?: string;
   range?: { startLine: number; endLine: number };
   requestId?: string;
   outcome?: { outcome: "selected" | "cancelled"; optionId?: string };
@@ -372,6 +375,9 @@ export class ChatViewProvider
       if (
         await this.features.multiSession?.handleCoreMessage(message as never)
       ) {
+        return;
+      }
+      if (await this.features.clickableResourceLinks?.handleMessage(message)) {
         return;
       }
       switch (message.type) {
@@ -1261,6 +1267,13 @@ export class ChatViewProvider
     }
 
     const duration = state.startTime ? Date.now() - state.startTime : undefined;
+
+    if (update.status === "completed") {
+      recordStructuredDiffsFromContent(content, {
+        cwd: getWorkspaceRoot(),
+        diffManager: this.diffManager,
+      });
+    }
 
     this.postMessage({
       type: "toolCallComplete",

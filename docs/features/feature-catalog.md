@@ -19,6 +19,7 @@ This document records the current user-visible feature set of VSCode ACP Chat as
 | Document synchronization                               | Sends local document open/change/close/save/focus notifications to agents that advertise NES document support.                                 | `vscode-acp-chat.enableDocumentSync`.                                                                 | [`src/acp/document-sync.ts`](../../src/acp/document-sync.ts), [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts)                                                                                                                                                                                           |
 | Transcript navigation helpers                          | Speeds up prompt and response navigation with keyboard recall and assistant-turn controls.                                                     | Up/Down in prompt, assistant previous/next header buttons.                                            | [`src/features/prompt-history-navigation/`](../../src/features/prompt-history-navigation/), [`src/features/assistant-turn-navigation/`](../../src/features/assistant-turn-navigation/)                                                                                                                                                   |
 | Markdown table copy                                    | Adds table-level copy controls for rendered assistant Markdown tables.                                                                         | Table hover/focus toolbar in assistant messages.                                                      | [`src/features/table-copy/`](../../src/features/table-copy/)                                                                                                                                                                                                                                                                             |
+| Clickable chat resource links                          | Turns high-confidence file paths, file URLs, and web URLs in assistant responses into clickable links.                                         | Assistant Markdown text and inline code links.                                                        | [`src/features/clickable-resource-links/`](../../src/features/clickable-resource-links/), [`src/views/chat.ts`](../../src/views/chat.ts), [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts)                                                                                             |
 | Settings and diagnostics                               | Opens extension-scoped settings and optionally logs raw ACP session updates for debugging.                                                     | `vscode-acp-chat.openSettings`, `vscode-acp-chat.debug`.                                              | [`src/features/open-settings/host.ts`](../../src/features/open-settings/host.ts), [`src/acp/client.ts`](../../src/acp/client.ts)                                                                                                                                                                                                         |
 
 ## Feature details
@@ -93,7 +94,7 @@ Capabilities surfaced to users:
 
 ### File-change review and diff summary
 
-Agent file writes go through `FileHandler`, which snapshots previous content and records pending changes in `DiffManager`. The diff summary panel shows changed files, line statistics, and actions:
+Agent file writes go through `FileHandler`, which snapshots previous content and records pending changes in `DiffManager`. Completed ACP tool calls that include valid structured diff content (`type: "diff"`, target path, `oldText`, and `newText`) are also bridged into the same `DiffManager`, so agents that report applied edits as structured diffs can populate the collective panel without using `client.fs.writeTextFile`. The diff summary panel shows changed files, line statistics, and actions:
 
 - review a file in VS Code diff view;
 - accept one pending change;
@@ -101,7 +102,7 @@ Agent file writes go through `FileHandler`, which snapshots previous content and
 - accept all pending changes;
 - discard all pending changes.
 
-`vscode-acp-chat.enableDiffSummary` controls whether the collective changed-files panel is posted to the webview.
+`vscode-acp-chat.enableDiffSummary` controls whether the collective changed-files panel is posted to the webview. Structured diffs are best-effort and shape-driven: malformed diffs and diffs without safe rollback data are skipped.
 
 In multi-session mode, file mutations are coordinated per session. Accept/discard checks verify that the file still matches the session’s expected version; after a write, other sessions' pending diffs can be marked stale or conflicted.
 
@@ -139,7 +140,7 @@ The webview requests resync if it detects a delta sequence gap and ignores stale
 
 ### Session history and retention
 
-History support is agent-capability gated. If the selected agent supports listing/loading/deleting sessions, the extension uses native ACP session APIs. The local `AgentSessionManager` also records session metadata per agent so agents without native `session/list` can still show locally known sessions where load is possible.
+History support is agent-capability gated. If the selected agent supports listing/loading/deleting sessions, the extension uses native ACP session APIs. The local `AgentSessionManager` also records session metadata per agent so agents without native `session/list` can still show locally known sessions where load is possible. The bundled Pi adapter defaults `vscode-acp-chat.pi.historyLoadMode` to `full`, replaying the active-path transcript from Pi JSONL session files during `session/load`; `compacted` preserves the previous behavior of replaying Pi's compacted `get_messages` RPC response. Full replay is display-only and does not resend the raw transcript to the model when continuing a chat.
 
 Commands:
 
@@ -194,6 +195,12 @@ Both features observe DOM state and reset when relevant input or transcript muta
 Rendered assistant Markdown tables get an inline copy toolbar. The primary action copies Markdown; a menu can copy HTML or displayed tabular text. The feature uses browser clipboard APIs and temporary copied-state feedback.
 
 This is webview-only and has no commands or settings.
+
+### Clickable chat resource links
+
+Assistant Markdown text is decorated after render so high-confidence resources are clickable without changing Markdown parsing. Detected resources include `http://`, `https://`, `www.` URLs, `file://` URLs, absolute paths, explicit relative paths, workspace-style paths with file-like final segments, and common root config filenames. Inline code is linked only when the whole code span is exactly one resource candidate.
+
+File links reuse the existing `openFile` webview message and request existence checks for auto-detected links. Web links are intercepted in the webview and opened by the extension host through `vscode.env.openExternal` after `http:`/`https:` protocol validation. Fenced code blocks, tool output, chips, buttons, table controls, and existing Markdown links are not rewrapped.
 
 ### Settings and diagnostics
 

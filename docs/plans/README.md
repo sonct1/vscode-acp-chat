@@ -17,6 +17,7 @@ Current plans:
 - [Clickable Chat Resource Links](./implement-clickable-chat-resource-links.md) — auto-detect file paths and web URLs in assistant responses so they can be clicked from the webview.
 - [Prompt History Navigation](./implement-prompt-history-navigation.md) — use ArrowUp/ArrowDown in the prompt input to navigate user messages in the current chat session.
 - [Readable Inline Diff](./implement-readable-inline-diff.md) — improve inline edit/write diff readability with theme-aware styling, line numbers, hunk headers, full diff actions, and large-diff safeguards.
+- [Structured Diff Summary Bridge](./implement-structured-diff-summary-bridge.md) — record structured tool-call diffs into `DiffManager` so the diff summary panel covers non-`writeTextFile` edits.
 - [Bundled Pi ACP Agent](./implement-bundled-pi-agent.md) — ship Pi as a built-in agent by bundling/forking the `pi-acp` adapter into the extension.
 - [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md) — fix bundled Pi history loading by replaying full active-path transcript from Pi JSONL files instead of compacted RPC state.
 - [Pi Agent Toolbar Thinking and Context Usage Fixes](./implement-pi-agent-toolbar-context-fixes.md) — remove duplicate Pi thinking selectors and surface Pi context/token usage in the chat toolbar.

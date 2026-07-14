@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 import { TranscriptStore } from "../../features/multi-session/transcript-store";
 import { WorkspaceMutationCoordinator } from "../../features/multi-session/workspace-mutation-coordinator";
@@ -123,8 +126,15 @@ class FakeClient {
     return () => {};
   }
 
-  setOnReadTextFile(): void {}
-  setOnWriteTextFile(): void {}
+  readTextFile?: (params: unknown) => Promise<unknown>;
+  writeTextFile?: (params: unknown) => Promise<unknown>;
+
+  setOnReadTextFile(callback: (params: unknown) => Promise<unknown>): void {
+    this.readTextFile = callback;
+  }
+  setOnWriteTextFile(callback: (params: unknown) => Promise<unknown>): void {
+    this.writeTextFile = callback;
+  }
   setOnCreateTerminal(): void {}
   setOnTerminalOutput(): void {}
   setOnWaitForTerminalExit(): void {}
@@ -358,6 +368,208 @@ suite("multi-session feature", () => {
           (message.event as any)?.message?.name === "B tool"
       )
     );
+
+    clients[0].resolvePrompt();
+    clients[1].resolvePrompt();
+    await Promise.all([promptA, promptB]);
+    controller.dispose();
+  });
+
+  test("structured tool diffs are scoped to the owning session", async () => {
+    const { controller, messages, clients } = createController();
+    const promptA = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionA = controller.getStateForTest().activeLocalSessionId!;
+
+    await controller.newChat();
+    const promptB = controller.sendActiveMessage("B");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionB = controller.getStateForTest().activeLocalSessionId!;
+
+    clients[0].sessionUpdate?.({
+      sessionId: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-a",
+        title: "Edit",
+        kind: "edit",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "a.ts",
+            oldText: "before a",
+            newText: "after a",
+          },
+        ],
+      },
+    });
+    clients[1].sessionUpdate?.({
+      sessionId: "b",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-b",
+        title: "Edit",
+        kind: "edit",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "b.ts",
+            oldText: "before b",
+            newText: "after b",
+          },
+        ],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = controller.getStateForTest();
+    assert.strictEqual(
+      state.sessions.find((session) => session.localSessionId === sessionA)
+        ?.diffCount,
+      1
+    );
+    assert.strictEqual(
+      state.sessions.find((session) => session.localSessionId === sessionB)
+        ?.diffCount,
+      1
+    );
+
+    await controller.handleMessage({
+      type: "feature.multi-session.activate",
+      localSessionId: sessionA,
+    });
+    const snapshotA = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.multi-session.snapshot" &&
+          message.activeLocalSessionId === sessionA
+      ) as any;
+    assert.deepStrictEqual(
+      snapshotA.diffChanges.map((change: any) => change.path),
+      [path.join(process.cwd(), "a.ts")]
+    );
+
+    await controller.handleMessage({
+      type: "feature.multi-session.activate",
+      localSessionId: sessionB,
+    });
+    const snapshotB = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.multi-session.snapshot" &&
+          message.activeLocalSessionId === sessionB
+      ) as any;
+    assert.deepStrictEqual(
+      snapshotB.diffChanges.map((change: any) => change.path),
+      [path.join(process.cwd(), "b.ts")]
+    );
+
+    clients[0].resolvePrompt();
+    clients[1].resolvePrompt();
+    await Promise.all([promptA, promptB]);
+    controller.dispose();
+  });
+
+  test("structured tool diff does not duplicate a matching writeTextFile change", async () => {
+    const { controller, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionId = controller.getStateForTest().activeLocalSessionId!;
+
+    const duplicatePath = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-duplicate-")),
+      "duplicate.ts"
+    );
+    await clients[0].writeTextFile?.({ path: duplicatePath, content: "after" });
+    clients[0].sessionUpdate?.({
+      sessionId: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-duplicate",
+        title: "Write",
+        kind: "write",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: duplicatePath,
+            oldText: null,
+            newText: "after",
+          },
+        ],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const active = controller
+      .getStateForTest()
+      .sessions.find((session) => session.localSessionId === sessionId)!;
+    assert.strictEqual(active.diffCount, 1);
+    assert.strictEqual(active.conflictedDiffCount, 0);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("structured tool diffs mark other sessions pending on the same path as conflicted", async () => {
+    const { controller, clients } = createController();
+    const promptA = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionA = controller.getStateForTest().activeLocalSessionId!;
+
+    clients[0].sessionUpdate?.({
+      sessionId: "a",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-a",
+        title: "Edit",
+        kind: "edit",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "/tmp/conflict.ts",
+            oldText: "base",
+            newText: "from a",
+          },
+        ],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await controller.newChat();
+    const promptB = controller.sendActiveMessage("B");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    clients[1].sessionUpdate?.({
+      sessionId: "b",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-b",
+        title: "Edit",
+        kind: "edit",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "/tmp/conflict.ts",
+            oldText: "from a",
+            newText: "from b",
+          },
+        ],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const sessionAState = controller
+      .getStateForTest()
+      .sessions.find((session) => session.localSessionId === sessionA)!;
+    assert.strictEqual(sessionAState.diffCount, 1);
+    assert.strictEqual(sessionAState.conflictedDiffCount, 1);
 
     clients[0].resolvePrompt();
     clients[1].resolvePrompt();

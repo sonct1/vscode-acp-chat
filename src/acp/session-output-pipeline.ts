@@ -52,6 +52,7 @@ export interface SessionOutputPipelineOptions {
   onMetadataChanged?: (metadata: Partial<SessionMetadata> | null) => void;
   onContextUsageChanged?: (usage: ContextUsageUpdate | null) => void;
   onSessionInfoChanged?: (update: Record<string, unknown>) => void;
+  onStructuredDiffContent?: (content: unknown) => void;
 }
 
 function createState(): SessionOutputState {
@@ -495,6 +496,10 @@ export class SessionOutputPipeline implements vscode.Disposable {
           newText: String(newText),
         });
       }
+    }
+
+    if (update.status === "completed") {
+      this.options.onStructuredDiffContent?.(content);
     }
 
     this.options.emit({

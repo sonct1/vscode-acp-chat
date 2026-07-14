@@ -88,7 +88,10 @@ export function activate(context: vscode.ExtensionContext) {
         await acpClient?.reloadMcpServers();
       }
 
-      if (e.affectsConfiguration("vscode-acp-chat.customAgents")) {
+      if (
+        e.affectsConfiguration("vscode-acp-chat.customAgents") ||
+        e.affectsConfiguration("vscode-acp-chat.pi.historyLoadMode")
+      ) {
         getAgentsWithStatus(true); // Force refresh agents cache and re-validate
       }
     }

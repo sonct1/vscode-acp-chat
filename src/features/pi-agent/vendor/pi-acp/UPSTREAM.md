@@ -11,6 +11,7 @@
 - Built by the VS Code extension's root `esbuild.js` into `dist/pi-acp/index.mjs`.
 - No vendored `node_modules` or generated upstream `dist/` files are committed.
 - The adapter is launched by the extension with VS Code/Electron in Node mode and still requires the `pi` CLI on `PATH`.
+- `session/load` locally supports `VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE=full|compacted`; `full` is the default and replays the active-path transcript from Pi JSONL session files, falling back to `get_messages` only when JSONL replay fails or yields no replayable messages.
 
 ## Sync procedure
 

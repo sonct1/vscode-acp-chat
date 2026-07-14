@@ -70,7 +70,7 @@ test('PiAcpAgent: listSessions lists pi sessions and loadSession replays history
     assert.equal(s?.cwd, '/tmp/project')
     assert.equal(s?.title, 'My Named Session')
 
-    // 2) load session: mock spawn to return fake proc with getMessages
+    // 2) load session: mock spawn to return fake proc. Default full replay should not call getMessages.
     const originalSpawn = PiRpcProcess.spawn
 
     ;(PiRpcProcess as any).spawn = async (params: any) => {
@@ -82,12 +82,9 @@ test('PiAcpAgent: listSessions lists pi sessions and loadSession replays history
         onEvent: () => () => {
           // noop unsubscribe
         },
-        getMessages: async () => ({
-          messages: [
-            { role: 'user', content: 'Hello' },
-            { role: 'assistant', content: [{ type: 'text', text: 'Hi there!' }] }
-          ]
-        }),
+        getMessages: async () => {
+          throw new Error('getMessages should not be called when full JSONL replay succeeds')
+        },
         getAvailableModels: async () => ({ models: [] }),
         getState: async () => ({ thinkingLevel: 'medium' })
       } as any

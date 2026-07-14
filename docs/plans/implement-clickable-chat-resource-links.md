@@ -1,5 +1,13 @@
 # Implement clickable chat resource links
 
+Status: Implemented 2026-07-14.
+
+Completion notes:
+
+- Added `src/features/clickable-resource-links/` with pure detection, webview DOM decoration, external URL host handling, and tests.
+- Auto-detected file links post `openFile` with `checkExists: true`; web links post `feature.clickable-resource-links.openExternal` and are opened through the host with `http:`/`https:` validation.
+- Updated feature catalog and kept core integration limited to feature registration, host message dispatch, and existing file-link click handling.
+
 ## Mục tiêu
 
 Nhận diện và biến các đường dẫn trong transcript ACP Chat thành link có thể click, bao gồm:

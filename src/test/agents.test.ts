@@ -41,6 +41,7 @@ suite("agents", () => {
       assert.notStrictEqual(pi?.command, "pi-acp");
       assert.strictEqual(pi?.availabilityCommand, "pi");
       assert.strictEqual(pi?.env?.ELECTRON_RUN_AS_NODE, "1");
+      assert.strictEqual(pi?.env?.VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE, "full");
       assert.ok(
         pi?.args.some((arg) =>
           arg.replace(/\\/g, "/").endsWith("pi-acp/index.mjs")

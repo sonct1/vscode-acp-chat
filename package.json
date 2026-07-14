@@ -201,6 +201,15 @@
           "minimum": 1,
           "description": "Maximum number of persisted sessions to keep per agent. Oldest sessions are removed first."
         },
+        "vscode-acp-chat.pi.historyLoadMode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "compacted"
+          ],
+          "default": "full",
+          "description": "Controls how the bundled Pi agent replays session history. 'full' reads the active-path transcript from Pi JSONL files; 'compacted' uses Pi's compacted get_messages RPC context."
+        },
         "vscode-acp-chat.customAgents": {
           "type": "array",
           "default": [],

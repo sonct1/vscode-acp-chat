@@ -1953,7 +1953,7 @@ suite("Webview", () => {
           href: "src/extension.ts",
         });
 
-        // Test external link (should not post openFile message)
+        // Test external link
         mockVsCode._clearMessages();
         externalLink.dispatchEvent(
           new dom.window.MouseEvent("click", {
@@ -1962,7 +1962,12 @@ suite("Webview", () => {
           })
         );
         messages = mockVsCode._getMessages();
-        assert.strictEqual(messages.length, 0);
+        assert.deepStrictEqual(messages, [
+          {
+            type: "feature.clickable-resource-links.openExternal",
+            url: "https://github.com",
+          },
+        ]);
 
         // Test anchor link (should not post openFile message)
         mockVsCode._clearMessages();

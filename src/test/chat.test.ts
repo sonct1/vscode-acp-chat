@@ -960,6 +960,18 @@ suite("ChatViewProvider", () => {
         },
       });
 
+      const diffSummary = messages.find((m) => m.type === "diffSummary");
+      assert.ok(diffSummary, "structured diff should update the summary panel");
+      assert.deepStrictEqual(diffSummary.changes, [
+        {
+          path: "/test/project/NewFile.kt",
+          relativePath: vscode.workspace.asRelativePath("/test/project/NewFile.kt"),
+          oldText: null,
+          newText: "class NewFile\n",
+          status: "pending",
+        },
+      ]);
+
       const complete = messages.find((m) => m.type === "toolCallComplete");
       assert.ok(complete, "completed tool_call should finalize the tool");
       assert.strictEqual(complete.toolCallId, "file-change-1");
@@ -979,6 +991,62 @@ suite("ChatViewProvider", () => {
         false,
         "completed tool_call should not leave stale tool call state"
       );
+    });
+
+    test("does not post bottom diff summary when disabled", async () => {
+      const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+      const previous = config.inspect<boolean>("enableDiffSummary")?.globalValue;
+      await config.update(
+        "enableDiffSummary",
+        false,
+        vscode.ConfigurationTarget.Global
+      );
+      try {
+        const provider = new ChatViewProvider(
+          mockExtensionUri,
+          acpClient as any,
+          memento as any
+        );
+        const messages: any[] = [];
+        (provider as any).postMessage = (msg: any) => messages.push(msg);
+
+        await (provider as any).handleSessionUpdate({
+          sessionId: "test",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "file-change-summary-disabled",
+            title: "Editing files",
+            kind: "edit",
+            status: "completed",
+            content: [
+              {
+                type: "diff",
+                path: "/test/project/Disabled.kt",
+                oldText: "before\n",
+                newText: "after\n",
+              },
+            ],
+          },
+        });
+
+        assert.ok(messages.some((m) => m.type === "toolCallComplete"));
+        assert.ok(!messages.some((m) => m.type === "diffSummary"));
+        assert.deepStrictEqual((provider as any).diffManager.getPendingChanges(), [
+          {
+            path: "/test/project/Disabled.kt",
+            oldText: "before\n",
+            newText: "after\n",
+            status: "pending",
+          },
+        ]);
+        provider.dispose();
+      } finally {
+        await config.update(
+          "enableDiffSummary",
+          previous,
+          vscode.ConfigurationTarget.Global
+        );
+      }
     });
 
     test("treats a failed tool_call as a complete event", async () => {

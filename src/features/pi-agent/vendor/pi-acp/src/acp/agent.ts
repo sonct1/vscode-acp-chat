@@ -26,6 +26,8 @@ import { SessionManager, type PiAcpSession } from './session.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSession } from './pi-sessions.js'
+import { getPiHistoryLoadModeFromEnv } from './pi-history-load-mode.js'
+import { readPiSessionTranscript, type PiReplayMessage } from './pi-session-transcript.js'
 import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
 import { toolResultToText } from './translate/pi-tools.js'
 import { promptToPiMessage } from './translate/prompt.js'
@@ -103,6 +105,88 @@ function mergeCommands(a: AvailableCommand[], b: AvailableCommand[]): AvailableC
   }
 
   return out
+}
+
+async function readCompactedMessagesFromRpc(proc: PiRpcProcess): Promise<PiReplayMessage[]> {
+  const data = (await proc.getMessages()) as any
+  const messages: unknown[] = Array.isArray(data?.messages) ? data.messages : []
+
+  return messages
+    .map((message: unknown): PiReplayMessage | null => {
+      const role = String((message as any)?.role ?? '')
+      if (role === 'user') return { role, content: (message as any)?.content }
+      if (role === 'assistant') return { role, content: (message as any)?.content }
+      if (role === 'toolResult') return { role, message }
+      return null
+    })
+    .filter((message): message is PiReplayMessage => message !== null)
+}
+
+async function replayPiMessages(
+  conn: AgentSideConnection,
+  sessionId: string,
+  messages: PiReplayMessage[]
+): Promise<void> {
+  for (const replayMessage of messages) {
+    if (replayMessage.role === 'user') {
+      const text = normalizePiMessageText(replayMessage.content)
+      if (text) {
+        await conn.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text }
+          }
+        })
+      }
+    }
+
+    if (replayMessage.role === 'assistant') {
+      const text = normalizePiAssistantText(replayMessage.content)
+      if (text) {
+        await conn.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text }
+          }
+        })
+      }
+    }
+
+    if (replayMessage.role === 'toolResult') {
+      const message = replayMessage.message
+      const toolName = String((message as any)?.toolName ?? 'tool')
+      const toolCallId = String((message as any)?.toolCallId ?? crypto.randomUUID())
+      const isError = Boolean((message as any)?.isError)
+
+      // Create a synthetic ACP tool call to render historic tool usage.
+      await conn.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId,
+          title: toolName,
+          kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
+          status: 'completed',
+          rawInput: null,
+          rawOutput: message
+        }
+      })
+
+      const text = toolResultToText(message)
+      await conn.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId,
+          status: isError ? 'failed' : 'completed',
+          content: text ? [{ type: 'content', content: { type: 'text', text } }] : null,
+          rawOutput: message
+        }
+      })
+    }
+  }
 }
 import { fileURLToPath } from 'node:url'
 
@@ -949,71 +1033,30 @@ export class PiAcpAgent implements ACPAgent {
       sessionFile: stored.sessionFile
     })
 
-    // Replay full conversation history.
-    const data = (await proc.getMessages()) as any
-    const messages = Array.isArray(data?.messages) ? data.messages : []
+    const loadMode = getPiHistoryLoadModeFromEnv()
+    let messages: PiReplayMessage[] = []
 
-    for (const m of messages) {
-      const role = String(m?.role ?? '')
-
-      if (role === 'user') {
-        const text = normalizePiMessageText(m?.content)
-        if (text) {
-          await this.conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'user_message_chunk',
-              content: { type: 'text', text }
-            }
-          })
-        }
+    if (loadMode === 'compacted') {
+      messages = await readCompactedMessagesFromRpc(proc)
+    } else {
+      try {
+        messages = await readPiSessionTranscript(stored.sessionFile)
+      } catch (e) {
+        console.warn(
+          `[pi-acp] Failed to read full Pi session transcript from ${stored.sessionFile}; falling back to compacted get_messages:`,
+          e
+        )
       }
 
-      if (role === 'assistant') {
-        const text = normalizePiAssistantText(m?.content)
-        if (text) {
-          await this.conn.sessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'agent_message_chunk',
-              content: { type: 'text', text }
-            }
-          })
-        }
-      }
-
-      if (role === 'toolResult') {
-        const toolName = String((m as any)?.toolName ?? 'tool')
-        const toolCallId = String((m as any)?.toolCallId ?? crypto.randomUUID())
-        const isError = Boolean((m as any)?.isError)
-
-        // Create a synthetic ACP tool call to render historic tool usage.
-        await this.conn.sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: 'tool_call',
-            toolCallId,
-            title: toolName,
-            kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
-            status: 'completed',
-            rawInput: null,
-            rawOutput: m
-          }
-        })
-
-        const text = toolResultToText(m)
-        await this.conn.sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: 'tool_call_update',
-            toolCallId,
-            status: isError ? 'failed' : 'completed',
-            content: text ? [{ type: 'content', content: { type: 'text', text } }] : null,
-            rawOutput: m
-          }
-        })
+      if (messages.length === 0) {
+        console.warn(
+          `[pi-acp] Full Pi session transcript from ${stored.sessionFile} yielded no replayable messages; falling back to compacted get_messages.`
+        )
+        messages = await readCompactedMessagesFromRpc(proc)
       }
     }
+
+    await replayPiMessages(this.conn, session.sessionId, messages)
 
     const { configOptions, models, modes } = await getSessionConfiguration(proc)
 

@@ -21,6 +21,7 @@ import type {
 } from "../../acp/session-manager";
 import { DiffManager } from "../../acp/diff-manager";
 import { FileHandler } from "../../acp/file-handler";
+import { recordStructuredDiffsFromContent } from "../../acp/structured-diff-recorder";
 import { TerminalHandler } from "../../acp/terminal-handler";
 import { DocumentSyncManager } from "../../acp/document-sync";
 import {
@@ -727,6 +728,19 @@ export class MultiSessionHostController implements vscode.Disposable {
             this.touch(session);
             this.sendState();
           }
+        },
+        onStructuredDiffContent: (content) => {
+          recordStructuredDiffsFromContent(content, {
+            cwd: session.cwd,
+            diffManager: resources.diffManager,
+            onDidRecord: (path, oldText, newText) =>
+              this.mutationCoordinator.didWrite(
+                session.localSessionId,
+                path,
+                oldText,
+                newText
+              ),
+          });
         },
       });
       const queue = new AsyncSerialProcessor<SessionNotification>((update) =>

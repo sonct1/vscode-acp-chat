@@ -23,99 +23,103 @@ export interface AgentWithStatus extends AgentConfig {
   available: boolean;
 }
 
-export const AGENTS: AgentConfig[] = [
-  {
-    id: "opencode",
-    name: "OpenCode",
-    command: "opencode",
-    args: ["acp"],
-  },
-  {
-    id: "claude-code",
-    name: "Claude Code",
-    command: "npx",
-    args: ["-y", "@agentclientprotocol/claude-agent-acp@latest"],
-  },
-  {
-    id: "codex",
-    name: "Codex CLI",
-    command: "npx",
-    args: ["-y", "@agentclientprotocol/codex-acp@latest"],
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    command: "gemini",
-    args: ["--acp"],
-  },
-  {
-    id: "goose",
-    name: "Goose",
-    command: "goose",
-    args: ["acp"],
-  },
-  {
-    id: "amp",
-    name: "Amp",
-    command: "amp",
-    args: ["acp"],
-  },
-  {
-    id: "aider",
-    name: "Aider",
-    command: "aider",
-    args: ["--acp"],
-  },
-  {
-    id: "augment",
-    name: "Augment Code",
-    command: "augment",
-    args: ["acp"],
-  },
-  {
-    id: "kimi",
-    name: "Kimi CLI",
-    command: "kimi",
-    args: ["--acp"],
-  },
-  {
-    id: "mistral-vibe",
-    name: "Mistral Vibe",
-    command: "vibe",
-    args: ["acp"],
-  },
-  {
-    id: "openhands",
-    name: "OpenHands",
-    command: "openhands",
-    args: ["acp"],
-  },
-  {
-    id: "qwen-code",
-    name: "Qwen Code",
-    command: "qwen",
-    args: ["--acp"],
-  },
-  {
-    id: "kiro",
-    name: "Kiro CLI",
-    command: "kiro-cli",
-    args: ["acp"],
-  },
-  {
-    id: "cursor",
-    name: "Cursor",
-    command: "cursor-agent",
-    args: ["acp"],
-  },
-  {
-    id: "codebuddy",
-    name: "CodeBuddy Code",
-    command: "codebuddy",
-    args: ["--acp"],
-  },
-  createPiAgentConfig(),
-];
+function getBuiltinAgents(): AgentConfig[] {
+  return [
+    {
+      id: "opencode",
+      name: "OpenCode",
+      command: "opencode",
+      args: ["acp"],
+    },
+    {
+      id: "claude-code",
+      name: "Claude Code",
+      command: "npx",
+      args: ["-y", "@agentclientprotocol/claude-agent-acp@latest"],
+    },
+    {
+      id: "codex",
+      name: "Codex CLI",
+      command: "npx",
+      args: ["-y", "@agentclientprotocol/codex-acp@latest"],
+    },
+    {
+      id: "gemini",
+      name: "Gemini CLI",
+      command: "gemini",
+      args: ["--acp"],
+    },
+    {
+      id: "goose",
+      name: "Goose",
+      command: "goose",
+      args: ["acp"],
+    },
+    {
+      id: "amp",
+      name: "Amp",
+      command: "amp",
+      args: ["acp"],
+    },
+    {
+      id: "aider",
+      name: "Aider",
+      command: "aider",
+      args: ["--acp"],
+    },
+    {
+      id: "augment",
+      name: "Augment Code",
+      command: "augment",
+      args: ["acp"],
+    },
+    {
+      id: "kimi",
+      name: "Kimi CLI",
+      command: "kimi",
+      args: ["--acp"],
+    },
+    {
+      id: "mistral-vibe",
+      name: "Mistral Vibe",
+      command: "vibe",
+      args: ["acp"],
+    },
+    {
+      id: "openhands",
+      name: "OpenHands",
+      command: "openhands",
+      args: ["acp"],
+    },
+    {
+      id: "qwen-code",
+      name: "Qwen Code",
+      command: "qwen",
+      args: ["--acp"],
+    },
+    {
+      id: "kiro",
+      name: "Kiro CLI",
+      command: "kiro-cli",
+      args: ["acp"],
+    },
+    {
+      id: "cursor",
+      name: "Cursor",
+      command: "cursor-agent",
+      args: ["acp"],
+    },
+    {
+      id: "codebuddy",
+      name: "CodeBuddy Code",
+      command: "codebuddy",
+      args: ["--acp"],
+    },
+    createPiAgentConfig(),
+  ];
+}
+
+export const AGENTS: AgentConfig[] = getBuiltinAgents();
 
 /**
  * Retrieves custom agents from VS Code workspace configuration.
@@ -131,9 +135,10 @@ function getCustomAgents(): AgentConfig[] {
  */
 function getMergedAgents(): AgentConfig[] {
   const customAgents = getCustomAgents();
-  const builtinIds = new Set(AGENTS.map((a) => a.id));
+  const builtinAgents = getBuiltinAgents();
+  const builtinIds = new Set(builtinAgents.map((a) => a.id));
 
-  const merged: AgentConfig[] = AGENTS.map((builtin) => {
+  const merged: AgentConfig[] = builtinAgents.map((builtin) => {
     const custom = customAgents.find((c) => c.id === builtin.id);
     return custom ?? builtin;
   });

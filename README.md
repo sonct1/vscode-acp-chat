@@ -117,6 +117,8 @@ You can add custom agents via VS Code settings:
 > [!NOTE]
 > Custom agents with the same `id` as a built-in agent will **replace** the built-in configuration.
 > To use the bundled Pi adapter, remove any old custom agent with `id: "pi"` and `command: "pi-acp"`. Keep a custom `pi` entry only when intentionally overriding the bundled adapter.
+>
+> Bundled Pi history loading defaults to `vscode-acp-chat.pi.historyLoadMode: "full"`, which replays the active-path transcript from Pi JSONL session files so compacted Pi sessions still show earlier conversation turns in the UI. Set it to `"compacted"` to use Pi's compacted `get_messages` RPC context instead.
 
 ## 👨‍💻 Development
 

@@ -293,6 +293,30 @@ body {
   color: var(--vscode-textLink-activeForeground);
 }
 
+.message.assistant .acp-resource-link {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.message.assistant .acp-resource-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.message.assistant .acp-inline-code-link {
+  text-decoration: none;
+}
+
+.message.assistant .acp-inline-code-link:hover,
+.message.assistant .acp-inline-code-link:focus-visible {
+  text-decoration: underline;
+}
+
+.message.assistant .acp-inline-code-link code {
+  color: inherit;
+}
+
 /* Thinking Indicator */
 .thinking {
   display: inline-block;

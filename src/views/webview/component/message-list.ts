@@ -498,10 +498,14 @@ export class MessageListComponent implements MessageHandler {
 
       event.preventDefault();
       event.stopPropagation();
-      this.ctx.vscode.postMessage({
+      const message: { type: "openFile"; href: string; checkExists?: boolean } = {
         type: "openFile",
         href,
-      });
+      };
+      if (target.dataset.acpCheckExists === "true") {
+        message.checkExists = true;
+      }
+      this.ctx.vscode.postMessage(message);
     });
   }
 
