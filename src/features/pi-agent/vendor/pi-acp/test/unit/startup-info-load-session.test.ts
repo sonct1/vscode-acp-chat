@@ -11,6 +11,9 @@ class FakeStore {
   upsert() {
     // noop
   }
+  upsertMany() {
+    // noop
+  }
 }
 
 test('PiAcpAgent: does not emit startup info on loadSession', async () => {

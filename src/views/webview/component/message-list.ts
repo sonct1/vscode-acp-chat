@@ -34,6 +34,10 @@ export class MessageListComponent implements MessageHandler {
   private actionButtons: ActionButtonsComponent;
   private chipRenderer: ChipRendererComponent;
   private currentAssistantMessage: HTMLElement | null = null;
+  private snapshotReplayDepth = 0;
+  private snapshotCompletedAssistantMessages: HTMLElement[] = [];
+  private pendingSnapshotText = "";
+  private pendingSnapshotThought = "";
 
   private isAutoScrollEnabled = true;
   private pendingBottomScrollFrame: number | null = null;
@@ -85,6 +89,7 @@ export class MessageListComponent implements MessageHandler {
         "streamEnd",
         "thoughtChunk",
         "toolCallStart",
+        "toolCallProgress",
         "toolCallComplete",
       ],
       this
@@ -114,6 +119,8 @@ export class MessageListComponent implements MessageHandler {
         return this.handleThoughtChunk(msg);
       case "toolCallStart":
         return this.handleToolCallStart(msg);
+      case "toolCallProgress":
+        return this.handleToolCallProgress(msg);
       case "toolCallComplete":
         return this.handleToolCallComplete(msg);
     }
@@ -124,6 +131,7 @@ export class MessageListComponent implements MessageHandler {
   // -------------------------------------------------------------------
 
   private handleUserMessage(msg: ExtensionMessage): void {
+    this.flushSnapshotContent();
     // Always reset assistant state before a new turn
     this.currentAssistantMessage = null;
     this.blockManager.reset();
@@ -134,6 +142,7 @@ export class MessageListComponent implements MessageHandler {
   }
 
   private handleStreamStart(): void {
+    this.flushSnapshotContent();
     this.currentAssistantMessage = null;
     this.blockManager.reset();
     this.setGenerating(true);
@@ -141,6 +150,11 @@ export class MessageListComponent implements MessageHandler {
 
   private handleStreamChunk(msg: ExtensionMessage): void {
     if (!msg.text) return;
+    if (this.isSnapshotReplay() && msg.finalized) {
+      this.flushSnapshotThought();
+      this.pendingSnapshotText += msg.text;
+      return;
+    }
     const parentEl = this.ensureAssistantMessage();
     const block = this.blockManager.ensureBlock(
       "text",
@@ -152,19 +166,19 @@ export class MessageListComponent implements MessageHandler {
   }
 
   private handleStreamEnd(): void {
+    this.flushSnapshotContent();
     this.blockManager.clearStaleRunningToolIndicators();
     this.blockManager.finalizeAll();
     this.setGenerating(false);
 
     if (this.currentAssistantMessage) {
-      this.actionButtons.render(this.currentAssistantMessage, {
-        onCopyToInput: (text) => {
-          this.onCopyToInput?.(text);
-        },
-        scrollToTop: () => this.scrollToTop(),
-        scrollToPreviousUserMessage: (el) =>
-          this.scrollToPreviousUserMessage(el),
-      });
+      if (this.isSnapshotReplay()) {
+        this.snapshotCompletedAssistantMessages.push(
+          this.currentAssistantMessage
+        );
+      } else {
+        this.renderActionButtons(this.currentAssistantMessage);
+      }
       this.currentAssistantMessage = null;
     }
     this.scrollToBottom();
@@ -172,6 +186,11 @@ export class MessageListComponent implements MessageHandler {
 
   private handleThoughtChunk(msg: ExtensionMessage): void {
     if (!msg.text) return;
+    if (this.isSnapshotReplay() && msg.finalized) {
+      this.flushSnapshotText();
+      this.pendingSnapshotThought += msg.text;
+      return;
+    }
     const parentEl = this.ensureAssistantMessage();
     const block = this.blockManager.ensureBlock(
       "thought",
@@ -183,6 +202,7 @@ export class MessageListComponent implements MessageHandler {
   }
 
   private handleToolCallStart(msg: ExtensionMessage): void {
+    this.flushSnapshotContent();
     if (!msg.toolCallId || !msg.name) return;
     const parentEl = this.ensureAssistantMessage();
     const block = this.blockManager.ensureToolBlock(
@@ -191,6 +211,7 @@ export class MessageListComponent implements MessageHandler {
       this.elements.typingIndicatorEl
     );
     if (block) {
+      if (!block.acceptRevision(msg.revision)) return;
       if (msg.kind) block.kind = msg.kind;
       if (msg.name) block.title = msg.name;
 
@@ -200,12 +221,46 @@ export class MessageListComponent implements MessageHandler {
         kind: msg.kind,
         status: "in_progress",
         rawInput: msg.rawInput,
+        revision: msg.revision,
       });
     }
     this.scrollToBottom();
   }
 
+  private handleToolCallProgress(msg: ExtensionMessage): void {
+    this.flushSnapshotContent();
+    if (!msg.toolCallId || !msg.presentation) return;
+    const parentEl = this.ensureAssistantMessage();
+    const block = this.blockManager.ensureToolBlock(
+      msg.toolCallId,
+      parentEl,
+      this.elements.typingIndicatorEl
+    );
+    if (!block || !block.acceptRevision(msg.revision)) return;
+
+    if (msg.kind) block.kind = msg.kind;
+    if (msg.title || msg.name) block.title = msg.title || msg.name;
+    if (msg.status) block.status = msg.status;
+    const title =
+      msg.title || msg.name || block.title || block.toolId || "Tool";
+
+    const summary = {
+      toolCallId: msg.toolCallId,
+      title,
+      kind: msg.kind || block.kind,
+      status: msg.status || "in_progress",
+      locations: msg.locations,
+      rawInput: msg.rawInput,
+      revision: msg.revision,
+      presentation: msg.presentation,
+    };
+    block.updateSummary(summary);
+    block.updateDetails(summary);
+    this.scrollToBottom();
+  }
+
   private handleToolCallComplete(msg: ExtensionMessage): void {
+    this.flushSnapshotContent();
     if (!msg.toolCallId) return;
     const parentEl = this.ensureAssistantMessage();
     const block = this.blockManager.ensureToolBlock(
@@ -214,6 +269,7 @@ export class MessageListComponent implements MessageHandler {
       this.elements.typingIndicatorEl
     );
     if (block) {
+      if (!block.acceptRevision(msg.revision)) return;
       if (msg.kind) block.kind = msg.kind;
       if (msg.title) block.title = msg.title;
       if (msg.status) block.status = msg.status;
@@ -230,28 +286,99 @@ export class MessageListComponent implements MessageHandler {
         locations: msg.locations,
         rawInput: msg.rawInput,
         duration: msg.duration,
+        revision: msg.revision,
       });
 
       if (msg.status === "failed") {
         block.markFailed();
       }
 
-      block.updateDetails({
-        toolCallId: msg.toolCallId,
-        title: finalTitle,
-        kind: msg.kind || block.kind,
-        status: msg.status || "completed",
-        locations: msg.locations,
-        rawInput: msg.rawInput,
-        rawOutput: msg.rawOutput,
-        content: msg.content,
-        duration: msg.duration,
-        terminalOutput: msg.terminalOutput,
-      });
+      block.updateDetails(
+        {
+          toolCallId: msg.toolCallId,
+          title: finalTitle,
+          kind: msg.kind || block.kind,
+          status: msg.status || "completed",
+          locations: msg.locations,
+          rawInput: msg.rawInput,
+          rawOutput: msg.rawOutput,
+          content: msg.content,
+          duration: msg.duration,
+          terminalOutput: msg.terminalOutput,
+          terminalSemantics: msg.terminalSemantics,
+          presentation: msg.presentation,
+          revision: msg.revision,
+        },
+        this.isSnapshotReplay()
+      );
 
       this.blockManager.finalizeBlock(block);
       this.scrollToBottom();
     }
+  }
+
+  beginSnapshotReplay(): void {
+    this.snapshotReplayDepth += 1;
+    this.pendingSnapshotText = "";
+    this.pendingSnapshotThought = "";
+  }
+
+  endSnapshotReplay(): void {
+    this.flushSnapshotContent();
+    this.snapshotReplayDepth = Math.max(0, this.snapshotReplayDepth - 1);
+    if (this.snapshotReplayDepth === 0) {
+      for (const message of this.snapshotCompletedAssistantMessages) {
+        this.renderActionButtons(message);
+      }
+      this.snapshotCompletedAssistantMessages = [];
+    }
+  }
+
+  private flushSnapshotContent(): void {
+    this.flushSnapshotText();
+    this.flushSnapshotThought();
+  }
+
+  private flushSnapshotText(): void {
+    if (!this.pendingSnapshotText) return;
+    const parentEl = this.ensureAssistantMessage();
+    const block = this.blockManager.ensureBlock(
+      "text",
+      parentEl,
+      this.elements.typingIndicatorEl
+    ) as TextBlock;
+    block.setContent(this.pendingSnapshotText);
+    this.pendingSnapshotText = "";
+  }
+
+  private flushSnapshotThought(): void {
+    if (!this.pendingSnapshotThought) return;
+    const parentEl = this.ensureAssistantMessage();
+    const block = this.blockManager.ensureBlock(
+      "thought",
+      parentEl,
+      this.elements.typingIndicatorEl
+    );
+    if ("setContent" in block) {
+      (block as { setContent(text: string): void }).setContent(
+        this.pendingSnapshotThought
+      );
+    }
+    this.pendingSnapshotThought = "";
+  }
+
+  private isSnapshotReplay(): boolean {
+    return this.snapshotReplayDepth > 0;
+  }
+
+  private renderActionButtons(message: HTMLElement): void {
+    this.actionButtons.render(message, {
+      onCopyToInput: (text) => {
+        this.onCopyToInput?.(text);
+      },
+      scrollToTop: () => this.scrollToTop(),
+      scrollToPreviousUserMessage: (el) => this.scrollToPreviousUserMessage(el),
+    });
   }
 
   // -------------------------------------------------------------------
@@ -398,6 +525,7 @@ export class MessageListComponent implements MessageHandler {
   }
 
   scrollToBottom(force = false): void {
+    if (this.isSnapshotReplay()) return;
     if (force) {
       this.enableAutoScroll();
     }
@@ -516,10 +644,11 @@ export class MessageListComponent implements MessageHandler {
 
       event.preventDefault();
       event.stopPropagation();
-      const message: { type: "openFile"; href: string; checkExists?: boolean } = {
-        type: "openFile",
-        href,
-      };
+      const message: { type: "openFile"; href: string; checkExists?: boolean } =
+        {
+          type: "openFile",
+          href,
+        };
       if (target.dataset.acpCheckExists === "true") {
         message.checkExists = true;
       }

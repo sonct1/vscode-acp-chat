@@ -41,11 +41,25 @@ interface DiffHunk {
  * @param newText  Modified file content (`null` / `undefined` → treated as empty).
  * @returns        HTML string of the diff container.
  */
+const MAX_DIFF_INPUT_CHARS = 500_000;
+const MAX_DIFF_LINE_PRODUCT = 2_000_000;
+
 export function renderDiff(
   path: string | undefined,
   oldText: string | null | undefined,
   newText: string | null | undefined
 ): string {
+  const oldLength = oldText?.length ?? 0;
+  const newLength = newText?.length ?? 0;
+  const oldLineCount = oldText ? oldText.split("\n").length : 0;
+  const newLineCount = newText ? newText.split("\n").length : 0;
+  if (
+    oldLength + newLength > MAX_DIFF_INPUT_CHARS ||
+    oldLineCount * newLineCount > MAX_DIFF_LINE_PRODUCT
+  ) {
+    return '<div class="diff-container"><div class="diff-empty">Diff is too large to render inline.</div></div>';
+  }
+
   const diffLines = computeLineDiff(oldText, newText);
 
   if (diffLines.length === 0) {

@@ -360,11 +360,37 @@ suite("SessionManager", () => {
         await client.sendMessage("Hello session 2");
         await new Promise((resolve) => setTimeout(resolve, 100));
 
+        const page = await manager.listSessionPage("/test/dir", null);
+        assert.strictEqual(page.authoritative, true);
+        assert.strictEqual(page.nextCursor, null);
+        assert.ok(
+          page.sessions.every((session) => session.agentId === "mock-agent")
+        );
+        assert.ok(page.sessions.every((session) => session.source === "agent"));
+
         const sessions = await manager.listSessions("/test/dir");
         assert.strictEqual(sessions.length, 2);
         assert.ok(sessions[0].sessionId.startsWith("mock-session-"));
         assert.ok(sessions[0].title);
         assert.strictEqual(sessions[0].cwd, "/test/dir");
+      });
+
+      test("exposes locally recorded sessions without invoking session/list", async () => {
+        await client.connect();
+        manager.syncCapabilities();
+        const created = await manager.newSession("/test/local");
+
+        const local = await manager.listLocalSessionRefs("/test/local");
+        assert.deepStrictEqual(local, [
+          {
+            agentId: "mock-agent",
+            sessionId: created.sessionId,
+            title: `Session ${created.sessionId}`,
+            cwd: "/test/local",
+            updatedAt: local[0].updatedAt,
+            source: "local-fallback",
+          },
+        ]);
       });
 
       test("should return empty array when not connected", async () => {

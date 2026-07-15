@@ -67,6 +67,7 @@ export interface MultiSessionSnapshot {
   }>;
   pendingPermissions?: MultiSessionRenderMessage[];
   isGenerating: boolean;
+  scrollToBottom?: boolean;
 }
 
 export interface MultiSessionAggregate {

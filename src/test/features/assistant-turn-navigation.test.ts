@@ -109,6 +109,26 @@ suite("assistant-turn-navigation feature", () => {
     controller.handleMessage({ type: "streamEnd" });
   }
 
+  function addToolOnlyAssistantTurn(question: string): void {
+    controller.handleMessage({ type: "userMessage", text: question });
+    controller.handleMessage({ type: "streamStart" });
+    controller.handleMessage({
+      type: "toolCallStart",
+      toolCallId: `tool-only-${question}`,
+      name: "Edit",
+      kind: "edit",
+    });
+    controller.handleMessage({
+      type: "toolCallComplete",
+      toolCallId: `tool-only-${question}`,
+      status: "completed",
+      title: "Edit",
+      kind: "edit",
+      rawInput: { description: "edit" },
+    });
+    controller.handleMessage({ type: "streamEnd" });
+  }
+
   async function settleNavigation(): Promise<void> {
     await Promise.resolve();
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -138,7 +158,7 @@ suite("assistant-turn-navigation feature", () => {
     return button;
   }
 
-  test("renders only for completed assistant responses and ignores empty streamEnd", async () => {
+  test("renders for one completed assistant response and ignores empty streamEnd", async () => {
     controller.handleMessage({ type: "streamEnd" });
     await settleNavigation();
 
@@ -150,20 +170,44 @@ suite("assistant-turn-navigation feature", () => {
 
     addCompletedAssistantTurn("Question 1", "Answer 1");
     await settleNavigation();
-    assert.strictEqual(getNavigator()?.hidden ?? true, true);
-
-    addCompletedAssistantTurn("Question 2", "Answer 2");
-    await settleNavigation();
 
     assert.strictEqual(getNavigator()?.hidden, false);
-    assert.strictEqual(getCounter(), "Assistant 2 / 2");
+    assert.strictEqual(getCounter(), "Assistant 1 / 1");
+    assert.strictEqual(getNavButton("previous").disabled, false);
+    assert.strictEqual(getNavButton("next").disabled, false);
     assert.strictEqual(
       messagesEl.querySelectorAll(".message.assistant .message-actions").length,
-      2
+      1
     );
   });
 
-  test("buttons navigate previous and next between assistant responses", async () => {
+  test("keeps navigation enabled for one assistant response", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Question 1", "Answer 1");
+    await settleNavigation();
+
+    const assistantMessage =
+      messagesEl.querySelector<HTMLElement>(".message.assistant");
+    assert.ok(assistantMessage);
+
+    getNavButton("previous").click();
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMessage.querySelector(".block-text")
+    );
+
+    getNavButton("next").click();
+    assert.strictEqual(scrollTargets.length, 2);
+    assert.strictEqual(getCounter(), "Assistant 1 / 1");
+    assert.strictEqual(getNavButton("previous").disabled, false);
+    assert.strictEqual(getNavButton("next").disabled, false);
+  });
+
+  test("buttons navigate previous and next without wrapping", async () => {
     const scrollTargets: HTMLElement[] = [];
     (window.HTMLElement.prototype as any).scrollIntoView = function () {
       scrollTargets.push(this as HTMLElement);
@@ -177,12 +221,10 @@ suite("assistant-turn-navigation feature", () => {
     const assistantMsgs = Array.from(
       messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
     );
-    assistantMsgs[2].focus();
 
     getNavButton("previous").click();
     await settleNavigation();
 
-    assert.strictEqual(document.activeElement, assistantMsgs[1]);
     assert.ok(
       assistantMsgs[1].querySelector(".block-tool"),
       "expected a tool block before the answer text"
@@ -192,27 +234,73 @@ suite("assistant-turn-navigation feature", () => {
       assistantMsgs[1].querySelector(".block-text")
     );
     assert.strictEqual(getCounter(), "Assistant 2 / 3");
-    assert.strictEqual(
-      assistantMsgs[1].classList.contains("assistant-turn-highlight"),
-      true
-    );
     assert.strictEqual(getNavButton("previous").disabled, false);
     assert.strictEqual(getNavButton("next").disabled, false);
 
     getNavButton("next").click();
     await settleNavigation();
 
-    assert.strictEqual(document.activeElement, assistantMsgs[2]);
     assert.strictEqual(getCounter(), "Assistant 3 / 3");
-    assert.strictEqual(getNavButton("next").disabled, true);
+    assert.strictEqual(getNavButton("next").disabled, false);
+
+    const scrollCountAtLast = scrollTargets.length;
+    getNavButton("next").click();
+    await settleNavigation();
+
+    assert.strictEqual(scrollTargets.length, scrollCountAtLast + 1);
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[2].querySelector(".block-text")
+    );
+    assert.strictEqual(getCounter(), "Assistant 3 / 3");
 
     getNavButton("previous").click();
     getNavButton("previous").click();
     await settleNavigation();
 
-    assert.strictEqual(document.activeElement, assistantMsgs[0]);
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[0].querySelector(".block-text")
+    );
     assert.strictEqual(getCounter(), "Assistant 1 / 3");
-    assert.strictEqual(getNavButton("previous").disabled, true);
+
+    const scrollCountAtFirst = scrollTargets.length;
+    getNavButton("previous").click();
+    await settleNavigation();
+
+    assert.strictEqual(scrollTargets.length, scrollCountAtFirst + 1);
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[0].querySelector(".block-text")
+    );
+    assert.strictEqual(getCounter(), "Assistant 1 / 3");
+  });
+
+  test("skips completed assistant turns without text", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Question 1", "Answer 1");
+    addToolOnlyAssistantTurn("Question 2");
+    addCompletedAssistantTurn("Question 3", "Answer 3");
+    await settleNavigation();
+
+    const assistantMsgs = Array.from(
+      messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
+    );
+    assert.strictEqual(assistantMsgs.length, 3);
+    assert.strictEqual(getCounter(), "Assistant 2 / 2");
+
+    getNavButton("previous").click();
+
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[0].querySelector(".block-text")
+    );
+    assert.notStrictEqual(scrollTargets.at(-1), assistantMsgs[1]);
+    assert.strictEqual(getCounter(), "Assistant 1 / 2");
   });
 
   test("updates the counter from manual scroll position", async () => {
@@ -240,9 +328,8 @@ suite("assistant-turn-navigation feature", () => {
         }) as DOMRect,
     });
     [320, 80, 700].forEach((top, index) => {
-      const scrollTarget = assistantMsgs[index].querySelector<HTMLElement>(
-        ".block-text"
-      );
+      const scrollTarget =
+        assistantMsgs[index].querySelector<HTMLElement>(".block-text");
       assert.ok(scrollTarget, "expected answer text block");
       Object.defineProperty(scrollTarget, "getBoundingClientRect", {
         configurable: true,

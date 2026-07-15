@@ -153,6 +153,78 @@ test('PiAcpSession: emits agent_thought_chunk for thinking_delta', async () => {
   })
 })
 
+test('PiAcpSession: preserves cumulative bash and structured delegate progress snapshots', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: [],
+    promptCompletionTiming: { settleGraceMs: 5, pollIntervalMs: 2, getStateTimeoutMs: 5 }
+  })
+
+  proc.emit({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash', args: { cmd: 'echo' } })
+  proc.emit({
+    type: 'tool_execution_update',
+    toolCallId: 'bash-1',
+    partialResult: { content: [{ type: 'text', text: 'one' }] }
+  })
+  proc.emit({
+    type: 'tool_execution_update',
+    toolCallId: 'bash-1',
+    partialResult: { content: [{ type: 'text', text: 'one\ntwo' }] }
+  })
+  proc.emit({
+    type: 'tool_execution_start',
+    toolCallId: 'delegate-1',
+    toolName: 'delegate_explore',
+    args: { question: 'inspect' }
+  })
+  const delegateProgress = {
+    content: [{ type: 'text', text: 'Sub-agent explore running' }],
+    details: {
+      agent: 'explore',
+      status: 'running',
+      outputPreview: 'latest preview',
+      currentTool: 'grep',
+      toolHistory: [{ name: 'read', summary: 'src/file.ts' }]
+    }
+  }
+  proc.emit({
+    type: 'tool_execution_update',
+    toolCallId: 'delegate-1',
+    partialResult: delegateProgress
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  const bashUpdates = conn.updates.filter(
+    update => update.update.sessionUpdate === 'tool_call_update' && (update.update as any).toolCallId === 'bash-1'
+  )
+  assert.equal(bashUpdates.length, 2)
+  assert.deepEqual((bashUpdates[0]!.update as any).content, [
+    { type: 'content', content: { type: 'text', text: 'one' } }
+  ])
+  assert.deepEqual((bashUpdates[0]!.update as any).rawOutput, {
+    content: [{ type: 'text', text: 'one' }]
+  })
+  assert.deepEqual((bashUpdates[1]!.update as any).content, [
+    { type: 'content', content: { type: 'text', text: 'one\ntwo' } }
+  ])
+  assert.deepEqual((bashUpdates[1]!.update as any).rawOutput, {
+    content: [{ type: 'text', text: 'one\ntwo' }]
+  })
+
+  const delegateUpdate = conn.updates.find(
+    update => update.update.sessionUpdate === 'tool_call_update' && (update.update as any).toolCallId === 'delegate-1'
+  )
+  assert.deepEqual((delegateUpdate!.update as any).rawOutput, delegateProgress)
+})
+
 test('PiAcpSession: emits tool_call + tool_call_update + completes', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
@@ -886,7 +958,10 @@ test('PiAcpSession: agent_end willRetry true stays pending through idle gap unti
   await tick()
 
   assert.equal(await resolvedReason(p), undefined)
-  assert.equal(conn.updates.some(update => (update.update as any)._meta?.piAcp?.running === false), false)
+  assert.equal(
+    conn.updates.some(update => (update.update as any)._meta?.piAcp?.running === false),
+    false
+  )
 
   proc.emit({ type: 'auto_retry_start', attempt: 2 })
   proc.emit({ type: 'auto_retry_end' })
@@ -1410,7 +1485,10 @@ test('PiAcpSession: manual compaction start uses neutral wording and aliases do 
 
   const notices = conn.updates.filter(update => update.update.sessionUpdate === 'agent_message_chunk')
   assert.equal(notices.length, 1)
-  assert.equal((notices[0]!.update as any).content?.text, 'Context compaction started; summarizing context to continue the session...')
+  assert.equal(
+    (notices[0]!.update as any).content?.text,
+    'Context compaction started; summarizing context to continue the session...'
+  )
 })
 
 test('PiAcpSession: manual compaction end refreshes usage without automatic completion text', async () => {

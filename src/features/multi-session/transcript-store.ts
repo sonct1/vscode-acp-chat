@@ -22,6 +22,26 @@ export class TranscriptStore {
         ...last.message,
         text: last.message.text + message.text,
       };
+    } else if (message.type === "toolCallProgress") {
+      const toolCallId = message.toolCallId;
+      if (typeof toolCallId === "string") {
+        this.compactedEvents = this.compactedEvents.filter(
+          (existing) =>
+            existing.message.type !== "toolCallProgress" ||
+            existing.message.toolCallId !== toolCallId
+        );
+      }
+      this.compactedEvents.push({ ...event, message: { ...event.message } });
+    } else if (message.type === "toolCallComplete") {
+      const toolCallId = message.toolCallId;
+      if (typeof toolCallId === "string") {
+        this.compactedEvents = this.compactedEvents.filter(
+          (existing) =>
+            existing.message.type !== "toolCallProgress" ||
+            existing.message.toolCallId !== toolCallId
+        );
+      }
+      this.compactedEvents.push({ ...event, message: { ...event.message } });
     } else {
       this.compactedEvents.push({ ...event, message: { ...event.message } });
     }

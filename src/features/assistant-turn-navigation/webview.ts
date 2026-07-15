@@ -4,7 +4,6 @@ import type {
   AssistantTurnNavigationDirection,
 } from "./types";
 
-const HIGHLIGHT_MS = 900;
 const LABEL_MAX_LENGTH = 80;
 
 export class AssistantTurnNavigationWebviewFeature {
@@ -19,7 +18,6 @@ export class AssistantTurnNavigationWebviewFeature {
   private entries: AssistantTurnEntry[] = [];
   private activeIndex = -1;
   private rebuildFrame: number | null = null;
-  private highlightTimeout: ReturnType<Window["setTimeout"]> | null = null;
   private readonly onMessagesScroll = () => this.updateActiveFromScroll();
   private readonly onMessagesFocusIn = (event: Event) => {
     const target = (event.target as Element | null)?.closest(
@@ -59,15 +57,8 @@ export class AssistantTurnNavigationWebviewFeature {
       this.cancelFrame(this.rebuildFrame);
       this.rebuildFrame = null;
     }
-    if (this.highlightTimeout !== null) {
-      this.win.clearTimeout(this.highlightTimeout);
-      this.highlightTimeout = null;
-    }
     this.messagesEl.removeEventListener("scroll", this.onMessagesScroll);
     this.messagesEl.removeEventListener("focusin", this.onMessagesFocusIn);
-    this.entries.forEach((entry) =>
-      entry.element.classList.remove("assistant-turn-highlight")
-    );
     this.navigatorEl.remove();
   }
 
@@ -75,12 +66,11 @@ export class AssistantTurnNavigationWebviewFeature {
     if (this.entries.length === 0) return false;
 
     this.ensureActiveIndex();
-    const nextIndex =
-      direction === "previous" ? this.activeIndex - 1 : this.activeIndex + 1;
-    if (nextIndex < 0 || nextIndex >= this.entries.length) {
-      this.updateNavigator();
-      return false;
-    }
+    const offset = direction === "previous" ? -1 : 1;
+    const nextIndex = Math.max(
+      0,
+      Math.min(this.entries.length - 1, this.activeIndex + offset)
+    );
 
     this.jumpTo(nextIndex);
     return true;
@@ -93,7 +83,8 @@ export class AssistantTurnNavigationWebviewFeature {
     counterEl: HTMLElement;
   } {
     const navigatorEl = this.doc.createElement("div");
-    navigatorEl.className = "assistant-turn-navigator assistant-turn-navigator-header";
+    navigatorEl.className =
+      "assistant-turn-navigator assistant-turn-navigator-header";
     navigatorEl.hidden = true;
     navigatorEl.setAttribute("role", "group");
     navigatorEl.setAttribute("aria-label", "Assistant response navigation");
@@ -130,7 +121,9 @@ export class AssistantTurnNavigationWebviewFeature {
 
     // Fallback for tests or single-session webview surfaces where the optional
     // multi-session header has not been mounted yet.
-    this.controller.messageList.elements.containerEl.appendChild(this.navigatorEl);
+    this.controller.messageList.elements.containerEl.appendChild(
+      this.navigatorEl
+    );
   }
 
   private createButton(
@@ -168,17 +161,24 @@ export class AssistantTurnNavigationWebviewFeature {
 
   private rebuildEntries(): void {
     const previousEntriesLength = this.entries.length;
-    const previousActiveWasLast = this.activeIndex === previousEntriesLength - 1;
+    const previousActiveWasLast =
+      this.activeIndex === previousEntriesLength - 1;
     const previousElement = this.entries[this.activeIndex]?.element;
     this.entries = Array.from(
       this.messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
     )
-      .filter((element) => element.querySelector(".message-actions"))
-      .map((element, index) => ({
-        element,
-        scrollTarget: this.findResponseScrollTarget(element),
+      .flatMap((element) => {
+        if (!element.querySelector(".message-actions")) return [];
+
+        const scrollTarget = this.findResponseScrollTarget(element);
+        if (!scrollTarget) return [];
+
+        return [{ element, scrollTarget }];
+      })
+      .map((entry, index) => ({
+        ...entry,
         index,
-        label: this.createLabel(element, index),
+        label: this.createLabel(entry.element, index),
       }));
 
     if (previousElement) {
@@ -220,8 +220,12 @@ export class AssistantTurnNavigationWebviewFeature {
     return null;
   }
 
-  private findResponseScrollTarget(element: HTMLElement): HTMLElement {
-    return element.querySelector<HTMLElement>(".block-text") ?? element;
+  private findResponseScrollTarget(element: HTMLElement): HTMLElement | null {
+    return (
+      Array.from(element.querySelectorAll<HTMLElement>(".block-text")).find(
+        (block) => (block.textContent ?? "").trim().length > 0
+      ) ?? null
+    );
   }
 
   private ensureActiveIndex(): void {
@@ -230,9 +234,9 @@ export class AssistantTurnNavigationWebviewFeature {
       return;
     }
 
-    const focusedAssistant = (this.doc.activeElement as Element | null)?.closest(
-      ".message.assistant"
-    ) as HTMLElement | null;
+    const focusedAssistant = (
+      this.doc.activeElement as Element | null
+    )?.closest(".message.assistant") as HTMLElement | null;
     if (focusedAssistant && this.setActiveByElement(focusedAssistant)) return;
 
     if (this.activeIndex >= 0 && this.activeIndex < this.entries.length) return;
@@ -257,7 +261,8 @@ export class AssistantTurnNavigationWebviewFeature {
     if (this.entries.length === 0) return -1;
 
     const containerRect = this.messagesEl.getBoundingClientRect();
-    const anchor = containerRect.top + Math.max(24, containerRect.height * 0.25);
+    const anchor =
+      containerRect.top + Math.max(24, containerRect.height * 0.25);
     let bestIndex = 0;
     let bestDistance = Number.POSITIVE_INFINITY;
 
@@ -280,35 +285,16 @@ export class AssistantTurnNavigationWebviewFeature {
     this.activeIndex = index;
     this.controller.messageList.disableAutoScroll();
     entry.scrollTarget.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    entry.element.focus({ preventScroll: true });
-    this.highlight(entry.element);
     this.updateNavigator();
   }
 
-  private highlight(element: HTMLElement): void {
-    this.entries.forEach((entry) =>
-      entry.element.classList.remove("assistant-turn-highlight")
-    );
-    if (this.highlightTimeout !== null) {
-      this.win.clearTimeout(this.highlightTimeout);
-      this.highlightTimeout = null;
-    }
-
-    element.classList.add("assistant-turn-highlight");
-    this.highlightTimeout = this.win.setTimeout(() => {
-      element.classList.remove("assistant-turn-highlight");
-      this.highlightTimeout = null;
-    }, HIGHLIGHT_MS);
-  }
-
   private updateNavigator(): void {
-    const visible = this.entries.length >= 2;
-    this.navigatorEl.hidden = !visible;
+    this.navigatorEl.hidden = this.entries.length === 0;
+    this.previousButton.disabled = false;
+    this.nextButton.disabled = false;
 
     if (this.entries.length === 0) {
       this.counterEl.textContent = "Assistant 0 / 0";
-      this.previousButton.disabled = true;
-      this.nextButton.disabled = true;
       return;
     }
 
@@ -322,8 +308,6 @@ export class AssistantTurnNavigationWebviewFeature {
       "title",
       activeEntry?.label ?? "Assistant response"
     );
-    this.previousButton.disabled = this.activeIndex <= 0;
-    this.nextButton.disabled = this.activeIndex >= this.entries.length - 1;
   }
 
   private requestFrame(callback: FrameRequestCallback): number {

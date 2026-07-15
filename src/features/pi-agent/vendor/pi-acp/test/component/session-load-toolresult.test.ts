@@ -15,9 +15,10 @@ class FakeStore {
     return { sessionId: 's1', cwd: '/tmp/project', sessionFile: this.sessionFile, updatedAt: new Date().toISOString() }
   }
   upsert() {}
+  upsertMany() {}
 }
 
-test('PiAcpAgent: loadSession replays toolResult as tool_call + tool_call_update', async () => {
+test('PiAcpAgent: loadSession replays toolResult as one final tool_call notification', async () => {
   const root = mkdtempSync(join(tmpdir(), 'pi-toolresult-test-'))
   const sessionFile = join(root, 's.jsonl')
   writeFileSync(
@@ -58,16 +59,24 @@ test('PiAcpAgent: loadSession replays toolResult as tool_call + tool_call_update
 
     const updates = conn.updates.map(u => (u as any).update)
 
-    const toolCall = updates.find(u => u?.sessionUpdate === 'tool_call')
-    assert.ok(toolCall)
+    const toolCalls = updates.filter(u => u?.sessionUpdate === 'tool_call')
+    assert.equal(toolCalls.length, 1)
+    const toolCall = toolCalls[0]
     assert.equal(toolCall.toolCallId, 'call_1')
     assert.equal(toolCall.title, 'bash')
-
-    const toolCallUpdate = updates.find(u => u?.sessionUpdate === 'tool_call_update')
-    assert.ok(toolCallUpdate)
-    assert.equal(toolCallUpdate.toolCallId, 'call_1')
-    assert.equal(toolCallUpdate.status, 'completed')
-    assert.equal(toolCallUpdate.content?.[0]?.content?.text, 'hello from bash')
+    assert.equal(toolCall.status, 'completed')
+    assert.equal(toolCall.content?.[0]?.content?.text, 'hello from bash')
+    assert.deepEqual(toolCall.rawOutput, {
+      role: 'toolResult',
+      toolCallId: 'call_1',
+      toolName: 'bash',
+      content: [{ type: 'text', text: 'hello from bash' }],
+      isError: false
+    })
+    assert.equal(
+      updates.some(u => u?.sessionUpdate === 'tool_call_update'),
+      false
+    )
   } finally {
     PiRpcProcess.spawn = originalSpawn
   }

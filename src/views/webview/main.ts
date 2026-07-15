@@ -43,6 +43,7 @@ export class WebviewController implements MessageHandler {
   private stateService: StatePersistenceService;
   private incomingNotifier = new AsyncSerialQueue();
   private features?: RegisteredWebviewFeatures;
+  private snapshotReplayDepth = 0;
 
   readonly messageList: MessageListComponent;
   readonly inputPanel: InputPanelComponent;
@@ -85,6 +86,7 @@ export class WebviewController implements MessageHandler {
 
     // Wire cross-component dependencies
     this.messageList.onGeneratingChange = (isGenerating) => {
+      if (this.snapshotReplayDepth > 0) return;
       this.features?.messageQueue.setTurnGenerating(isGenerating);
       if (!isGenerating) {
         this.inputPanel.focus();
@@ -338,6 +340,16 @@ export class WebviewController implements MessageHandler {
   saveWebviewState(state: WebviewState): void {
     this.stateService.save(state);
     this.stateService.flush();
+  }
+
+  beginSnapshotReplay(): void {
+    this.snapshotReplayDepth += 1;
+    this.messageList.beginSnapshotReplay();
+  }
+
+  endSnapshotReplay(): void {
+    this.messageList.endSnapshotReplay();
+    this.snapshotReplayDepth = Math.max(0, this.snapshotReplayDepth - 1);
   }
 
   beforeMultiSessionSend(): void {

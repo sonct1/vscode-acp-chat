@@ -61,12 +61,42 @@ suite("agents", () => {
       assert.strictEqual(pi?.availabilityCommand, "pi");
       assert.strictEqual(pi?.env?.ELECTRON_RUN_AS_NODE, "1");
       assert.strictEqual(pi?.env?.VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE, "full");
+      assert.strictEqual(pi?.liveToolOutputProfile, "bundled-pi");
       assert.ok(
         pi?.args.some((arg) =>
           arg.replace(/\\/g, "/").endsWith("pi-acp/index.mjs")
         ),
         "pi args should include bundled adapter entrypoint"
       );
+    });
+  });
+
+  suite("custom agent overrides", () => {
+    let originalCustomAgents: unknown;
+
+    setup(() => {
+      originalCustomAgents = vscode.workspace
+        .getConfiguration("vscode-acp-chat")
+        .get("customAgents");
+    });
+
+    teardown(async () => {
+      await updateConfig("customAgents", originalCustomAgents);
+    });
+
+    test("custom Pi id does not inherit bundled live-output marker", async () => {
+      await updateConfig("customAgents", [
+        {
+          id: "pi",
+          name: "Custom Pi",
+          command: "custom-pi-acp",
+          args: [],
+        },
+      ]);
+
+      const pi = getAgent("pi");
+      assert.strictEqual(pi?.name, "Custom Pi");
+      assert.strictEqual(pi?.liveToolOutputProfile, undefined);
     });
   });
 

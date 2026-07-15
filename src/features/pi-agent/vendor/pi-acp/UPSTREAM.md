@@ -13,6 +13,9 @@
 - The adapter is launched by the extension with VS Code/Electron in Node mode and still requires the `pi` CLI on `PATH`.
 - `session/load` locally supports `VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE=full|compacted`; `full` is the default and replays the active-path transcript from Pi JSONL session files, falling back to `get_messages` only when JSONL replay fails or yields no replayable messages.
 - `session/prompt` completion is locally gated on the top-level Pi lifecycle and stable `get_state` idleness so intermediate retry, compaction, or continuation `agent_end` events do not make the extension report Idle or start queued prompts early.
+- `session/list` uses a local metadata index keyed by canonical Pi JSONL session file with size/mtime validation. Cold scans parse each changed file once for metadata; warm scans reuse indexed metadata without reading unchanged JSONL content. Cursor pages in one ACP agent reuse an immutable discovery snapshot, and successful list calls bulk-persist `sessionId -> { cwd, sessionFile }` mappings in one store flush.
+- `SessionStore` is process-cached, validates mapped session files on lookup, supports bulk upsert, and flushes once per bulk operation. `session/load` checks the validated mapping first and only falls back to discovery on miss/stale mappings, repairing the store when a fallback succeeds.
+- Pi history replay emits a single final ACP `tool_call` notification for historical `toolResult` entries, preserving title/status/content/raw output/order without the previous paired `tool_call_update` notification.
 
 ## Sync procedure
 

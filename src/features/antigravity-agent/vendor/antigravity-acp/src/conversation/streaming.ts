@@ -69,9 +69,16 @@ export class StreamPoller {
 
 	private async ensureDb(): Promise<ConversationDb | null> {
 		if (this.boundId === null && this.opts.snapshot !== null) {
-			this.bindingResult = resolveNewConversation(this.opts.dir, this.opts.snapshot, this.opts.pid);
-			if (this.bindingResult.kind === "single") this.boundId = this.bindingResult.id;
-			else return null;
+			this.bindingResult = resolveNewConversation(
+				this.opts.dir,
+				this.opts.snapshot,
+				this.opts.pid,
+			);
+			if (this.bindingResult.kind === "single") {
+				this.boundId = this.bindingResult.id;
+			} else {
+				return null;
+			}
 		}
 		if (this.boundId === null) return null;
 

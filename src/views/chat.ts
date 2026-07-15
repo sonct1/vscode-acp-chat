@@ -2,25 +2,24 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { searchWorkspaceFiles } from "../utils/file-search";
 import { getWorkspaceRoot } from "../utils/workspace";
-import {
-  ACPClient,
-  type ContextUsageUpdate,
-  type SessionMetadata,
-} from "../acp/client";
+import { ACPClient, type SessionMetadata } from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
 import { FileHandler } from "../acp/file-handler";
 import { recordStructuredDiffsFromContent } from "../acp/structured-diff-recorder";
 import { TerminalHandler } from "../acp/terminal-handler";
-import { getPiContextUsageUnavailableMeta } from "../acp/pi-context-usage-meta";
+import { SessionOutputPipeline } from "../acp/session-output-pipeline";
 import {
   AgentSessionManager,
   globalStateSessionStore,
   inMemorySessionStore,
+  type HistoryCatalogScope,
+  type HistorySessionPage,
+  type HistorySessionRef,
   type SessionInfo,
 } from "../acp/session-manager";
 import { DocumentSyncManager } from "../acp/document-sync";
-import { extractMentions, type Mention } from "../utils/mention-serializer";
+import type { Mention } from "../utils/mention-serializer";
 import { AsyncSerialQueue, AsyncSerialProcessor } from "../utils/async-queue";
 import {
   registerHostFeatures,
@@ -35,11 +34,14 @@ import { expandHomeResourcePath } from "../features/clickable-resource-links/hos
 import { MultiSessionManagerViewProvider } from "../features/multi-session/manager-view";
 import { showMultiSessionQuickSwitch } from "../features/multi-session/quick-switch";
 import {
+  deleteRemoteHistoryCatalogSession,
+  readRemoteHistoryCatalog,
+  writeRemoteHistoryCatalogPage,
+} from "../features/fast-chat-history/cache";
+import {
   type SessionNotification,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
-  type ToolCall,
-  type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
@@ -114,17 +116,6 @@ interface WebviewMessage {
 
 type FileLineRange = { startLine: number; endLine: number };
 
-function formatJsonValue(value: unknown): string {
-  if (typeof value === "object" && value !== null) {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value);
-}
-
 function parseFileLineRange(value: string): FileLineRange | undefined {
   const match = value.match(/^L?(\d+)(?:-L?(\d+))?$/);
   if (!match) return undefined;
@@ -154,30 +145,6 @@ export type SelectionMention = Mention & {
   content: string;
 };
 
-type FinalToolCallUpdate = (ToolCall | ToolCallUpdate) & {
-  status: "completed" | "failed";
-};
-
-type ToolCallMetadataUpdate = Pick<ToolCall | ToolCallUpdate, "toolCallId"> &
-  Partial<
-    Pick<
-      ToolCall | ToolCallUpdate,
-      "rawInput" | "rawOutput" | "kind" | "title" | "content" | "locations"
-    >
-  >;
-
-interface ToolCallState {
-  pending?: boolean;
-  startTime?: number;
-  rawInput?: Record<string, unknown>;
-  rawOutput?: unknown;
-  kind?: string;
-  title?: string;
-  content?: ToolCall["content"];
-  locations?: ToolCall["locations"];
-  baseContent?: Promise<string | undefined>;
-}
-
 export class ChatViewProvider
   implements vscode.WebviewViewProvider, vscode.TextDocumentContentProvider
 {
@@ -188,15 +155,11 @@ export class ChatViewProvider
   private globalState: vscode.Memento;
   private hasRestoredModeModel = false;
   private sessionManager: AgentSessionManager;
-  private userMessageBuffer: string = "";
-  /** Stores image dataUrl for current user message being reconstructed during history load */
-  private userMessageImages: string[] = [];
-  private toolCalls: Map<string, ToolCallState> = new Map();
-  private textDecoder = new TextDecoder();
   private diffManager: DiffManager;
   private fileHandler: FileHandler;
   private terminalHandler: TerminalHandler;
   private documentSyncManager: DocumentSyncManager;
+  private outputPipeline: SessionOutputPipeline;
   private features: HostFeatureRegistry;
   private multiSessionManagerView?: MultiSessionManagerViewProvider;
   private permissionQueue: Array<{
@@ -213,9 +176,6 @@ export class ChatViewProvider
   // Serializes webview.postMessage calls so fast messages (streamEnd)
   // cannot overtake slower ones (streamChunk) that are still pending.
   private webviewPostNotifier = new AsyncSerialQueue();
-
-  // Flag to track if we're currently loading history via loadSession
-  private isLoadingHistory = false;
 
   // Flag to track if the agent is currently generating a response
   private isGenerating = false;
@@ -271,6 +231,22 @@ export class ChatViewProvider
       );
     });
     this.documentSyncManager = new DocumentSyncManager(acpClient);
+    this.outputPipeline = new SessionOutputPipeline({
+      client: this.acpClient,
+      fileHandler: this.fileHandler,
+      emit: (message) => this.postMessage(message),
+      liveToolOutputProfile: undefined,
+      onMetadataChanged: () => this.sendSessionMetadata(),
+      onContextUsageChanged: () => this.sendContextUsage(),
+      onSessionInfoChanged: () => {},
+      onStructuredDiffContent: async (content) => {
+        await recordStructuredDiffsFromContent(content, {
+          cwd: getWorkspaceRoot(),
+          diffManager: this.diffManager,
+        });
+      },
+      onToolCallComplete: () => this.emitDiffSummary(),
+    });
 
     vscode.workspace.registerTextDocumentContentProvider(
       "acp-old-content",
@@ -282,9 +258,14 @@ export class ChatViewProvider
       const agent = getAgent(savedAgentId);
       if (agent) {
         this.acpClient.setAgent(agent);
+        this.outputPipeline.setLiveToolOutputProfile(
+          agent.liveToolOutputProfile
+        );
       }
     } else {
-      this.acpClient.setAgent(getFirstAvailableAgent());
+      const agent = getFirstAvailableAgent();
+      this.acpClient.setAgent(agent);
+      this.outputPipeline.setLiveToolOutputProfile(agent.liveToolOutputProfile);
     }
 
     this.acpClient.setOnStateChange((state) => {
@@ -346,21 +327,21 @@ export class ChatViewProvider
       this.handlePermissionRequest.bind(this)
     );
 
-    this.diffManager.onDidChange((changes) => {
-      const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-      const enabled = config.get<boolean>("enableDiffSummary", true);
-      if (enabled) {
-        this.postMessage({
-          type: "diffSummary",
-          changes: changes.map((c) => ({
-            path: c.path,
-            relativePath: vscode.workspace.asRelativePath(c.path),
-            oldText: c.oldText,
-            newText: c.newText,
-            status: c.status,
-          })),
-        });
-      }
+    this.diffManager.onDidChange(() => this.emitDiffSummary());
+  }
+
+  private emitDiffSummary(): void {
+    const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+    if (!config.get<boolean>("enableDiffSummary", true)) return;
+    this.postMessage({
+      type: "diffSummary",
+      changes: this.diffManager.getPendingChanges().map((change) => ({
+        path: change.path,
+        relativePath: vscode.workspace.asRelativePath(change.path),
+        oldText: change.oldText,
+        newText: change.newText,
+        status: change.status,
+      })),
     });
   }
 
@@ -831,9 +812,62 @@ export class ChatViewProvider
     if (this.features.multiSession) {
       return this.features.multiSession.listSessions();
     }
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    const cwd = workspaceFolder?.uri.fsPath || process.cwd();
-    return this.sessionManager.listSessions(cwd);
+    return this.sessionManager.listSessions(getWorkspaceRoot());
+  }
+
+  public async listSessionPage(
+    cursor?: string | null
+  ): Promise<HistorySessionPage> {
+    if (this.features.multiSession) {
+      return this.features.multiSession.listSessionPage(cursor);
+    }
+    const scope = this.getHistoryScope();
+    const page = await this.sessionManager.listSessionPage(scope.cwd, cursor);
+    if (page.authoritative) {
+      try {
+        await writeRemoteHistoryCatalogPage(
+          this.globalState,
+          scope.agentId,
+          scope.cwd,
+          page.sessions,
+          Boolean(cursor)
+        );
+      } catch (error) {
+        console.warn(
+          "[FastHistory] Failed to persist remote history catalog:",
+          error
+        );
+      }
+    }
+    return page;
+  }
+
+  public getHistoryScope(): HistoryCatalogScope {
+    return this.features.multiSession
+      ? this.features.multiSession.getHistoryScope()
+      : { agentId: this.acpClient.getAgentId(), cwd: getWorkspaceRoot() };
+  }
+
+  public getCachedHistorySessions(): HistorySessionRef[] {
+    if (this.features.multiSession) {
+      return this.features.multiSession.getCachedHistorySessions();
+    }
+    const scope = this.getHistoryScope();
+    return readRemoteHistoryCatalog(this.globalState, scope.agentId, scope.cwd);
+  }
+
+  public async deleteCachedHistorySession(
+    ref: HistorySessionRef
+  ): Promise<void> {
+    await deleteRemoteHistoryCatalogSession(this.globalState, ref);
+  }
+
+  public async getLocalHistorySessions(): Promise<HistorySessionRef[]> {
+    if (this.features.multiSession) {
+      return this.features.multiSession.getLocalHistorySessions();
+    }
+    const scope = this.getHistoryScope();
+    return this.sessionManager.listLocalSessionRefs(scope.cwd);
   }
 
   /**
@@ -867,11 +901,17 @@ export class ChatViewProvider
    * Delete a history session. Removes it from the agent (if supported) and
    * the local cache.
    */
-  public async deleteHistorySession(sessionId: string): Promise<void> {
+  public async deleteHistorySession(
+    refOrSessionId: HistorySessionRef | string
+  ): Promise<void> {
     if (this.features.multiSession) {
-      await this.features.multiSession.deleteHistorySession(sessionId);
+      await this.features.multiSession.deleteHistorySession(refOrSessionId);
       return;
     }
+    const sessionId =
+      typeof refOrSessionId === "string"
+        ? refOrSessionId
+        : refOrSessionId.sessionId;
     await this.sessionManager.deleteSession(sessionId);
   }
 
@@ -879,11 +919,17 @@ export class ChatViewProvider
    * Load a history session. Clears current chat, then loads via ACP.
    * The agent will stream the full conversation history back.
    */
-  public async loadHistorySession(sessionId: string): Promise<void> {
+  public async loadHistorySession(
+    refOrSessionId: HistorySessionRef | string
+  ): Promise<void> {
     if (this.features.multiSession) {
-      await this.features.multiSession.loadHistorySession(sessionId);
+      await this.features.multiSession.loadHistorySession(refOrSessionId);
       return;
     }
+    const sessionId =
+      typeof refOrSessionId === "string"
+        ? refOrSessionId
+        : refOrSessionId.sessionId;
     if (this.acpClient.getCurrentSessionId() === sessionId) {
       return;
     }
@@ -897,14 +943,12 @@ export class ChatViewProvider
       if (!ok) return;
     }
 
-    this.userMessageBuffer = "";
-    this.userMessageImages = [];
     const cwd = getWorkspaceRoot();
 
     // Clear the current UI
     this.hasSession = false;
     this.hasRestoredModeModel = false;
-    this.clearToolCallMetadata();
+    this.outputPipeline.reset();
     this.diffManager.clear();
     this.postMessage({ type: "chatCleared" });
     this.postMessage({
@@ -924,23 +968,22 @@ export class ChatViewProvider
       this.documentSyncManager.syncCapabilities();
 
       // Set flag to indicate we're loading history
-      this.isLoadingHistory = true;
+      this.outputPipeline.setLoadingHistory(true);
       await this.sessionManager.loadSession(sessionId, cwd);
       // Wait for all queued session updates to finish rendering before
       // sending the final streamEnd — otherwise the webview receives
       // streamEnd before the history content arrives.
       await this.sessionUpdateNotifier.waitForIdle();
-      // Flush buffer and send streamEnd to separate thinking blocks
-      this.flushUserMessageBuffer();
+      this.outputPipeline.flushUserMessageBuffer();
       // Finalize the last agent response in the history
       this.postMessage({ type: "streamEnd", stopReason: "history_load" });
-      this.isLoadingHistory = false;
+      this.outputPipeline.setLoadingHistory(false);
 
       this.hasSession = true;
       this.sendSessionMetadata();
     } catch (error) {
       console.error("[Chat] Failed to load history session:", error);
-      this.isLoadingHistory = false;
+      this.outputPipeline.setLoadingHistory(false);
       const errorMessage =
         error instanceof Error ? error.message : JSON.stringify(error);
       this.postMessage({
@@ -1005,7 +1048,9 @@ export class ChatViewProvider
       });
 
       if (params.toolCall?.toolCallId) {
-        this.markToolCallPending(params.toolCall.toolCallId);
+        this.outputPipeline.markToolCallPendingForPermission(
+          params.toolCall.toolCallId
+        );
         this.postMessage({
           type: "toolCallStart",
           name: params.toolCall.title || "Tool",
@@ -1043,336 +1088,6 @@ export class ChatViewProvider
     });
   }
 
-  private clearToolCallMetadata(): void {
-    this.toolCalls.clear();
-    this.fileHandler.clearLastFileContents();
-  }
-
-  private cleanupToolCall(toolCallId: string): void {
-    this.toolCalls.delete(toolCallId);
-  }
-
-  private getToolCallState(toolCallId: string): ToolCallState {
-    let state = this.toolCalls.get(toolCallId);
-    if (!state) {
-      state = {};
-      this.toolCalls.set(toolCallId, state);
-    }
-    return state;
-  }
-
-  private markToolCallPending(toolCallId: string): ToolCallState {
-    const state = this.getToolCallState(toolCallId);
-    state.pending = true;
-    return state;
-  }
-
-  private isToolCallPending(toolCallId: string): boolean {
-    return this.toolCalls.get(toolCallId)?.pending === true;
-  }
-
-  private getPendingToolCallIds(): string[] {
-    return Array.from(this.toolCalls.entries())
-      .filter(([, state]) => state.pending)
-      .map(([toolCallId]) => toolCallId);
-  }
-
-  private isFinalToolCall(
-    update: ToolCall | ToolCallUpdate
-  ): update is FinalToolCallUpdate {
-    return update.status === "completed" || update.status === "failed";
-  }
-
-  private asRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === "object"
-      ? (value as Record<string, unknown>)
-      : undefined;
-  }
-
-  private asToolCallRawInput(
-    rawInput: unknown
-  ): Record<string, unknown> | undefined {
-    return this.asRecord(rawInput);
-  }
-
-  private extractOutputText(value: unknown): string | undefined {
-    if (value === undefined || value === null) {
-      return undefined;
-    }
-
-    const text = String(value);
-    return text.length > 0 ? text : undefined;
-  }
-
-  private extractRawOutputText(rawOutput: unknown): string | undefined {
-    const rawOutputRecord = this.asRecord(rawOutput);
-    if (!rawOutputRecord) {
-      return this.extractOutputText(rawOutput);
-    }
-
-    const knownOutput =
-      this.extractOutputText(rawOutputRecord.formatted_output) ||
-      this.extractOutputText(rawOutputRecord.output) ||
-      this.extractOutputText(rawOutputRecord.text);
-
-    if (knownOutput) {
-      return knownOutput;
-    }
-
-    const keys = Object.keys(rawOutputRecord);
-    if (keys.length > 0) {
-      return keys
-        .map((key) => `${key}: ${formatJsonValue(rawOutputRecord[key])}`)
-        .join("\n");
-    }
-
-    return undefined;
-  }
-
-  private hasToolCallPresentation(update: ToolCallUpdate): boolean {
-    // Updates without kind/title/content/locations/rawInput are metadata-only
-    // (e.g. status changes) and should not create or redraw a visible tool card.
-    return (
-      update.kind !== undefined ||
-      update.title !== undefined ||
-      update.content !== undefined ||
-      update.locations !== undefined ||
-      update.rawInput !== undefined
-    );
-  }
-
-  private rememberToolCallMetadata(
-    update: ToolCallMetadataUpdate,
-    resetStartTime = false
-  ): void {
-    const state = this.getToolCallState(update.toolCallId);
-    const rawInput = this.asToolCallRawInput(update.rawInput);
-    if (rawInput) {
-      state.rawInput = rawInput;
-    }
-    if (update.rawOutput !== undefined) {
-      state.rawOutput = update.rawOutput;
-    }
-    if (typeof update.kind === "string") {
-      state.kind = update.kind;
-    }
-    if (typeof update.title === "string") {
-      state.title = update.title;
-    }
-    if (Array.isArray(update.content)) {
-      state.content = update.content;
-    }
-    if (Array.isArray(update.locations)) {
-      state.locations = update.locations;
-    }
-    if (resetStartTime || state.startTime === undefined) {
-      state.startTime = Date.now();
-    }
-  }
-
-  private captureToolCallBaseContent(
-    update: Pick<
-      ToolCall | ToolCallUpdate,
-      "toolCallId" | "rawInput" | "kind" | "title"
-    >
-  ): void {
-    const state = this.getToolCallState(update.toolCallId);
-    if (state.baseContent) {
-      return;
-    }
-
-    const rawInput = this.asToolCallRawInput(update.rawInput) || state.rawInput;
-    const path = this.extractPath(rawInput);
-    if (!path) {
-      return;
-    }
-
-    const kind = update.kind || state.kind;
-    const title = update.title || state.title;
-    state.baseContent = this.captureBaseContent(kind, title, rawInput);
-  }
-
-  private async completeToolCall(update: FinalToolCallUpdate): Promise<void> {
-    if (!this.isToolCallPending(update.toolCallId)) {
-      return;
-    }
-
-    const state = this.getToolCallState(update.toolCallId);
-    let content = update.content ?? state.content;
-    const rawOutput =
-      update.rawOutput !== undefined ? update.rawOutput : state.rawOutput;
-    const locations = update.locations ?? state.locations;
-    let terminalOutput = this.extractRawOutputText(rawOutput);
-
-    if (!terminalOutput && content && content.length > 0) {
-      const terminalContent = content.find(
-        (c) => c.type === "terminal" && "terminalId" in c
-      );
-      if (terminalContent && "terminalId" in terminalContent) {
-        terminalOutput = `[Terminal: ${terminalContent.terminalId}]`;
-      }
-    }
-
-    // Enrich with diff if it's a file modification and missing
-    const rawInput = this.asToolCallRawInput(update.rawInput) || state.rawInput;
-    const path = this.extractPath(rawInput);
-
-    const kind = update.kind || state.kind;
-    const title = update.title || state.title;
-
-    if (
-      typeof path === "string" &&
-      (kind === "write" ||
-        kind === "edit" ||
-        title?.toLowerCase().includes("write") ||
-        title?.toLowerCase().includes("edit"))
-    ) {
-      let oldText: string | undefined;
-
-      // Prefer pre-write snapshot from handleWriteTextFile (captured right
-      // before the disk write). This avoids a race where captureBaseContent
-      // reads the file AFTER the write has already landed.
-      const captured = this.fileHandler.getLastFileContent(path);
-      if (captured !== undefined) {
-        oldText = captured ?? undefined;
-      } else {
-        const oldTextPromise = state.baseContent;
-        oldText = oldTextPromise ? await oldTextPromise : undefined;
-
-        if (!this.isToolCallPending(update.toolCallId)) {
-          return;
-        }
-
-        // Only re-capture if we never attempted it during tool_call.
-        // If oldTextPromise exists but resolved to undefined, the file
-        // didn't exist at capture time (new file). Re-reading now would
-        // pick up content already written by the agent, making oldText
-        // equal to newText and producing an empty diff.
-        if (oldText === undefined && !oldTextPromise) {
-          oldText = await this.captureBaseContent(kind, title, rawInput);
-          if (!this.isToolCallPending(update.toolCallId)) {
-            return;
-          }
-        }
-      }
-
-      let newText: string | undefined =
-        (rawInput?.content as string) ||
-        (rawInput?.text as string) ||
-        (rawInput?.newContent as string) ||
-        (rawInput?.newText as string) ||
-        (rawInput?.new_string as string) ||
-        (rawInput?.replacement as string) ||
-        (rawInput?.data as string) ||
-        (rawInput?.text_content as string) ||
-        (rawInput?.modified_content as string);
-
-      // For edit-type tools (old_string + new_string), compute the full
-      // new content by applying the replacement to the original text.
-      // Otherwise newText is only the replacement fragment, which makes
-      // the diff show every unchanged line as deleted.
-      //
-      // Use replaceAll so the agent's replacement matches its intent
-      // when old_string appears multiple times. If old_string is not
-      // found in oldText, fall back to reading the file from disk —
-      // a broken diff (full file as removed, replacement as added) is
-      // more misleading than a correct diff.
-      let editReconstructed = false;
-      if (
-        rawInput?.old_string !== undefined &&
-        rawInput?.new_string !== undefined &&
-        oldText !== undefined
-      ) {
-        const oldString = String(rawInput.old_string);
-        const newString = String(rawInput.new_string);
-        if (oldText.includes(oldString)) {
-          newText = oldText.split(oldString).join(newString);
-          editReconstructed = true;
-        } else {
-          try {
-            const uri = vscode.Uri.file(path);
-            const currentBytes = await vscode.workspace.fs.readFile(uri);
-            newText = this.textDecoder.decode(currentBytes);
-            // If the file on disk matches oldText, the write was a no-op
-            // (or round-tripped back to the original) — no diff to show.
-            editReconstructed = newText !== oldText;
-          } catch {
-            editReconstructed = false;
-          }
-        }
-      }
-
-      // For edit tools where we could not reconstruct the full new
-      // content, skip the diff entirely. Pushing just the replacement
-      // fragment would make the diff show the entire file as removed.
-      const hasEditFields =
-        rawInput?.old_string !== undefined &&
-        rawInput?.new_string !== undefined;
-      const shouldEmitDiff = !hasEditFields || editReconstructed;
-      if (
-        shouldEmitDiff &&
-        newText !== undefined &&
-        !content?.some((c) => c.type === "diff")
-      ) {
-        content = content ? [...content] : [];
-        content.push({
-          type: "diff",
-          path: path,
-          oldText,
-          newText: String(newText),
-        });
-      }
-    }
-
-    const duration = state.startTime ? Date.now() - state.startTime : undefined;
-
-    if (update.status === "completed") {
-      await recordStructuredDiffsFromContent(content, {
-        cwd: getWorkspaceRoot(),
-        diffManager: this.diffManager,
-      });
-    }
-
-    this.postMessage({
-      type: "toolCallComplete",
-      toolCallId: update.toolCallId,
-      title,
-      kind,
-      content,
-      rawInput,
-      rawOutput,
-      status: update.status,
-      terminalOutput,
-      locations,
-      duration,
-    });
-
-    this.cleanupToolCall(update.toolCallId);
-  }
-
-  private async finalizePendingToolCalls(
-    stopReason: string | undefined
-  ): Promise<void> {
-    const pendingToolCallIds = this.getPendingToolCallIds();
-    if (pendingToolCallIds.length === 0) {
-      return;
-    }
-
-    const status =
-      stopReason === "cancelled" || stopReason === "error"
-        ? "failed"
-        : "completed";
-    for (const toolCallId of pendingToolCallIds) {
-      if (!this.isToolCallPending(toolCallId)) {
-        continue;
-      }
-      await this.completeToolCall({
-        toolCallId,
-        status,
-      });
-    }
-  }
-
   public dispose(): void {
     this.features.chatFontSize?.dispose();
     this.multiSessionManagerView?.dispose();
@@ -1383,248 +1098,43 @@ export class ChatViewProvider
     this.documentSyncManager.dispose();
     this.fileHandler.dispose();
     this.terminalHandler.dispose();
-    this.clearToolCallMetadata();
+    this.outputPipeline.dispose();
   }
 
   private async handleSessionUpdate(
     notification: SessionNotification
   ): Promise<void> {
-    const update = notification.update;
-
-    // During normal conversation (not loading history), ignore user_message_chunk
-    // because opencode echoes back user messages, which would cause duplicate display
-    // and trigger premature streamEnd via flushUserMessageBuffer
-    if (
-      update.sessionUpdate === "user_message_chunk" &&
-      !this.isLoadingHistory
-    ) {
-      return;
-    }
-
-    // Only content-bearing chunks that represent a new assistant turn should
-    // trigger a flush of the user message buffer. Metadata updates
-    // (available_commands_update, config_option_update, usage_update, etc.)
-    // must NOT trigger flush because opencode may send them via setTimeout
-    // between user message chunks during history replay, which would split
-    // a single user message into two.
-    const isContentChunk = [
-      "agent_message_chunk",
-      "agent_thought_chunk",
-      "tool_call",
-      "tool_call_update",
-    ].includes(update.sessionUpdate);
-
-    if (update.sessionUpdate !== "user_message_chunk" && isContentChunk) {
-      this.flushUserMessageBuffer();
-    }
-
-    // Handle user message chunks (for history session restoration)
-    if (update.sessionUpdate === "user_message_chunk") {
-      if (update.content.type === "text") {
-        this.userMessageBuffer += update.content.text;
-      } else if (update.content.type === "image") {
-        // Store image dataUrl for later reconstruction during history load
-        // This allows us to restore image preview chips if agent supports it
-        if (update.content.data && update.content.mimeType) {
-          const dataUrl = `data:${update.content.mimeType};base64,${update.content.data}`;
-          this.userMessageImages.push(dataUrl);
-        }
-      }
-    } else if (update.sessionUpdate === "agent_message_chunk") {
-      if (update.content.type === "text") {
-        this.postMessage({
-          type: "streamChunk",
-          text: update.content.text,
-        });
-      }
-    } else if (update.sessionUpdate === "tool_call") {
-      this.markToolCallPending(update.toolCallId);
-      this.rememberToolCallMetadata(update, true);
-      this.captureToolCallBaseContent(update);
-
-      if (this.isFinalToolCall(update)) {
-        await this.completeToolCall(update);
-      } else {
-        this.postMessage({
-          type: "toolCallStart",
-          name: update.title,
-          toolCallId: update.toolCallId,
-          kind: update.kind,
-          rawInput: update.rawInput,
-        });
-
-        // Cleanup after 10 minutes to prevent leaks if protocol fails
-        setTimeout(
-          () => this.cleanupToolCall(update.toolCallId),
-          10 * 60 * 1000
-        );
-      }
-    } else if (update.sessionUpdate === "tool_call_update") {
-      if (this.isFinalToolCall(update)) {
-        if (!this.isToolCallPending(update.toolCallId)) {
-          this.markToolCallPending(update.toolCallId);
-        }
-        this.rememberToolCallMetadata(update);
-        await this.completeToolCall(update);
-      } else {
-        this.rememberToolCallMetadata(update);
-        // Try to capture base content if we haven't already. We do NOT await
-        // here to avoid blocking the notification loop.
-        this.captureToolCallBaseContent(update);
-
-        if (this.hasToolCallPresentation(update)) {
-          const state = this.markToolCallPending(update.toolCallId);
-          this.postMessage({
-            type: "toolCallStart",
-            name: update.title || state.title || "Tool",
-            toolCallId: update.toolCallId,
-            kind: update.kind || state.kind,
-            rawInput: update.rawInput || state.rawInput,
-          });
-        }
-      }
-    } else if (update.sessionUpdate === "current_mode_update") {
-      this.postMessage({ type: "modeUpdate", modeId: update.currentModeId });
-    } else if (update.sessionUpdate === "available_commands_update") {
-      this.postMessage({
-        type: "availableCommands",
-        commands: update.availableCommands,
-      });
-    } else if (update.sessionUpdate === "plan") {
-      this.postMessage({
-        type: "plan",
-        plan: { entries: update.entries },
-      });
-    } else if (update.sessionUpdate === "agent_thought_chunk") {
-      if (update.content?.type === "text") {
-        this.postMessage({
-          type: "thoughtChunk",
-          text: update.content.text,
-        });
-      }
-    } else if (update.sessionUpdate === "config_option_update") {
-      // Update session metadata from configOptions (new ACP protocol format)
-      this.acpClient.updateSessionMetadataFromConfigOptions(
-        update.configOptions
-      );
-      this.sendSessionMetadata();
-    } else if (update.sessionUpdate === "session_info_update") {
-      if (getPiContextUsageUnavailableMeta(update)) {
-        this.acpClient.clearLastUsageUpdate();
-        this.sendContextUsage();
-      }
-    } else if (update.sessionUpdate === "usage_update") {
-      const u = update as Partial<ContextUsageUpdate>;
-      if (
-        typeof u.size !== "number" ||
-        u.size <= 0 ||
-        typeof u.used !== "number"
-      ) {
-        return;
-      }
-      const cost =
-        u.cost &&
-        typeof u.cost.amount === "number" &&
-        typeof u.cost.currency === "string"
-          ? { amount: u.cost.amount, currency: u.cost.currency }
-          : null;
-      this.acpClient.setLastUsageUpdate({
-        used: u.used,
-        size: u.size,
-        cost,
-      });
-      this.sendContextUsage();
-    }
+    await this.outputPipeline.handleSessionUpdate(notification);
   }
 
   private flushUserMessageBuffer(): void {
-    if (this.userMessageBuffer) {
-      // Ensure the PREVIOUS assistant response is finalized before starting the next user message
-      // This is critical during history restoration to correctly separate turns and add toolbars
-      this.postMessage({ type: "streamEnd", stopReason: "end_turn" });
-
-      const { text, mentions } = extractMentions(this.userMessageBuffer);
-
-      // Merge collected image dataUrls into their corresponding mentions
-      // This enables image preview chips during history restoration
-      if (this.userMessageImages.length > 0) {
-        let imageIdx = 0;
-        for (const mention of mentions) {
-          if (mention.type === "image" && !mention.dataUrl) {
-            // Agent provided image chunk - use it for preview
-            if (imageIdx < this.userMessageImages.length) {
-              mention.dataUrl = this.userMessageImages[imageIdx];
-              imageIdx++;
-            }
-          }
-        }
-      }
-
-      this.postMessage({
-        type: "userMessage",
-        text,
-        mentions,
-      });
-      this.userMessageBuffer = "";
-      this.userMessageImages = [];
-    }
+    this.outputPipeline.flushUserMessageBuffer();
   }
 
-  private extractPath(
-    rawInput: Record<string, unknown> | undefined
-  ): string | undefined {
-    return (
-      (rawInput?.path as string) ||
-      (rawInput?.file as string) ||
-      (rawInput?.filePath as string) ||
-      (rawInput?.file_path as string) ||
-      (rawInput?.filename as string) ||
-      (rawInput?.uri as string) ||
-      (rawInput?.filepath as string) ||
-      (rawInput?.file_name as string) ||
-      (rawInput?.target as string) ||
-      (rawInput?.target_file as string) ||
-      (rawInput?.destination as string) ||
-      (rawInput?.destination_path as string) ||
-      (rawInput?.source as string) ||
-      (rawInput?.source_path as string)
-    );
+  private get isLoadingHistory(): boolean {
+    return this.outputPipeline.state.isLoadingHistory;
   }
 
-  private async captureBaseContent(
-    kind: string | undefined,
-    title: string | undefined,
-    rawInput: Record<string, unknown> | undefined
-  ): Promise<string | undefined> {
-    const path = this.extractPath(rawInput);
+  private set isLoadingHistory(value: boolean) {
+    this.outputPipeline.setLoadingHistory(value);
+  }
 
-    if (
-      typeof path === "string" &&
-      (kind === "write" ||
-        kind === "edit" ||
-        title?.toLowerCase().includes("write") ||
-        title?.toLowerCase().includes("edit"))
-    ) {
-      try {
-        const uri = vscode.Uri.file(path);
-        const fileContent = await vscode.workspace.fs.readFile(uri);
-        return this.textDecoder.decode(fileContent);
-      } catch (error) {
-        if (
-          error instanceof vscode.FileSystemError &&
-          error.code === "FileNotFound"
-        ) {
-          // File doesn't exist, it's a new file. No base content.
-          return undefined;
-        }
-        console.error(
-          `[Chat] Unexpected error capturing base content for ${path}:`,
-          error
-        );
-        return undefined;
-      }
-    }
-    return undefined;
+  private async finalizePendingToolCalls(
+    stopReason: string | undefined
+  ): Promise<void> {
+    await this.outputPipeline.finalizePendingToolCalls(stopReason);
+  }
+
+  private get toolCalls() {
+    return this.outputPipeline.state.toolCalls;
+  }
+
+  private get userMessageBuffer(): string {
+    return this.outputPipeline.state.userMessageBuffer;
+  }
+
+  private set userMessageBuffer(value: string) {
+    this.outputPipeline.state.userMessageBuffer = value;
   }
 
   private getLegacyMessageQueue(): MessageQueueController {
@@ -1710,8 +1220,6 @@ export class ChatViewProvider
     this.isGenerating = true;
 
     // Clear history restoration buffer on new user interaction
-    this.userMessageBuffer = "";
-    this.userMessageImages = [];
     this.postMessage({ type: "userMessage", text, images, mentions });
 
     try {
@@ -1731,7 +1239,7 @@ export class ChatViewProvider
       this.postMessage({ type: "streamStart" });
       const response = await this.acpClient.sendMessage(text, images, mentions);
 
-      await this.finalizePendingToolCalls(response.stopReason);
+      await this.outputPipeline.finalizePendingToolCalls(response.stopReason);
       this.postMessage({
         type: "streamEnd",
         stopReason: response.stopReason,
@@ -1744,7 +1252,7 @@ export class ChatViewProvider
         type: "error",
         text: `Error: ${errorMessage}`,
       });
-      await this.finalizePendingToolCalls("error");
+      await this.outputPipeline.finalizePendingToolCalls("error");
       this.postMessage({ type: "streamEnd", stopReason: "error" });
       this.stderrBuffer = "";
       throw error;
@@ -1786,6 +1294,8 @@ export class ChatViewProvider
       }
 
       this.acpClient.setAgent(agent);
+      this.outputPipeline.reset();
+      this.outputPipeline.setLiveToolOutputProfile(agent.liveToolOutputProfile);
       this.globalState.update(SELECTED_AGENT_KEY, agentId);
       this.hasSession = false;
       this.hasRestoredModeModel = false;
@@ -1931,6 +1441,7 @@ export class ChatViewProvider
 
     this.resetLegacyChatSurface();
     this.acpClient.setAgent(agent);
+    this.outputPipeline.setLiveToolOutputProfile(agent.liveToolOutputProfile);
     await this.globalState.update(SELECTED_AGENT_KEY, agentId);
     this.postMessage({
       type: "agentChanged",
@@ -1960,11 +1471,9 @@ export class ChatViewProvider
   }
 
   private resetLegacyChatSurface(): void {
-    this.userMessageBuffer = "";
-    this.userMessageImages = [];
     this.hasSession = false;
     this.hasRestoredModeModel = false;
-    this.clearToolCallMetadata();
+    this.outputPipeline.reset();
     this.diffManager.clear();
     this.postMessage({ type: "chatCleared" });
     this.postMessage({

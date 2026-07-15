@@ -863,9 +863,9 @@ Khi Google phát hành hỗ trợ `agy --acp` chính thức:
 - `agy --version`: `1.1.2`; `agy models`: thành công trên CLI đã cài.
 - Adapter typecheck pass; root `npm run check-types` đã pass trong quá trình triển khai, nhưng lần chạy cuối bị chặn bởi thay đổi message-queue ngoài phạm vi tại `src/features/multi-session/host.ts`.
 - `npm run lint`: pass với `0` lỗi, còn warning `no-explicit-any` trong test hiện có.
-- `npm run test:antigravity-adapter`: pass `17/17` unit/hardening tests và ACP process smoke bằng fake `agy` Node, không dùng OAuth/network.
+- `npm run test:antigravity-adapter`: pass `18/18` unit/hardening tests và ACP process smoke bằng fake `agy` Node, không dùng OAuth/network.
 - Test VS Code tập trung cho catalog/helper Antigravity: pass `19/19` trên VS Code `1.128.1` qua `xvfb-run`.
-- `npm test`: adapter suite và ACP smoke pass; full suite bị chặn ở `compile-tests` bởi lỗi TypeScript message-queue ngoài phạm vi Antigravity tại `src/views/chat.ts:1632`.
+- `npm test`: adapter suite/ACP smoke và phần lớn root suite pass; kết quả cuối `723 passing`, `1 failing` ở test webview scroll invalidation ngoài phạm vi Antigravity.
 - Production bundle đã tạo `dist/antigravity-acp/index.mjs` khoảng `383 KB` và `LICENSE`; VSIX khoảng `2.08 MB` chứa đủ hai file và đã cài thành công bằng `code --install-extension --force`.
 - Smoke OAuth/prompt bằng tài khoản thật không thực hiện do cảnh báo ToS/account. Không tạo fork remote vì môi trường chưa có GitHub authentication.
 

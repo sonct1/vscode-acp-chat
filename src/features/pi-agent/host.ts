@@ -23,5 +23,6 @@ export function createPiAgentConfig(): AgentConfig {
       VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE: historyLoadMode,
     },
     availabilityCommand: "pi",
+    liveToolOutputProfile: "bundled-pi",
   };
 }

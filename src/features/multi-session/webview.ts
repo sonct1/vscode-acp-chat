@@ -13,11 +13,14 @@ import { MULTI_SESSION_STYLES } from "./styles";
 interface ChatSurfaceBridge {
   reset(): void;
   dispatch(message: ExtensionMessage): Promise<void> | void;
+  beginSnapshotReplay?(): void;
+  endSnapshotReplay?(): void;
   setGenerating(value: boolean): void;
   getInputHtml(): string;
   setInputHtml(value: string): void;
   getScrollTop(): number;
   setScrollTop(value: number): void;
+  scrollToBottom(force?: boolean): void;
   onDraftChanged?(handler: (html: string) => void): { dispose(): void };
   getWebviewState(): MultiSessionWebviewState | undefined;
   saveWebviewState(state: MultiSessionWebviewState): void;
@@ -54,6 +57,7 @@ export class MultiSessionWebviewController {
   private scrollTop: Record<string, number> = {};
   private optimisticLoadingText: string | undefined;
   private snapshotReplay: SnapshotReplay | undefined;
+  private hasRenderedSnapshot = false;
 
   constructor(
     private readonly vscode: VsCodeApi,
@@ -180,7 +184,16 @@ export class MultiSessionWebviewController {
 
   private async applySnapshot(msg: MultiSessionSnapshot): Promise<void> {
     const previousSessionId = this.activeLocalSessionId;
-    if (previousSessionId && previousSessionId !== msg.activeLocalSessionId) {
+    if (
+      this.hasRenderedSnapshot &&
+      !msg.scrollToBottom &&
+      previousSessionId === msg.activeLocalSessionId
+    ) {
+      this.scrollTop[msg.activeLocalSessionId] = this.bridge.getScrollTop();
+    } else if (
+      previousSessionId &&
+      previousSessionId !== msg.activeLocalSessionId
+    ) {
       this.saveActiveSurfaceState();
     }
     this.activeLocalSessionId = msg.activeLocalSessionId;
@@ -198,10 +211,21 @@ export class MultiSessionWebviewController {
     this.lastSeqBySession[msg.activeLocalSessionId] = msg.lastSeq;
     await this.yieldToBrowser();
 
+    let snapshotReplayStarted = false;
     try {
       this.bridge.reset();
+      this.bridge.beginSnapshotReplay?.();
+      snapshotReplayStarted = true;
       for (const event of msg.transcript) {
-        await this.bridge.dispatch(event.message as ExtensionMessage);
+        await this.bridge.dispatch({
+          ...(event.message as ExtensionMessage),
+          finalized: true,
+          historical: true,
+        });
+      }
+      if (snapshotReplayStarted) {
+        this.bridge.endSnapshotReplay?.();
+        snapshotReplayStarted = false;
       }
       if (msg.metadata) {
         await this.bridge.dispatch({
@@ -238,16 +262,24 @@ export class MultiSessionWebviewController {
       }
       this.bridge.setGenerating(msg.isGenerating);
       this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
-      this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
+      if (msg.scrollToBottom) {
+        this.bridge.scrollToBottom(true);
+      } else {
+        this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
+      }
       this.clearOptimisticLoadingIfSettled();
       this.renderHeader();
       this.renderLoading();
       this.persistState();
+      this.hasRenderedSnapshot = true;
     } catch (error) {
       this.optimisticLoadingText = undefined;
       this.renderLoading();
       throw error;
     } finally {
+      if (snapshotReplayStarted) {
+        this.bridge.endSnapshotReplay?.();
+      }
       if (this.snapshotReplay === replay) {
         this.snapshotReplay = undefined;
       }
@@ -470,11 +502,14 @@ export function registerMultiSessionWebviewFeature(
       dispatch: async (message) => {
         await controller.handleMessage(message);
       },
+      beginSnapshotReplay: () => controller.beginSnapshotReplay(),
+      endSnapshotReplay: () => controller.endSnapshotReplay(),
       setGenerating: (value) => controller.setTurnGenerating(value),
       getInputHtml: () => controller.inputPanel.getInputHtml(),
       setInputHtml: (value) => controller.inputPanel.setInputHtml(value),
       getScrollTop: () => controller.messageList.getScrollTop(),
       setScrollTop: (value) => controller.messageList.setScrollTop(value),
+      scrollToBottom: (force) => controller.messageList.scrollToBottom(force),
       onDraftChanged: (handler) => {
         const listener = (event: { html: string }) => handler(event.html);
         controller.getEventBus().on("draftChanged", listener);

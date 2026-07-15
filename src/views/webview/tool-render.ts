@@ -237,6 +237,67 @@ function normalizeKindLabel(kind: string | undefined): string {
   return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
+function renderLivePresentation(info: ToolCallSummary): string {
+  const presentation = info.presentation;
+  if (!presentation) return "";
+
+  const truncated = presentation.truncated
+    ? '<div class="detail-hint">Showing latest output only.</div>'
+    : "";
+  if (presentation.format === "terminal") {
+    return `<div class="tool-details-panel"><div class="detail-section"><span class="detail-label">Live output:</span>${truncated}<div class="code-block-wrapper"><pre class="tool-output terminal">${ansiToHtml(presentation.text)}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div></div>`;
+  }
+  if (presentation.format === "subagent") {
+    const meta = presentation.subagent;
+    const rows = [
+      ["Agent", meta.agent],
+      ["Status", meta.status],
+      ["Model", meta.model],
+      [
+        "Elapsed",
+        typeof meta.elapsedMs === "number"
+          ? formatDuration(meta.elapsedMs)
+          : undefined,
+      ],
+      [
+        "Output",
+        typeof meta.outputChars === "number"
+          ? `${meta.outputChars} chars`
+          : undefined,
+      ],
+      ["Current tool", meta.currentTool],
+      [
+        "Tool calls",
+        typeof meta.toolCallCount === "number"
+          ? String(meta.toolCallCount)
+          : undefined,
+      ],
+    ].filter(
+      (row): row is [string, string] =>
+        typeof row[1] === "string" && row[1].length > 0
+    );
+    const history = meta.toolHistory?.length
+      ? `<div class="detail-section"><span class="detail-label">Recent nested tools:</span><ul class="tool-history">${meta.toolHistory
+          .map(
+            (entry) =>
+              `<li><strong>${escapeHtml(entry.name)}</strong>${entry.summary ? ` — ${escapeHtml(entry.summary)}` : ""}</li>`
+          )
+          .join("")}</ul></div>`
+      : "";
+    return `<div class="tool-details-panel">${
+      rows.length
+        ? `<div class="detail-section"><span class="detail-label">Sub-agent:</span><div class="detail-metadata">${rows
+            .map(
+              ([key, value]) =>
+                `<div><span class="param-key">${escapeHtml(key)}:</span> ${escapeHtml(value)}</div>`
+            )
+            .join("")}</div></div>`
+        : ""
+    }${history}<div class="detail-section"><span class="detail-label">Live preview:</span>${truncated}<div class="code-block-wrapper"><pre class="tool-output">${escapeHtml(presentation.text)}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div></div>`;
+  }
+  return `<div class="tool-details-panel"><div class="detail-section"><span class="detail-label">Live output:</span>${truncated}<div class="code-block-wrapper"><pre class="tool-output">${escapeHtml(presentation.text)}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div></div>`;
+}
+
 function renderExecuteDetails(info: ToolCallSummary): string {
   const { rawInput, rawOutput, terminalOutput } = info;
   let html = "";
@@ -257,7 +318,7 @@ function renderExecuteDetails(info: ToolCallSummary): string {
 
   if (terminalOutput) {
     outputText = terminalOutput;
-    isTerminal = hasAnsiCodes(outputText);
+    isTerminal = info.terminalSemantics === true || hasAnsiCodes(outputText);
   } else if (typeof rawOutput === "string") {
     outputText = rawOutput;
   } else if (rawOutput?.output) {
@@ -378,14 +439,18 @@ const BaseRenderer: ToolRenderer = {
     if (content && content.length > 0) {
       for (const item of content) {
         if (item.type === "content" && item.content?.text) {
+          const terminalSemantics = info.terminalSemantics === true;
+          const outputHtml = terminalSemantics
+            ? ansiToHtml(item.content.text)
+            : escapeHtml(item.content.text);
+          const terminalClass = terminalSemantics ? " terminal" : "";
           html += `<div class="detail-section"><span class="detail-label">Output:</span>`;
-          html += `<div class="code-block-wrapper"><pre class="tool-output">${escapeHtml(item.content.text)}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div>`;
+          html += `<div class="code-block-wrapper"><pre class="tool-output${terminalClass}">${outputHtml}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div>`;
           hasOutput = true;
         } else if (item.type === "terminal") {
           const output = terminalOutput || "";
-          const hasAnsi = hasAnsiCodes(output);
-          const outputHtml = hasAnsi ? ansiToHtml(output) : escapeHtml(output);
-          const terminalClass = hasAnsi ? " terminal" : "";
+          const outputHtml = ansiToHtml(output);
+          const terminalClass = " terminal";
           html += `<div class="detail-section"><span class="detail-label">Terminal:</span>`;
           html += `<div class="code-block-wrapper"><pre class="tool-output${terminalClass}">${outputHtml}</pre><button class="code-copy-btn" acp-title="Copy terminal output"><span class="codicon codicon-copy"></span></button></div></div>`;
           hasOutput = true;
@@ -409,9 +474,12 @@ const BaseRenderer: ToolRenderer = {
       }
 
       if (output) {
-        const hasAnsi = hasAnsiCodes(output);
-        const outputHtml = hasAnsi ? ansiToHtml(output) : escapeHtml(output);
-        const terminalClass = hasAnsi ? " terminal" : "";
+        const terminalSemantics =
+          info.terminalSemantics === true || hasAnsiCodes(output);
+        const outputHtml = terminalSemantics
+          ? ansiToHtml(output)
+          : escapeHtml(output);
+        const terminalClass = terminalSemantics ? " terminal" : "";
         html += `<div class="detail-section"><span class="detail-label">Output:</span>`;
         html += `<div class="code-block-wrapper"><pre class="tool-output${terminalClass}">${outputHtml}</pre><button class="code-copy-btn" acp-title="Copy output"><span class="codicon codicon-copy"></span></button></div></div>`;
       }
@@ -504,6 +572,8 @@ export function renderToolSummary(info: ToolCallSummary): string {
 }
 
 export function renderToolDetails(info: ToolCallSummary): string {
+  const liveHtml = renderLivePresentation(info);
+  if (liveHtml) return liveHtml;
   const renderer = Renderers[info.kind as ToolKind] || BaseRenderer;
   return renderer.renderDetails(info);
 }

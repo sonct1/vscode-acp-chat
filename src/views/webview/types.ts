@@ -62,11 +62,37 @@ export interface ToolCallLocation {
 }
 
 /** Summary payload the host sends for `toolCallStart` / `toolCallComplete`. */
+export type LiveToolPresentation =
+  | { format: "text"; text: string; truncated: boolean }
+  | { format: "terminal"; text: string; truncated: boolean }
+  | {
+      format: "subagent";
+      text: string;
+      truncated: boolean;
+      subagent: {
+        agent?: string;
+        status?: string;
+        model?: string;
+        elapsedMs?: number;
+        outputChars?: number;
+        currentTool?: string;
+        toolCallCount?: number;
+        toolHistory?: Array<{
+          name: string;
+          summary?: string;
+          startMs?: number;
+          endMs?: number;
+        }>;
+      };
+    };
+
 export interface ToolCallSummary {
   toolCallId: string;
   title: string;
   kind?: ToolKind;
   status: string;
+  revision?: number;
+  presentation?: LiveToolPresentation;
   locations?: ToolCallLocation[];
   rawInput?: {
     command?: string;
@@ -80,6 +106,7 @@ export interface ToolCallSummary {
   content?: ToolCallContentItem[];
   duration?: number;
   terminalOutput?: string;
+  terminalSemantics?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +234,7 @@ export interface ExtensionMessage {
   status?: string;
   disposition?: string;
   terminalOutput?: string;
+  terminalSemantics?: boolean;
   results?: Array<{
     name: string;
     path: string;
@@ -229,6 +257,8 @@ export interface ExtensionMessage {
   }>;
   locations?: ToolCallLocation[];
   duration?: number;
+  finalized?: boolean;
+  historical?: boolean;
   images?: string[];
   mentions?: Mention[];
   changes?: Array<{
@@ -246,6 +276,7 @@ export interface ExtensionMessage {
   payloads?: unknown[];
   aborted?: boolean;
   revision?: number;
+  presentation?: LiveToolPresentation;
   processing?: boolean;
   steering?: unknown[];
   followUp?: unknown[];

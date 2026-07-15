@@ -15,6 +15,7 @@ class FakeStore {
     return { sessionId: 's1', cwd: '/tmp/project', sessionFile: this.sessionFile, updatedAt: new Date().toISOString() }
   }
   upsert() {}
+  upsertMany() {}
 }
 
 function makeSessionFile(entries: unknown[]): string {

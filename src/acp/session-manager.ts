@@ -27,6 +27,8 @@ import { ACPClient } from "./client";
 export interface SessionInfo {
   /** Unique session identifier (used by the agent / protocol). */
   sessionId: string;
+  /** Agent that owns this history session. */
+  agentId?: string;
   /** Human-readable title – may be generated from the first message or provided by the agent. */
   title: string;
   /** Working directory the session was created in. */
@@ -35,6 +37,26 @@ export interface SessionInfo {
   updatedAt: string;
   /** Optional extra metadata that a concrete manager may attach. */
   meta?: Record<string, unknown>;
+}
+
+export interface HistorySessionRef {
+  agentId: string;
+  sessionId: string;
+  title: string;
+  cwd: string;
+  updatedAt: string;
+  source: "agent" | "remote-cache" | "local-fallback";
+}
+
+export interface HistoryCatalogScope {
+  agentId: string;
+  cwd: string;
+}
+
+export interface HistorySessionPage {
+  sessions: HistorySessionRef[];
+  nextCursor: string | null;
+  authoritative: boolean;
 }
 
 /** A locally persisted session record. */
@@ -240,6 +262,33 @@ export abstract class SessionManager {
    * Sorted newest-first so the QuickPick shows the most recent session at the top.
    */
   abstract listSessions(cwd: string): Promise<SessionInfo[]>;
+
+  async listSessionPage(
+    cwd: string,
+    cursor?: string | null
+  ): Promise<HistorySessionPage> {
+    if (cursor) {
+      return { sessions: [], nextCursor: null, authoritative: false };
+    }
+    return {
+      sessions: (await this.listSessions(cwd)).flatMap((session) =>
+        session.agentId
+          ? [
+              {
+                agentId: session.agentId,
+                sessionId: session.sessionId,
+                title: session.title,
+                cwd: session.cwd,
+                updatedAt: session.updatedAt,
+                source: "agent" as const,
+              },
+            ]
+          : []
+      ),
+      nextCursor: null,
+      authoritative: false,
+    };
+  }
 
   /**
    * Load (resume) an existing session.
@@ -450,30 +499,98 @@ export class AgentSessionManager extends SessionManager {
    * fallback.
    */
   async listSessions(cwd: string): Promise<SessionInfo[]> {
+    const page = await this.listSessionPage(cwd, null);
+    let sessions: SessionInfo[] = page.sessions;
+    let cursor = page.nextCursor ?? null;
+    while (cursor) {
+      const next = await this.listSessionPage(cwd, cursor);
+      sessions = sessions.concat(next.sessions);
+      cursor = next.nextCursor ?? null;
+    }
+    return sessions.sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+  }
+
+  async listSessionPage(
+    cwd: string,
+    cursor?: string | null
+  ): Promise<HistorySessionPage> {
     if (!this._initialized) {
       throw new Error(
         "AgentSessionManager not yet synced – call syncCapabilities() first"
       );
     }
 
+    const agentId = this.acpClient.getAgentId();
+
     if (!this._supportsListSessions) {
       console.warn(
         "[SessionManager] Agent does not support session/list; falling back to local cache"
       );
-      return this.listLocalSessions(cwd);
+      return {
+        sessions: (await this.listLocalSessions(cwd)).map((session) => ({
+          agentId,
+          sessionId: session.sessionId,
+          title: session.title,
+          cwd: session.cwd,
+          updatedAt: session.updatedAt,
+          source: "local-fallback" as const,
+        })),
+        nextCursor: null,
+        authoritative: false,
+      };
     }
 
     try {
-      const response = await this.acpClient.listSessions({ cwd });
-      return this.mapAgentSessions(response, cwd);
+      const response = await this.acpClient.listSessions({
+        cwd,
+        cursor: cursor ?? undefined,
+      });
+      return {
+        sessions: this.mapAgentSessions(response, cwd).map((session) => ({
+          agentId,
+          sessionId: session.sessionId,
+          title: session.title,
+          cwd: session.cwd,
+          updatedAt: session.updatedAt,
+          source: "agent" as const,
+        })),
+        nextCursor: response.nextCursor ?? null,
+        authoritative: true,
+      };
     } catch (error) {
       // Agent call failed – fall back to local cache
       console.warn(
         "[SessionManager] Failed to list sessions from agent; falling back to local cache:",
         error
       );
-      return this.listLocalSessions(cwd);
+      return {
+        sessions: (await this.listLocalSessions(cwd)).map((session) => ({
+          agentId,
+          sessionId: session.sessionId,
+          title: session.title,
+          cwd: session.cwd,
+          updatedAt: session.updatedAt,
+          source: "local-fallback" as const,
+        })),
+        nextCursor: null,
+        authoritative: false,
+      };
     }
+  }
+
+  async listLocalSessionRefs(cwd: string): Promise<HistorySessionRef[]> {
+    const agentId = this.acpClient.getAgentId();
+    return (await this.listLocalSessions(cwd)).map((session) => ({
+      agentId,
+      sessionId: session.sessionId,
+      title: session.title,
+      cwd: session.cwd,
+      updatedAt: session.updatedAt,
+      source: "local-fallback",
+    }));
   }
 
   /**
@@ -520,7 +637,14 @@ export class AgentSessionManager extends SessionManager {
     await this.acpClient.deleteSession({ sessionId });
 
     const store = this.getStore();
-    await store.deleteOne(sessionId);
+    try {
+      await store.deleteOne(sessionId);
+    } catch (error) {
+      console.warn(
+        "[SessionManager] Remote session was deleted, but local metadata cleanup failed:",
+        error
+      );
+    }
   }
 
   /**

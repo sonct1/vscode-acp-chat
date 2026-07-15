@@ -347,6 +347,11 @@ export class Adapter {
 			const bind = poller.bindState;
 			if (bind.kind === "ambiguous") {
 				outcome.error = actionableAgyError("ambiguous_binding", `ambiguous conversation binding: ${bind.ids.join(", ")}`);
+			} else if (bind.kind === "schema_pending") {
+				outcome.error = actionableAgyError(
+					"incompatible_schema",
+					bind.message,
+				);
 			} else {
 				outcome.error = actionableAgyError("no_db", "no conversation db was bound for the first prompt");
 			}

@@ -160,7 +160,8 @@ function toToolCallLocations(args: unknown, cwd: string, line?: number): ToolCal
 
 export class SessionManager {
   private sessions = new Map<string, PiAcpSession>()
-  private readonly store = new SessionStore()
+
+  constructor(private readonly store = new SessionStore()) {}
 
   /** Dispose all sessions and their underlying pi subprocesses. */
   disposeAll(): void {
@@ -794,10 +795,7 @@ export class PiAcpSession {
       this.completePendingTurn(pending, reason)
     })().finally(() => {
       this.completionValidationRunning = false
-      if (
-        this.pendingTurn?.id === validatingTurnId &&
-        this.completionValidationGeneration !== generation
-      ) {
+      if (this.pendingTurn?.id === validatingTurnId && this.completionValidationGeneration !== generation) {
         this.runCompletionValidation(this.completionValidationGeneration)
       }
     })

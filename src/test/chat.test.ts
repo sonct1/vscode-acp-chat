@@ -993,6 +993,14 @@ suite("ChatViewProvider", () => {
 
   suite("Tool Call Updates", () => {
     test("treats a completed tool_call as a complete event", async () => {
+      const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+      const previous =
+        config.inspect<boolean>("enableDiffSummary")?.globalValue;
+      await config.update(
+        "enableDiffSummary",
+        true,
+        vscode.ConfigurationTarget.Global
+      );
       const filePath = path.join(
         fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-summary-")),
         "NewFile.kt"
@@ -1063,6 +1071,11 @@ suite("ChatViewProvider", () => {
       } finally {
         provider.dispose();
         fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
+        await config.update(
+          "enableDiffSummary",
+          previous,
+          vscode.ConfigurationTarget.Global
+        );
       }
     });
 
@@ -1073,7 +1086,8 @@ suite("ChatViewProvider", () => {
       );
       fs.writeFileSync(filePath, "after\n");
       const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-      const previous = config.inspect<boolean>("enableDiffSummary")?.globalValue;
+      const previous =
+        config.inspect<boolean>("enableDiffSummary")?.globalValue;
       await config.update(
         "enableDiffSummary",
         false,
@@ -1109,14 +1123,17 @@ suite("ChatViewProvider", () => {
 
         assert.ok(messages.some((m) => m.type === "toolCallComplete"));
         assert.ok(!messages.some((m) => m.type === "diffSummary"));
-        assert.deepStrictEqual((provider as any).diffManager.getPendingChanges(), [
-          {
-            path: filePath,
-            oldText: "before\n",
-            newText: "after\n",
-            status: "pending",
-          },
-        ]);
+        assert.deepStrictEqual(
+          (provider as any).diffManager.getPendingChanges(),
+          [
+            {
+              path: filePath,
+              oldText: "before\n",
+              newText: "after\n",
+              status: "pending",
+            },
+          ]
+        );
       } finally {
         provider.dispose();
         fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
@@ -2074,7 +2091,10 @@ suite("ChatViewProvider", () => {
       await provider.selectAgentAndStartNewChat("opencode");
 
       assert.strictEqual(acpClient.getAgentId(), "opencode");
-      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "opencode");
+      assert.strictEqual(
+        memento.get("vscode-acp-chat.selectedAgent"),
+        "opencode"
+      );
       assert.strictEqual(acpClient.connectCallCount, 1);
       assert.strictEqual(acpClient.newSessionCallCount, 1);
       assert.ok(messages.some((message) => message.type === "chatCleared"));
@@ -2103,11 +2123,16 @@ suite("ChatViewProvider", () => {
         (message) => message.type === "confirmAction"
       );
       assert.ok(confirmation);
-      (provider as any).pendingConfirmations.get(confirmation.requestId)?.(false);
+      (provider as any).pendingConfirmations.get(confirmation.requestId)?.(
+        false
+      );
       await selection;
 
       assert.strictEqual(acpClient.getAgentId(), "test-agent");
-      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "test-agent");
+      assert.strictEqual(
+        memento.get("vscode-acp-chat.selectedAgent"),
+        "test-agent"
+      );
       assert.strictEqual(acpClient.cancelCallCount, 0);
       assert.strictEqual(acpClient.newSessionCallCount, 0);
       assert.ok(!messages.some((message) => message.type === "chatCleared"));
@@ -2127,12 +2152,16 @@ suite("ChatViewProvider", () => {
       await provider.selectAgentAndStartNewChat("opencode");
 
       assert.strictEqual(acpClient.getAgentId(), "opencode");
-      assert.strictEqual(memento.get("vscode-acp-chat.selectedAgent"), "opencode");
+      assert.strictEqual(
+        memento.get("vscode-acp-chat.selectedAgent"),
+        "opencode"
+      );
       assert.strictEqual(acpClient.connectCallCount, 1);
       assert.strictEqual(acpClient.newSessionCallCount, 1);
       assert.ok(
         messages.some(
-          (message) => message.type === "error" && message.text === "session failed"
+          (message) =>
+            message.type === "error" && message.text === "session failed"
         )
       );
       provider.dispose();

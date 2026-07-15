@@ -1,588 +1,793 @@
 # Fast Chat History Loading Implementation Plan
 
-| Attribute  | Value                                                                                                                                                                                                 |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Draft                                                                                                                                                                                                 |
-| Owner      | TBD                                                                                                                                                                                                   |
-| Phase      | Performance implementation planning                                                                                                                                                                   |
-| Scope      | History listing, ACP history replay, host/webview message batching, Markdown rendering, tool/diff restoration, multi-session snapshots, performance tests                                             |
-| References | `src/extension.ts`, `src/acp/client.ts`, `src/acp/session-manager.ts`, `src/acp/session-output-pipeline.ts`, `src/views/chat.ts`, `src/views/webview/`, `src/features/multi-session/`, `src/utils/diff.ts` |
+| Attribute  | Value                                                                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status     | Implemented                                                                                                                                                                |
+| Owner      | Engineering                                                                                                                                                                |
+| Phase      | Completed; performance gates validated with deterministic counters and focused integration tests                                                                           |
+| Scope      | Agent-scoped history catalog, bundled Pi session discovery, ACP history replay, multi-session publication, webview restoration, pagination, metrics, tests                 |
+| Depends on | [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md)                                                                                                    |
+| Related    | [Multi-Session Chat Surface DOM Cache](./implement-multi-session-dom-surface-cache.md), [Session Switch Loading](./implement-session-switch-loading.md)                    |
+| References | `src/extension.ts`, `src/acp/session-manager.ts`, `src/acp/client.ts`, `src/features/multi-session/`, `src/features/pi-agent/vendor/pi-acp/src/acp/`, `src/views/webview/` |
 
 ## Objective
 
-Giảm rõ rệt thời gian mở danh sách history và thời gian hiển thị một conversation đã lưu, đặc biệt với session dài, nhiều code block, thought chunk và tool call.
+Giảm thời gian cảm nhận khi mở danh sách history và thời gian từ lúc chọn một session đến khi transcript ổn định trong chat, ưu tiên luồng mặc định hiện tại:
+
+- multi-session đang bật;
+- history được scope theo agent của session đang active;
+- bundled Pi agent dùng `session/list` và `session/load` của vendored `pi-acp`;
+- Pi mặc định replay full active-path transcript từ JSONL.
 
 Kết quả cần đạt:
 
-- QuickPick history xuất hiện ngay, không chờ `session/list` hoàn tất mới mở UI.
-- Chi phí replay phụ thuộc chủ yếu vào số turn/block sau khi compact, không phụ thuộc trực tiếp vào số raw ACP chunk.
-- Mỗi text/thought block trong history chỉ parse Markdown một lần trong đường chạy chuẩn.
-- Không đọc workspace hiện tại để dựng lại diff lịch sử.
-- Không render cùng một history hai lần trong multi-session mode.
-- Giữ nguyên thứ tự turn, tool call, thought, metadata và final `streamEnd`.
-- Không làm giảm tính đúng đắn của live streaming hoặc đưa lỗi race thứ tự quay trở lại.
+- QuickPick hiện ngay, không chờ agent scan history xong mới xuất hiện.
+- Session được định danh bằng `{ agentId, sessionId }`, không phụ thuộc map tạm chỉ keyed theo `sessionId`.
+- Không gọi lại `session/list` chỉ để lấy title sau khi người dùng đã chọn item.
+- Bundled Pi không scan và parse lại toàn bộ cây JSONL nhiều lần cho cùng một thao tác list/load.
+- Cursor pagination hoạt động; session sau page đầu tiên vẫn truy cập được.
+- Multi-session history chỉ render một lần, không render delta rồi reset/replay snapshot lần nữa.
+- Snapshot history parse Markdown một lần trên mỗi finalized text/thought block.
+- Không đọc workspace hiện tại để reconstruct historical diff.
+- Ordering, tool rendering, metadata, continuation và late notifications vẫn đúng.
 
-## Current-state analysis
+## Non-goals
 
-### History list
+- Không thay đổi ACP public protocol hoặc yêu cầu third-party agent hỗ trợ message riêng của extension.
+- Không thay đổi Pi compaction/model-context semantics.
+- Không gửi full JSONL transcript lại vào model khi continue session.
+- Không persist transcript body trong VS Code `globalState`.
+- Không loại bỏ serial queues đang bảo vệ ordering.
+- Không triển khai DOM surface cache trong plan này; repeated A ↔ B switching thuộc plan [Multi-Session Chat Surface DOM Cache](./implement-multi-session-dom-surface-cache.md).
+- Không thay thuật toán diff tổng quát nếu profiling chưa chứng minh đó là bottleneck còn lại.
 
-Command `vscode-acp-chat.loadHistory` hiện làm tuần tự:
+## Current flow
 
-```text
-command invoked
-  -> await ChatViewProvider.listSessions()
-  -> await ACP session/list when supported
-  -> create and show QuickPick
-```
+### 1. Agent scope
 
-`src/extension.ts` chỉ gọi `quickPick.show()` sau khi `listSessions()` hoàn tất. Nếu agent truy vấn session từ storage hoặc service riêng, người dùng thấy command không phản hồi dù VS Code chưa có UI loading.
+Các built-in agent được khai báo trong `src/acp/agents.ts`. Extension không có một history database chung cho mọi agent.
 
-`AgentSessionManager.listSessions()` tại `src/acp/session-manager.ts` ưu tiên `session/list`; local store chỉ là fallback khi capability không tồn tại hoặc RPC lỗi. Local data đã có thể dùng làm stale snapshot nhưng chưa được dùng để mở UI sớm.
-
-### Legacy history load
-
-`ChatViewProvider.loadHistorySession()` tại `src/views/chat.ts`:
-
-1. Xóa UI hiện tại.
-2. Gọi ACP `session/load`.
-3. Agent replay toàn bộ history thành `session/update` notifications.
-4. Mỗi notification được đẩy qua `AsyncSerialProcessor`.
-5. Mỗi render message lại đi qua `webviewPostNotifier`.
-6. Webview tiếp tục xử lý từng message qua `incomingNotifier`.
-7. Host chờ queue drain rồi gửi final `streamEnd`.
-
-Ba queue tuần tự cần thiết để giữ ordering, nhưng hiện mỗi raw chunk tạo ít nhất một task/Promise và một lần truyền host-to-webview.
-
-### Markdown and syntax highlighting
-
-`TextBlock.appendContent()` và `ThoughtBlock.appendContent()` đang nối chunk rồi parse lại toàn bộ nội dung:
-
-```ts
-this.rawContent += text;
-this.contentEl.innerHTML = marked.parse(this.rawContent) as string;
-```
-
-Với một block có `n` chunk, tổng lượng text được parse xấp xỉ:
+History hiện được scope như sau:
 
 ```text
-chunk 1
-+ chunks 1..2
-+ chunks 1..3
-...
-+ chunks 1..n
+active multi-session local session
+  -> session.agent
+  -> SessionCatalogService.listSessions(agent, runtime?)
+  -> ACP session/list của chính agent đó
+     hoặc local metadata fallback theo agentId
 ```
 
-Chi phí tăng gần bậc hai theo số chunk. Mỗi lần parse còn chạy lại `highlight.js` cho mọi fenced code block đã xuất hiện trong nội dung tích lũy.
+Local metadata fallback dùng prefix:
 
-### Tool and diff restoration
+```text
+vscode-acp-chat.localSessions.v1.<agentId>
+```
 
-Khi replay tool write/edit, host có thể đọc file hiện tại bằng `vscode.workspace.fs.readFile()` để dựng `oldText`/`newText`. Việc này có hai vấn đề:
+Agent capability quyết định có thể list/load/delete hay không. Với các built-in agent ngoài Pi, chi phí server-side của `session/list` và `session/load` phụ thuộc implementation của agent tương ứng; extension chỉ thấy ACP response/notifications.
 
-- Chặn queue xử lý history bằng filesystem I/O.
-- Workspace hiện tại không nhất thiết phản ánh trạng thái file tại thời điểm tool lịch sử chạy, nên diff có thể sai.
+### 2. Load History command
 
-Khi diff được gửi sang webview, `computeLineDiff()` dùng full LCS matrix với độ phức tạp thời gian và bộ nhớ `O(oldLines * newLines)`. Tool history chứa file lớn có thể tạo long task đáng kể.
+Luồng command hiện tại:
 
-### Multi-session duplicate rendering
+```text
+vscode-acp-chat.loadHistory
+  -> check supportsLoadSession
+  -> await chatProvider.listSessions()
+  -> map toàn bộ kết quả thành QuickPickItem
+  -> create/show QuickPick
+```
 
-Trong multi-session mode, history session active hiện có thể được render theo hai lượt:
+QuickPick chỉ xuất hiện sau khi remote list hoàn tất. Vì vậy agent startup, filesystem scan hoặc network/storage latency đều bị người dùng cảm nhận như command không phản hồi.
 
-1. Mỗi update được `append()` và gửi ngay dưới dạng `feature.multi-session.delta`.
-2. Khi load hoàn tất, host gửi full `feature.multi-session.snapshot`.
-3. Webview reset DOM và replay toàn bộ transcript lần nữa.
+### 3. Default multi-session listing
 
-`TranscriptStore` đã compact các `streamChunk`/`thoughtChunk` liên tiếp, nhưng việc phát delta trong lúc load làm lợi ích compaction không được áp dụng cho lượt render đầu.
+Khi multi-session bật:
 
-### Missing performance evidence
+```text
+ChatViewProvider.listSessions()
+  -> MultiSessionHostController.listSessions()
+  -> active session agent
+  -> SessionCatalogService.listSessions()
+```
 
-Test hiện tại kiểm tra ordering và restoration correctness nhưng chưa đo:
+`SessionCatalogService`:
 
-- số raw notifications;
-- số host-to-webview messages;
-- tổng byte payload;
-- số lần `marked.parse()`;
-- thời gian ACP request, queue drain và webview render;
-- số filesystem reads trong history mode;
-- số lần cùng transcript bị reset/replay.
+- dùng runtime hiện có nếu runtime đã connected;
+- nếu không có runtime, tạo temporary `ACPClient`, connect, sync capabilities, list rồi dispose;
+- nếu runtime tồn tại nhưng disconnected, trả local records trực tiếp.
 
-Không được tối ưu bằng cảm nhận mà thiếu baseline và regression threshold.
+Khoảng trống hiện tại:
+
+- disconnected-local branch không filter theo workspace `cwd` như `AgentSessionManager.listLocalSessions()`;
+- agent-returned sessions không được persist thành một remote catalog snapshot, nên local metadata cache không đại diện đầy đủ cho session tạo ngoài extension;
+- `AgentSessionManager.listSessions()` chỉ gọi page đầu và bỏ qua `nextCursor`.
+
+### 4. Bundled Pi history list
+
+Bundled Pi `session/list` hiện làm:
+
+```text
+listSessions({ cwd, cursor })
+  -> listPiSessions()
+     -> recursively walk mọi *.jsonl trong Pi sessions dir
+     -> read header mỗi file
+     -> read tail mỗi file
+     -> có thể scan cả file để tìm session_info.name
+     -> fallback title có thể readFileSync toàn file
+     -> sort toàn bộ sessions
+  -> filter cwd
+  -> slice page 50
+  -> return nextCursor
+```
+
+Pagination chỉ giảm response payload; nó chưa giảm discovery cost vì Pi vẫn scan toàn bộ session tree trước khi slice page.
+
+### 5. Selection and load in multi-session mode
+
+Sau khi người dùng chọn session:
+
+```text
+QuickPick selection
+  -> loadHistorySession(sessionId)
+  -> resolve agent qua historySessionAgentById / lastHistoryListAgentId
+  -> create agent-specific local draft
+  -> activate draft and post empty/loading snapshot
+  -> start a new ACP runtime
+  -> listSessions() lần nữa để resolve title
+  -> ACP session/load
+```
+
+Với bundled Pi runtime mới:
+
+```text
+Pi loadSession(sessionId)
+  -> findStoredSession(sessionId)
+     -> persistent pi-acp session map nếu có
+     -> nếu miss: findPiSession(sessionId)
+        -> listPiSessions() toàn bộ lần nữa
+  -> spawn/restore pi --mode rpc
+  -> read full JSONL active path
+  -> replay each saved user/assistant message
+  -> replay two ACP notifications per toolResult
+  -> read session configuration
+  -> return load response
+```
+
+Một thao tác list rồi load có thể thực hiện nhiều lần global Pi discovery:
+
+1. list ban đầu cho QuickPick;
+2. list lại chỉ để lấy title;
+3. fallback scan trong runtime load mới nếu session map chưa có mapping.
+
+### 6. Host reconstruction and duplicate publication
+
+Mỗi ACP `session/update` được đưa qua `AsyncSerialProcessor` và `SessionOutputPipeline`.
+
+Trong multi-session hiện tại:
+
+```text
+history notification
+  -> output pipeline
+  -> TranscriptStore.append()
+  -> active session: post feature.multi-session.delta
+  -> webview render delta ngay
+
+history load completes
+  -> queue.waitForIdle()
+  -> append streamEnd(history_load)
+  -> send full feature.multi-session.snapshot
+  -> webview reset DOM
+  -> replay transcript từ đầu
+```
+
+`TranscriptStore` compact adjacent `streamChunk`/`thoughtChunk` trong snapshot, nhưng lượt delta trước đó vẫn đã render. Đây là duplicate rendering chắc chắn trên default path.
+
+### 7. Webview rendering
+
+`MultiSessionWebviewController.applySnapshot()` hiện:
+
+1. `bridge.reset()`;
+2. dispatch từng transcript event tuần tự;
+3. apply metadata/context/diff/permissions;
+4. restore generation, draft và scroll.
+
+`TextBlock.appendContent()` và `ThoughtBlock.appendContent()` nối text rồi gọi `marked.parse()` trên toàn bộ accumulated content. Với agent replay nhiều chunk trong cùng block, chi phí gần bậc hai và syntax highlighting bị chạy lại nhiều lần.
+
+### 8. Legacy mode
+
+Khi multi-session tắt, `ChatViewProvider.loadHistorySession()` cũng dùng serial notification queue và post từng render message. Legacy mode không có duplicate delta + final multi-session snapshot, nhưng vẫn chịu raw event count, repeated Markdown parsing và historical tool reconstruction.
+
+Plan ưu tiên default multi-session + Pi trước. Generic collector/batching cho legacy và chunk-heavy agents chỉ triển khai khi metrics sau các phase đầu vẫn cho thấy cần thiết.
+
+## Latency model
+
+Đo riêng các thành phần sau thay vì chỉ đo end-to-end:
+
+```text
+T_picker = T_picker_shell
+         + T_cached_catalog
+         + T_runtime_connect
+         + T_remote_list
+         + T_agent_discovery
+
+T_load = T_runtime_connect
+       + T_session_lookup
+       + T_agent_restore
+       + T_transcript_read
+       + T_agent_replay
+       + T_host_queue
+       + T_snapshot_publish
+       + T_webview_render
+```
+
+Với Pi cần tách thêm:
+
+- recursive discovery/stat;
+- JSONL metadata content reads;
+- session-map lookup hit/miss;
+- Pi RPC process spawn/restore;
+- full transcript parse;
+- replay notification count.
 
 ## Root causes ranked
 
-| Priority | Cause                                                                 | Effect                                                                                             |
-| -------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| P0       | Parse toàn bộ Markdown sau mỗi raw chunk                              | CPU tăng gần `O(n²)`; code block bị highlight lặp lại                                               |
-| P0       | Raw ACP chunk đi qua nhiều queue và `postMessage` riêng               | Hàng nghìn Promise/task, serialization và DOM update tuần tự                                        |
-| P1       | Multi-session vừa phát delta vừa gửi final snapshot                   | History active bị render hai lần                                                                   |
-| P1       | Tool history đọc workspace và dựng diff như live tool                 | Filesystem I/O tuần tự, diff có thể sai ngữ nghĩa                                                   |
-| P1       | LCS diff được tính eager khi tool details được render                 | Long task và memory spike với file lớn                                                             |
-| P2       | Command chờ remote `session/list` trước khi mở QuickPick              | UI có cảm giác treo dù phần list local có thể sẵn sàng                                              |
-| P2       | Không có performance timing/counters dành cho history                 | Khó tách agent latency, extension-host latency và webview latency                                   |
+| Priority       | Cause                                                                 | Effect                                                                                 |
+| -------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| P0             | Pi global synchronous JSONL discovery trước mỗi page/list             | Picker chậm theo tổng số session/file, không theo page size                            |
+| P0             | Selection relist để lấy title và có thể scan lại khi load runtime mới | Lặp filesystem work và ACP startup không cần thiết                                     |
+| P0             | Multi-session delta-render rồi snapshot-render cùng transcript        | Toàn bộ history bị render hai lần                                                      |
+| P0 correctness | Extension bỏ qua `nextCursor`                                         | Session sau page đầu không truy cập được                                               |
+| P1             | Snapshot dispatch tuần tự và Markdown parse accumulated content       | CPU/long task cao với history nhiều chunk/code block                                   |
+| P1             | Pi full JSONL parse + serial ACP replay                               | Chi phí thực, một phần cần thiết để đảm bảo full history correctness                   |
+| P1             | Historical tool path có thể đọc workspace và eager render diff        | I/O tuần tự, diff không phản ánh historical state, có thể tạo LCS long task            |
+| P1 correctness | History identity keyed bằng plain `sessionId`                         | Có thể chọn/load/delete sai agent nếu ID trùng hoặc picker result stale                |
+| P2             | Temporary ACP runtime cho list                                        | Có thể đáng kể, nhưng chỉ tối ưu/adopt runtime nếu metrics chứng minh                  |
+| P2             | First-read `globalState` key scan                                     | Có giới hạn theo local retention/max sessions; không phải bottleneck chính đã xác minh |
 
 ## Architecture decisions
 
-### 1. Giữ queue ordering, giảm số item đi qua queue
+### 1. Composite history identity
 
-Không loại bỏ hoặc chạy song song tùy tiện `AsyncSerialProcessor`, `webviewPostNotifier` hay `incomingNotifier`. Các queue này bảo vệ thứ tự message và đã sửa race `streamEnd` vượt content.
-
-Tối ưu phải diễn ra trước boundary của queue bằng cách compact history thành render events lớn hơn, thay vì xử lý raw chunk nhanh hơn nhưng mất ordering.
-
-### 2. Tách live streaming và history replay
-
-Live streaming vẫn ưu tiên phản hồi từng phần. History replay không cần mô phỏng tốc độ stream cũ.
-
-Trong history mode:
-
-- Thu nhận và chuẩn hóa notifications ở Extension Host.
-- Gộp text/thought chunks liên tiếp thuộc cùng block.
-- Chỉ gửi dữ liệu đã compact sang webview.
-- Finalize theo turn/block trước khi render.
-
-Không áp dụng buffering dài cho live conversation.
-
-### 3. Dùng bounded batches, không gửi một payload không giới hạn
-
-Một message chứa toàn bộ history có thể gây serialization pause lớn, đặc biệt khi có image data URL hoặc tool output dài.
-
-Protocol replay phải hỗ trợ các batch có giới hạn, đề xuất ban đầu:
-
-- tối đa `100` render events mỗi batch;
-- hoặc tối đa khoảng `512 KiB` payload ước lượng;
-- event riêng lẻ vượt ngưỡng được gửi một mình;
-- giữ nguyên thứ tự tuyệt đối giữa các batch.
-
-Các giá trị cuối cùng phải được xác nhận bằng benchmark, không coi là public API.
-
-### 4. Render Markdown một lần cho mỗi compacted block
-
-Thêm API phân biệt:
+Thay vì truyền plain `sessionId` từ QuickPick vào load/delete, dùng typed selection:
 
 ```ts
-appendContent(chunk: string): void; // live stream
-setContent(content: string): void;  // finalized/history block
+interface HistorySessionRef {
+  agentId: string;
+  sessionId: string;
+  title: string;
+  cwd: string;
+  updatedAt: string;
+  source: "agent" | "remote-cache" | "local-fallback";
+}
 ```
 
-History replay dùng `setContent()`. Live stream có thể tiếp tục `appendContent()`, sau đó được coalesce theo animation frame ở phase riêng nếu benchmark cho thấy cần thiết.
+Load/delete phải dùng `{ agentId, sessionId }` trực tiếp. Không dùng `lastHistoryListAgentId` để quyết định agent sau khi user đã chọn item.
 
-`finalize()` phải flush pending live render trước khi action buttons hoặc block state được tạo.
+### 2. Page-aware catalog contract
 
-### 5. Không reconstruct historical diffs từ workspace hiện tại
+Giữ low-level ACP cursor semantics và expose ở session manager/catalog:
+
+```ts
+interface HistorySessionPage {
+  sessions: HistorySessionRef[];
+  nextCursor: string | null;
+}
+```
+
+Không eager fetch tất cả page trước khi show picker. Page 1 được refresh trước; page tiếp theo được load qua `Load more…` hoặc background fetch có lifecycle guard.
+
+### 3. Remote catalog snapshot riêng
+
+Local session metadata hiện tại không đủ để làm stale cache cho agent-native history vì remote result không được ghi lại và session có thể được tạo ngoài extension.
+
+Thêm last-successful remote catalog snapshot scoped theo:
+
+```text
+agentId + normalized cwd
+```
+
+Snapshot chỉ chứa metadata, không chứa transcript/tool content. Agent result vẫn là authoritative; snapshot chỉ giúp picker hiện nhanh.
+
+### 4. Pi metadata index and direct lookup
+
+Bundled Pi cần một metadata index keyed theo session file với validation bằng `mtime` và size.
+
+Nguyên tắc:
+
+- file không đổi: không parse JSONL content lại;
+- file mới/đổi: một metadata pass để lấy header, latest name, first-user fallback và updated timestamp;
+- discovery result bulk-update `sessionId -> { cwd, sessionFile }` vào pi-acp session map;
+- runtime load mới lookup mapping trực tiếp và validate file trước khi fallback scan;
+- cursor pages trong cùng listing snapshot reuse cùng sorted discovery result.
+
+Không gọi `SessionStore.upsert()` từng session trong loop vì implementation hiện tại read/write toàn bộ map file mỗi lần. Cần in-memory load + `upsertMany()`/single flush.
+
+### 5. Carry selected metadata into load
+
+Title/cwd/agent từ selected QuickPick item được truyền vào `loadHistorySession(ref)`. Không gọi lại catalog chỉ để resolve title.
+
+`session_info_update` sau load vẫn có quyền cập nhật title mới hơn.
+
+### 6. Single-pass history publication
+
+Mỗi managed session có replay phase rõ ràng:
+
+```ts
+type HistoryReplayPhase = "idle" | "collecting" | "publishing" | "live";
+```
+
+Trong `collecting`:
+
+- append vào `TranscriptStore`;
+- update lightweight status/progress;
+- không post transcript-content delta.
+
+Khi `session/load` response về:
+
+1. drain notifications đã nhận;
+2. flush user buffer;
+3. append final `streamEnd(history_load)` vào transcript;
+4. capture/post đúng một snapshot với `lastSeq` boundary;
+5. chuyển phase sang `live` ngay sau publication boundary.
+
+Notification thực sự đến muộn vẫn được nhận thành delta với `seq > snapshot.lastSeq`. Không dùng arbitrary sleep làm correctness mechanism.
+
+### 7. Preserve serial ordering queues
+
+Không loại bỏ `AsyncSerialProcessor`, webview incoming queue hoặc post ordering queue. Giảm số item đi qua queue bằng suppression/compaction, không chạy song song event handlers.
+
+### 8. Snapshot restoration is finalized rendering
+
+Snapshot transcript là dữ liệu đã có đầy đủ, không cần mô phỏng token streaming cũ.
+
+Webview snapshot path phải:
+
+- reset một lần;
+- suspend per-event auto-scroll/paint invalidation;
+- render finalized text/thought bằng `setContent()` một lần/block;
+- finalize action buttons một lần;
+- apply side state;
+- restore scroll một lần ở cuối;
+- yield giữa bounded work units nếu profiling còn long task.
+
+Chỉ thêm protocol batch mới nếu snapshot serialization hoặc một replay task vẫn vượt performance gate sau khi bỏ duplicate render và repeated Markdown parsing.
+
+### 9. Historical tool behavior
 
 Trong history mode:
 
-- Giữ diff nếu agent đã cung cấp trực tiếp trong tool content.
-- Không gọi `captureBaseContent()` hoặc đọc file để tự dựng diff.
-- Tool không có agent-provided diff chỉ hiển thị summary/input/output có sẵn.
-- Collective diff summary chỉ đại diện thay đổi của runtime hiện tại, không giả định lịch sử vẫn pending.
+- không gọi `captureBaseContent()`/workspace read để reconstruct diff;
+- giữ agent-provided diff/content;
+- tool summary render ngay;
+- large details/diff render lazy khi user expand;
+- cache details sau lần render đầu;
+- collective pending diff summary không coi historical edits là pending workspace mutations.
 
-Đây vừa là tối ưu hiệu năng vừa sửa vấn đề correctness.
+### 10. Instrumentation must not log content
 
-### 6. Lazy-render tool details chứa diff lớn
+Dùng setting debug hiện có cho local performance summaries. Chỉ log timing, count, bytes estimate, agent ID, hashed/truncated session identity và mode; không log prompt, response, tool payload, image data hoặc file content.
 
-Tool summary được render ngay. Tool details, đặc biệt `renderDiff()`, chỉ được tạo khi:
+## Target flows
 
-- người dùng mở `<details>` lần đầu; hoặc
-- tool đang live và UX hiện tại bắt buộc hiển thị ngay.
-
-History restoration không chạy LCS cho mọi tool trước khi người dùng xem.
-
-### 7. Multi-session load chỉ publish transcript đã compact
-
-Khi `session.isLoadingHistory === true`:
-
-- `append()` vẫn ghi vào `TranscriptStore`.
-- Không gửi từng delta của history active sang webview.
-- Có thể gửi progress/state nhẹ, không chứa transcript content.
-- Sau queue drain, gửi một snapshot hoặc bounded snapshot batches duy nhất.
-
-Live updates sau khi history load kết thúc tiếp tục dùng delta protocol.
-
-### 8. History list dùng stale-while-revalidate
-
-QuickPick được tạo và show ngay:
-
-1. Populate local cached sessions nếu có.
-2. Đặt `busy = true` và placeholder phù hợp.
-3. Gọi remote `session/list` bất đồng bộ.
-4. Reconcile và thay item list khi kết quả về.
-5. Giữ selection theo `sessionId` nếu item vẫn tồn tại.
-6. Nếu remote lỗi nhưng local cache có dữ liệu, giữ list và hiển thị warning không modal.
-
-Không biến local cache thành source of truth khi agent hỗ trợ list; nó chỉ là dữ liệu để giảm perceived latency.
-
-### 9. Instrumentation không log nội dung chat
-
-Performance log chỉ chứa timing, count, byte estimate, session ID rút gọn hoặc hash và mode. Không log prompt, response, raw tool input/output hoặc image data.
-
-Instrumentation dùng setting debug hiện có và không thêm telemetry ngoài máy người dùng.
-
-## Target flow
-
-### History list
+### Fast picker
 
 ```text
 Load History command
-  -> create/show QuickPick immediately
-  -> read local session snapshot
-  -> render cached items
-  -> start remote session/list
-  -> reconcile remote result
-  -> user selects session
+  -> create/show QuickPick immediately, busy=true
+  -> determine active agentId + cwd
+  -> read remote catalog snapshot and local fallback metadata
+  -> show cached items
+  -> request remote page 1
+  -> reconcile by {agentId, sessionId}
+  -> persist successful remote snapshot
+  -> expose/fetch next page while picker remains open
 ```
 
-### History load
+### Bundled Pi list
 
 ```text
-ACP session/load
-  -> raw session/update notifications
-  -> ordered host processor
-  -> HistoryReplayCollector
-       - reconstruct user turns
-       - compact text chunks
-       - compact thought chunks
-       - preserve tool/turn order
-       - retain final metadata snapshots
-       - skip workspace diff reconstruction
-  -> bounded HistoryReplayBatch[]
-  -> webview batch mode
-       - reset once
-       - suspend auto-scroll/paint invalidation
-       - render finalized blocks once
-       - lazy tool details/diffs
-       - restore final scroll
-  -> historyReplayEnd / final streamEnd
+ACP session/list(cursor)
+  -> get/reuse discovery snapshot
+  -> recursively enumerate files + stat
+  -> parse metadata only for new/changed files
+  -> filter cwd + sort
+  -> return requested page
+  -> bulk persist sessionId -> file mapping
 ```
 
-## Proposed internal contracts
+### Bundled Pi load
 
-Tên type cuối cùng có thể thay đổi để phù hợp codebase, nhưng semantics phải tương đương.
-
-```ts
-interface HistoryReplayStartMessage {
-  type: "historyReplayStart";
-  replayId: string;
-  sessionId: string;
-}
-
-interface HistoryReplayBatchMessage {
-  type: "historyReplayBatch";
-  replayId: string;
-  batchIndex: number;
-  events: HistoryRenderEvent[];
-}
-
-interface HistoryReplayEndMessage {
-  type: "historyReplayEnd";
-  replayId: string;
-  batchCount: number;
-  lastSequence: number;
-}
+```text
+selected HistorySessionRef
+  -> start agent-specific runtime
+  -> use carried title/cwd; no relist
+  -> ACP session/load
+  -> session map direct lookup
+  -> validate mapped JSONL file
+  -> restore Pi RPC process
+  -> read active-path transcript
+  -> replay standard ACP notifications
+  -> host collects without transcript deltas
+  -> publish one snapshot
+  -> webview finalized replay once
 ```
-
-`HistoryRenderEvent` nên tái sử dụng render message hiện có khi có thể:
-
-```ts
-type HistoryRenderEvent =
-  | { type: "userMessage"; text: string; images?: string[]; mentions?: Mention[] }
-  | { type: "assistantText"; text: string }
-  | { type: "assistantThought"; text: string }
-  | { type: "toolCallStart"; /* existing fields */ }
-  | { type: "toolCallComplete"; /* existing fields */ }
-  | { type: "turnEnd" }
-  | { type: "error" | "system"; text: string };
-```
-
-Không cần giữ một event cho từng `agent_message_chunk`. `assistantText.text` phải là nội dung đã compact của block tương ứng.
-
-Nếu dùng lại `ExtensionMessage`, cần thêm batch envelope thay vì tạo một render model thứ hai không cần thiết:
-
-```ts
-interface HistoryReplayBatchMessage {
-  type: "historyReplayBatch";
-  events: ExtensionMessage[];
-}
-```
-
-Lựa chọn cuối cùng ưu tiên ít type duplication và dễ test ordering.
 
 ## Implementation phases
 
 ### Phase 0 — Baseline and observability
 
-1. Thêm host timing quanh:
-   - local history list read;
-   - remote `session/list`;
-   - `session/load` request start/response;
-   - first/last history notification;
-   - notification queue drain;
-   - replay batch creation/post.
-2. Thêm counters:
-   - raw notification count theo type;
-   - render event count trước/sau compaction;
-   - host-to-webview message count;
-   - estimated payload bytes;
-   - workspace read count trong history mode.
-3. Thêm webview timing:
-   - replay start/end;
-   - event count;
-   - text/thought block count;
-   - Markdown parse count và tổng parse time;
-   - diff render count và tổng diff time.
-4. Tạo synthetic history generator cho test/benchmark, không commit fixture chứa chat thật.
-5. Ghi baseline cho ba profile:
+Add timings/counters at these boundaries:
 
-| Profile | Shape                                                                                 |
-| ------- | ------------------------------------------------------------------------------------- |
-| Small   | 20 turns, 100 raw chunks, 2 code blocks, không tool                                |
-| Medium  | 100 turns, 2,000 raw chunks, 20 tool calls, 10 code blocks                         |
-| Large   | 300 turns, 10,000 raw chunks, 100 tool calls, nhiều thought và một số tool output lớn |
+#### Extension/catalog
 
-**Gate:** Có thể phân biệt rõ agent/RPC time, host processing time và webview render time mà không log nội dung chat.
+- command invoked → QuickPick shown;
+- cached catalog read;
+- temporary/existing runtime connect;
+- each `session/list` page request;
+- selected item → `session/load` request;
+- duplicate list count per user operation.
 
-### Phase 1 — Fast history QuickPick
+#### Bundled Pi
 
-1. Tách API lấy local snapshot khỏi remote list trong `AgentSessionManager`.
-2. Tạo QuickPick trước mọi remote await và bật `busy`.
-3. Populate cache theo `cwd` và sort newest-first.
-4. Refresh bằng `session/list` bất đồng bộ.
-5. Reconcile duplicate theo `sessionId` và giữ active/selected item.
-6. Xử lý hide/dispose để remote result không update QuickPick đã đóng.
-7. Dùng cùng flow cho delete-history picker nếu phù hợp, không copy logic.
+- files enumerated/stat-ed;
+- unchanged index hits;
+- metadata files parsed;
+- full-file metadata reads;
+- session-map lookup hit/miss;
+- fallback discovery count;
+- Pi process restore;
+- transcript lines/messages parsed;
+- ACP replay notification count.
 
-**Gate:** QuickPick shell hiện trong cùng event-loop turn; remote list chậm không làm UI im lặng; list cuối vẫn phản ánh agent result.
+#### Host/webview
 
-### Phase 2 — Host-side history compaction
+- first/last history notification;
+- queue drain;
+- transcript event count and compacted event count;
+- history transcript delta count;
+- snapshot count and estimated bytes;
+- webview replay duration;
+- `marked.parse()` count/time;
+- scroll/paint settle count;
+- workspace read and diff render count.
 
-1. Tạo pure `HistoryReplayCollector` với state machine theo turn/block.
-2. Chuyển legacy history path sang emit vào collector trong khi `isLoadingHistory`.
-3. Compact:
-   - user text/image chunks thành một user message;
-   - consecutive assistant text chunks thành một finalized text block;
-   - consecutive thought chunks thành một finalized thought block;
-   - metadata updates thành latest snapshot khi ordering không yêu cầu append;
-   - duplicate non-final tool updates thành representation tối thiểu cần replay.
-4. Giữ chính xác boundary giữa user message, thought, tool và assistant text.
-5. Chia output thành bounded batches.
-6. Chỉ gửi final replay sau khi ordered notification processor đã drain.
-7. Thêm generation/replay ID để bỏ qua batch cũ nếu người dùng load session khác nhanh.
-8. Kiểm tra hành vi late notification sau `session/load` response; nếu agent thực tế có notification đến sau drain, dùng generation-aware quiescence barrier có timeout ngắn và đo được, không thêm sleep tùy ý.
+Synthetic profiles:
 
-**Gate:** Medium profile giảm ít nhất 90% số host-to-webview messages so với raw chunk path; ordering tests vẫn pass.
+| Profile       | Shape                                                                          |
+| ------------- | ------------------------------------------------------------------------------ |
+| Catalog-small | 50 Pi sessions, mostly unchanged files                                         |
+| Catalog-large | 1,000 Pi sessions, mix of small/large JSONL files                              |
+| Replay-small  | 20 turns, no tools                                                             |
+| Replay-medium | 100 turns, 2,000 raw chunks for generic ACP profile, 20 tools, 10 code blocks  |
+| Replay-large  | 300 turns, 10,000 raw chunks for generic ACP profile, 100 tools, large outputs |
 
-### Phase 3 — Webview batch rendering
+**Gate:** Có thể tách rõ agent discovery/restore time khỏi extension-host và webview time mà không log content.
 
-1. Thêm `beginHistoryReplay()`/`endHistoryReplay()` vào chat surface hoặc message list.
-2. Reset DOM đúng một lần tại replay start.
-3. Trong batch mode:
-   - tạm dừng auto-scroll settle frames;
-   - tạm dừng paint invalidation bắt buộc;
-   - không focus input sau từng event;
-   - không tạo action buttons cho block chưa finalize.
-4. Thêm `setContent()` cho `TextBlock` và `ThoughtBlock`.
-5. Route finalized history text/thought qua `setContent()` để gọi `marked.parse()` đúng một lần/block.
-6. Yield giữa bounded batches bằng `requestAnimationFrame()` hoặc scheduler tương đương để sidebar không freeze dài; không yield giữa các event cần atomic ordering trong cùng turn.
-7. Khi end:
-   - finalize block còn mở;
-   - render action buttons;
-   - apply metadata/context/plan;
-   - restore scroll position hoặc scroll bottom một lần;
-   - re-enable normal live behavior.
-8. Nếu DOM mutation vẫn là bottleneck sau compaction, build batch subtree bằng `DocumentFragment` rồi append một lần. Không thực hiện refactor fragment trước khi benchmark chứng minh cần.
+### Phase 1 — Composite identity and remove redundant selection work
 
-**Gate:** Số lần `marked.parse()` trong history không vượt quá số finalized text/thought blocks cộng một hằng số nhỏ; không còn parse theo raw chunk.
+1. Introduce `HistorySessionRef`/`HistorySessionPage` contracts.
+2. Carry `agentId`, `title`, `cwd` trong QuickPick item.
+3. Change load/delete entry points to accept composite identity.
+4. Remove `historySessionAgentById`, `lastHistoryListAgentId` and selection-time `resolveHistorySessionTitle()` from critical path after migration.
+5. Apply consistent `cwd` filter to disconnected local catalog branch.
+6. Keep title update from `session_info_update`.
 
-### Phase 4 — Skip historical workspace reconstruction and lazy diff
+**Gate:**
 
-1. Truyền explicit `historyMode` vào tool completion/render pipeline.
-2. Bỏ `captureBaseContent()` và `workspace.fs.readFile()` khi restore history.
-3. Giữ agent-provided diff content nếu có.
-4. Sửa `ToolBlock` để lưu typed details model và render details lần đầu khi `<details>` mở.
-5. Không chạy `computeLineDiff()` cho collapsed historical tool.
-6. Cache rendered details trong lifetime của block để toggle lại không tính diff lần nữa.
-7. Đặt guard cho diff quá lớn nếu vẫn cần render:
-   - đo line count/product trước LCS;
-   - hiển thị summary và action mở VS Code diff/editor thay vì cấp phát matrix quá lớn;
-   - không silently truncate mà không báo UI.
-8. Đánh giá thay LCS bằng thuật toán Myers/patience trong thay đổi riêng nếu diff live vẫn là bottleneck; không trộn migration thuật toán vào patch batching đầu tiên.
+- selecting a session causes zero extra `session/list` calls for title;
+- two agents with identical `sessionId` load/delete đúng selected agent;
+- active agent thay đổi sau khi picker mở không đổi target của selected item.
 
-**Gate:** History replay không đọc workspace để reconstruct diff; collapsed tool không chạy LCS; existing live diff behavior vẫn giữ nguyên.
+### Phase 2 — Bundled Pi catalog index and direct lookup
 
-### Phase 5 — Multi-session single-pass restoration
+1. Refactor `pi-sessions.ts` thành scanner/index service thay vì stateless full scan helpers.
+2. Store metadata cache keyed by canonical `sessionFile` with size/mtime validation.
+3. Parse changed files bằng một streaming pass; bỏ fallback `readFileSync()` toàn file riêng biệt.
+4. Add per-list immutable discovery snapshot so all cursor pages share one scan/sort result.
+5. Refactor vendored `SessionStore`:
+   - load map once per process;
+   - validate mapped file;
+   - support `upsertMany()` and one flush;
+   - persist all discovered `sessionId -> sessionFile` mappings after list.
+6. `findStoredSession()` uses validated map first; discovery fallback only on miss/stale mapping.
+7. Bound/invalidate index when session directory or settings path changes.
 
-1. Trong `MultiSessionHostController.append()`, suppress transcript delta khi session đang `isLoadingHistory`.
-2. Tiếp tục append/compact trong `TranscriptStore` và update lightweight session status.
-3. Không gửi intermediate full snapshot trong lúc load trừ empty/loading surface ban đầu.
-4. Sau queue drain, publish transcript một lần bằng snapshot hoặc bounded snapshot batches.
-5. Thêm snapshot/replay revision để stale load không overwrite session vừa được activate.
-6. Webview `applySnapshot()` dùng batch mode thay vì dispatch từng event với full scroll/paint behavior.
-7. Khi chuyển sang một session đã mở, chỉ replay snapshot hiện có; không gọi lại ACP `session/load`.
-8. Xác nhận `lastSeq` sau compact snapshot vẫn cho phép delta live kế tiếp mà không kích hoạt resync sai.
+**Gate:**
 
-**Gate:** Mỗi history session được reset/render đúng một lần; không có delta content trong loading window rồi full replay lại lần hai.
+- warm list: unchanged JSONL content parse count bằng `0`;
+- cold list: mỗi JSONL tối đa một metadata content pass;
+- load immediately after successful list: fallback global scan count bằng `0`;
+- cursor page 2 không trigger second discovery scan;
+- add/rename/update/delete session file được phản ánh sau invalidation.
 
-### Phase 6 — Live-stream coalescing, only if still needed
+### Phase 3 — Immediate, cached and paged QuickPick
 
-Phase này chỉ thực hiện nếu profile sau Phase 1–5 cho thấy live streaming hoặc tail của history vẫn tốn CPU.
+1. Create/show QuickPick before any remote await; set `busy = true`.
+2. Add remote catalog snapshot store scoped by `{ agentId, cwd }`.
+3. Show last successful remote snapshot immediately when available.
+4. Merge local fallback metadata only as non-authoritative fallback; dedupe by composite identity.
+5. Fetch remote page 1 asynchronously and reconcile selection/active item.
+6. Preserve selection while items refresh.
+7. Support `nextCursor` via `Load more…` item or guarded background pagination.
+8. Ignore/cancel updates after picker dispose or scope change.
+9. Apply same shared picker service to delete-history command without duplicating lifecycle logic.
+10. Remote delete must be confirmed against authoritative agent capability/result; stale cache alone không cấp quyền delete server-side.
 
-1. `appendContent()` chỉ update `rawContent` và schedule tối đa một Markdown render mỗi animation frame.
-2. Nhiều chunk trong cùng frame được coalesce.
-3. `finalize()` flush synchronously trước khi action buttons đọc raw content.
-4. Thought block dùng cùng scheduler.
-5. Không memoize toàn cục highlighted HTML mặc định; chỉ thêm cache có giới hạn nếu profiling chứng minh highlight lặp lại vẫn đáng kể.
+**Gate:**
 
-**Gate:** Không mất text, không reorder, không làm copy/action buttons lấy content cũ; live stream vẫn cảm giác tức thời.
+- picker shell shown trong cùng event-loop turn;
+- cached items appear dưới `50 ms` trên benchmark machine;
+- 120 synthetic sessions đều reachable đúng một lần và sorted newest-first;
+- remote failure giữ cached list với warning non-modal;
+- no update attempted after picker disposal.
 
-### Phase 7 — Cleanup and rollout
+### Phase 4 — Multi-session single-pass history publication
 
-1. Xóa đường replay per-chunk cũ sau khi tests và benchmark đạt gate.
-2. Giữ ordering queues cho live messages và batch envelopes.
-3. Thêm concise debug summary cho mỗi history load.
-4. Cập nhật changelog/release note với hành vi performance, không quảng bá internal protocol.
-5. Build, package và cài VSIX theo repository workflow.
-6. Manual profile trên ít nhất hai agent:
-   - agent có native `session/list`/`session/load`;
-   - agent dùng local list fallback hoặc history nhỏ.
+1. Add replay phase/load epoch to `ManagedSession`.
+2. Set `collecting` before invoking `session/load`.
+3. In `append()`, suppress transcript-content delta while collecting; continue storing events and lightweight state.
+4. After response and queue drain, flush user buffer and append final history `streamEnd` while suppression is still active.
+5. Capture/post exactly one non-empty history snapshot.
+6. Switch to live phase only after snapshot boundary is published.
+7. Later notifications become deltas with contiguous sequence numbers.
+8. Use activation revision + load epoch to prevent stale load publication after rapid switches/close.
+9. Do not publish intermediate full transcript snapshots during collection.
+
+**Gate:**
+
+- transcript-content delta count during history collection bằng `0`;
+- exactly one non-empty history snapshot per load;
+- one transcript reset/render per load;
+- first late/live delta has `seq = snapshot.lastSeq + 1`;
+- no false resync or cross-session render under rapid A → B activation.
+
+### Phase 5 — Finalized snapshot rendering
+
+1. Add snapshot replay lifecycle to the webview bridge/message list.
+2. Suspend per-event auto-scroll, input focus, paint invalidation and action-button finalization.
+3. Add `setContent()` to `TextBlock` and `ThoughtBlock`.
+4. Route snapshot text/thought blocks through finalized content rendering.
+5. Finalize assistant actions once per completed assistant message.
+6. Apply metadata/context/diff/permissions after transcript surface is stable.
+7. Restore draft, generation state and scroll once.
+8. Yield between bounded event groups using browser scheduling if a replay task still exceeds the gate.
+9. Keep live `appendContent()` semantics unchanged initially; rAF coalescing belongs to a later measured optimization.
+
+**Gate:**
+
+- `marked.parse()` count không vượt số finalized text/thought blocks cộng một hằng số nhỏ;
+- zero per-event scroll-settle operations during snapshot replay;
+- Medium replay task p95 dưới `50 ms`, max dưới `100 ms`; nếu chưa đạt mới thêm bounded snapshot batches;
+- visual ordering/output matches current behavior.
+
+### Phase 6 — Historical tool/diff fast path
+
+1. Pass explicit history/snapshot replay context into tool pipeline.
+2. Skip `captureBaseContent()` and workspace file reads in history mode.
+3. Preserve agent-provided structured diff/content.
+4. Render historical tool summary immediately but defer large details/diffs.
+5. Cache first details render.
+6. Add oversized diff guard before LCS allocation.
+7. Ensure history-specific collapsed policy actually prevents eager edit/write/execute detail rendering.
+
+**Gate:**
+
+- workspace read count during history restoration bằng `0`;
+- collapsed historical tools invoke diff/LCS renderer `0` times;
+- expanding a tool renders once and subsequent toggles reuse cached details;
+- live tool/diff behavior unchanged.
+
+### Phase 7 — Pi replay event reduction and conditional generic batching
+
+#### Pi-specific
+
+1. Evaluate emitting one final ACP `tool_call` for each historical `toolResult` instead of final `tool_call` plus final `tool_call_update`.
+2. Keep one notification per saved user/assistant message.
+3. Preserve tool title, status, raw output, content and ordering.
+
+#### Generic ACP, only if metrics require it
+
+Add a pure `HistoryReplayCollector` when a third-party/chunk-heavy agent still produces excessive raw events after single-pass publication:
+
+- compact consecutive user/text/thought chunks;
+- preserve user/thought/tool/text boundaries;
+- keep latest metadata snapshots where order permits;
+- create bounded batches by event count and estimated bytes;
+- retain replay/load epoch and sequence ordering.
+
+Initial batch guard, subject to benchmark:
+
+- up to `100` events; or
+- about `512 KiB` estimated payload;
+- oversized single event sent alone.
+
+**Gate:**
+
+- Pi toolResult uses at most one ACP tool notification if compatibility tests pass;
+- generic Medium profile reduces host-to-webview message count ít nhất `90%` when collector is enabled;
+- no collector added to default path unless baseline demonstrates material benefit.
+
+### Phase 8 — Rollout and documentation
+
+1. Run deterministic counters and wall-clock benchmarks before/after.
+2. Test at least bundled Pi and one non-Pi ACP agent/mock.
+3. Update `docs/features/feature-catalog.md` with user-visible behavior changes.
+4. Update this plan status/completion notes after implementation.
+5. Update vendored Pi `UPSTREAM.md` for local index/direct-lookup/replay patches.
+6. Run quality gates, production package, VSIX package and local install per repository workflow.
+7. Instruct user to run `Developer: Reload Window` after installation.
 
 ## File-level change map
 
-| File/area                                             | Planned change                                                                                       |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `src/extension.ts`                                    | Show QuickPick immediately, async refresh, picker lifecycle guards                                   |
-| `src/acp/session-manager.ts`                          | Expose local snapshot and remote refresh/reconcile APIs                                               |
-| `src/acp/client.ts`                                   | Add timing/count hooks around list/load and notification boundaries; no raw-content performance logs |
-| `src/acp/session-output-pipeline.ts`                  | History mode, collector output boundary, skip historical file reconstruction                         |
-| `src/views/chat.ts`                                   | Legacy replay collector integration, bounded batch posting, replay generation guard                  |
-| `src/views/webview/types.ts`                          | Typed history replay batch envelopes                                                                 |
-| `src/views/webview/main.ts`                           | Route replay envelopes and control batch lifecycle                                                    |
-| `src/views/webview/component/message-list.ts`         | Batch mode, suspend/resume scroll and paint, single finalization                                      |
-| `src/views/webview/block/text-block.ts`               | `setContent()`, optional rAF live render scheduling                                                   |
-| `src/views/webview/block/thought-block.ts`            | `setContent()`, optional rAF live render scheduling                                                   |
-| `src/views/webview/block/tool-block.ts`               | Lazy details rendering and cached first render                                                        |
-| `src/views/webview/widget/diff-render.ts`             | Oversized diff guard and deferred invocation                                                          |
-| `src/utils/diff.ts`                                   | Metrics/guard seam; algorithm replacement deferred unless independently required                      |
-| `src/features/multi-session/host.ts`                  | Suppress history deltas, publish one compact replay                                                   |
-| `src/features/multi-session/webview.ts`               | Batch snapshot replay, stale revision guard                                                           |
-| `src/features/multi-session/transcript-store.ts`      | Verify/extend compaction semantics and batch snapshot output                                          |
-| `src/test/history_restoration.test.ts`                | Legacy ordering, batching, no-late-finalization regression                                            |
-| `src/test/features/multi-session.test.ts`             | Single-pass multi-session history restoration                                                         |
-| `src/test/webview.test.ts` or focused feature tests   | Parse count, batch lifecycle, lazy tool details                                                       |
-| New focused pure unit test for replay collector       | Compaction and turn-boundary matrix                                                                   |
+| File/area                                                              | Planned change                                                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `src/extension.ts`                                                     | Immediate QuickPick shell, shared async picker controller, composite selection payload                 |
+| `src/acp/session-manager.ts`                                           | Page-aware list API, local fallback page/snapshot access, preserve `nextCursor`                        |
+| `src/acp/client.ts`                                                    | Timing/count hooks around list/load/notification boundaries; no content logs                           |
+| `src/features/multi-session/session-catalog.ts`                        | Composite scope, page API, consistent `cwd` filter, remote snapshot integration                        |
+| `src/features/multi-session/host.ts`                                   | Remove ID-only agent map/title relist; replay phase; suppress history deltas; atomic snapshot boundary |
+| `src/features/multi-session/contracts.ts`                              | Typed history identity/page/replay fields if feature protocol requires them                            |
+| `src/features/multi-session/webview.ts`                                | Single finalized snapshot replay and stale epoch guards                                                |
+| `src/features/multi-session/transcript-store.ts`                       | Verify compaction/sequence semantics for publication boundary                                          |
+| `src/acp/session-output-pipeline.ts`                                   | History context; skip historical file reconstruction                                                   |
+| `src/views/webview/main.ts`                                            | Snapshot replay lifecycle bridge                                                                       |
+| `src/views/webview/component/message-list.ts`                          | Suspend/resume render side effects; finalized block replay                                             |
+| `src/views/webview/block/text-block.ts`                                | `setContent()` and parse metrics                                                                       |
+| `src/views/webview/block/thought-block.ts`                             | `setContent()` and parse metrics                                                                       |
+| `src/views/webview/block/tool-block.ts`                                | Lazy historical details and cached render                                                              |
+| `src/views/webview/widget/diff-render.ts`                              | Deferred invocation and oversized diff guard                                                           |
+| `src/features/pi-agent/vendor/pi-acp/src/acp/pi-sessions.ts`           | Indexed metadata discovery, reusable page snapshot, direct mapping support                             |
+| `src/features/pi-agent/vendor/pi-acp/src/acp/session-store.ts`         | In-memory map, validation, bulk upsert/single flush                                                    |
+| `src/features/pi-agent/vendor/pi-acp/src/acp/agent.ts`                 | Reuse list snapshot/mapping, reduce redundant lookup/replay events                                     |
+| `src/features/pi-agent/vendor/pi-acp/src/acp/pi-session-transcript.ts` | Add timing/count seams; memory optimization only if measured                                           |
+| `src/test/features/`                                                   | Composite identity, pagination, single-pass publication, replay races                                  |
+| Vendored Pi tests                                                      | Index invalidation, page reuse, direct lookup, replay notification count                               |
 
-Core changes are justified as a generic history-loading performance/correctness fix suitable for upstream. Multi-session-specific behavior remains under `src/features/multi-session/`.
+Core changes are generic history performance/correctness fixes suitable for upstream. Pi-specific indexing and replay changes remain inside the bundled Pi feature/vendor boundary.
 
-## Verification strategy
+## Test strategy
 
-### Unit tests
+### Catalog and identity
 
-`HistoryReplayCollector` test matrix:
+1. Same `sessionId` under Pi and OpenCode loads/deletes selected agent only.
+2. Picker opened under agent A, active session switches to B, selected A item still loads A.
+3. Disconnected local fallback filters exact `cwd`.
+4. Remote page cursor is forwarded and `nextCursor` preserved.
+5. 120 sessions across three pages are reachable without duplicates.
+6. Picker disposal ignores late page responses.
+7. Stale remote snapshot is replaced by authoritative response without losing current selection.
 
-- many user chunks followed by assistant text;
-- metadata update interleaved between user chunks;
-- thought before text;
-- text → tool → text within one assistant turn;
-- tool start plus multiple updates plus completion;
-- image chunks and mentions;
-- failed/cancelled tool;
-- consecutive turns;
-- empty chunks;
-- large event that exceeds batch byte threshold;
-- late/stale replay ID.
+### Bundled Pi index
 
-Assertions:
+1. Cold scan extracts title/cwd/updatedAt/sessionId in one pass per file.
+2. Warm scan parses no unchanged JSONL content.
+3. Changed file invalidates only its index entry.
+4. Deleted file disappears.
+5. Session directory setting change invalidates old snapshot.
+6. Page 2 reuses page 1 discovery snapshot.
+7. Successful list bulk persists mappings.
+8. New load process resolves selected session without fallback full scan.
+9. Stale/missing mapped file falls back safely and repairs mapping.
 
-- exact event ordering;
-- exact concatenated text;
-- no lost images/mentions;
-- bounded batch size except allowed single oversized event;
-- final turn/block always finalized once.
+### Replay publication and ordering
 
-### Integration tests
+1. History events append to transcript but emit no deltas during collection.
+2. Final snapshot includes user, thought, assistant and tool events in exact order.
+3. Final history `streamEnd` is inside snapshot boundary.
+4. Notification received during drain is included or emitted later exactly once.
+5. Notification immediately after snapshot becomes contiguous delta.
+6. Stale load epoch cannot overwrite newer activation.
+7. Closing session during load does not publish stale transcript.
+8. Loading already-open history only activates it and does not call ACP load again.
 
-- 2,000 raw chunks produce compact event count proportional to turns/blocks.
-- Final replay end cannot overtake prior batch.
-- Live messages sent after history end follow the restored transcript.
-- Loading session B while A replay is pending does not render A into B.
-- Multi-session loading emits no transcript deltas before final compact publish.
-- Agent-provided tool diff remains visible.
-- Tool without provided diff causes zero workspace reads in history mode.
-- `lastSeq`/revision accepts next live delta without unnecessary resync.
+### Webview
 
-### Webview tests
-
-- `setContent()` invokes Markdown render once.
-- History batch does not call scroll settle logic per event.
-- Action buttons are created once per finalized assistant message.
-- Lazy tool details do not call diff renderer before expansion.
-- Opening details renders once; subsequent toggles reuse output.
-- Replay end restores expected scroll and generating state.
+1. Snapshot reset occurs once.
+2. One finalized text block calls `marked.parse()` once.
+3. Thought block has same guarantee.
+4. Action buttons render once per finalized assistant response.
+5. No per-event scroll settle during replay.
+6. Draft/scroll/generation state restore after transcript.
+7. Historical collapsed tool does not render diff before expansion.
+8. Expansion renders once and caches details.
 
 ### Performance assertions
 
-Automated tests should prefer deterministic counters over brittle wall-clock limits:
+Ưu tiên deterministic counters trong CI:
 
-- host-to-webview message reduction `>= 90%` on Medium profile;
-- Markdown parse count equals finalized text/thought block count within expected constant;
-- workspace read count during history replay is `0` unless an explicit non-history operation occurs;
-- multi-session transcript reset count is `1` per load;
-- eager diff render count is `0` for collapsed historical tools.
+- duplicate selection-time `session/list` count: `0`;
+- Pi warm metadata parse count: `0` for unchanged files;
+- load-after-list fallback discovery count: `0`;
+- history content delta count in multi-session: `0`;
+- non-empty final snapshot count: `1`;
+- transcript reset count: `1`;
+- Markdown parse count: one per finalized text/thought block;
+- historical workspace read count: `0`;
+- eager historical diff render count: `0`.
 
-Wall-clock benchmark is recorded separately and compared on the same machine/build:
+Wall-clock benchmark trên cùng machine/build:
 
-- target at least `70%` reduction in extension-controlled Medium-profile load time;
-- no single webview replay task above `200 ms` on Medium profile after bounded yielding;
-- no regression greater than `10%` for Small profile or live streaming.
+- cached picker items under `50 ms`;
+- at least `70%` reduction in extension-controlled Medium-profile time from final ACP history notification to settled UI;
+- no single Medium replay task over `100 ms` after yielding;
+- no regression over `10%` for small history or live streaming.
 
-### Manual verification
+## Recommended delivery slices
 
-1. Open Load History with agent-side list intentionally delayed.
-2. Confirm QuickPick appears immediately with spinner/cache.
-3. Load short session and compare visual output with current release.
-4. Load long session with code blocks and thought content.
-5. Confirm sidebar remains responsive during progressive batch render.
-6. Expand old tool diffs and verify lazy rendering.
-7. Switch sessions rapidly while one history load is active.
-8. Send a new prompt after history restoration and verify correct continuation.
-9. Reload VS Code window and repeat with installed VSIX.
+### Slice A — Highest-impact extension quick wins
+
+- Phase 0 minimum metrics;
+- composite selection and remove title relist;
+- suppress multi-session history deltas;
+- one snapshot boundary;
+- `setContent()` finalized snapshot rendering.
+
+Expected effort: 1–2 days. Expected effect: remove one remote list and one full duplicate render.
+
+### Slice B — Pi catalog scalability and picker UX
+
+- Pi metadata index/direct mapping;
+- immediate cached QuickPick;
+- page-aware catalog and `Load more…`;
+- remote catalog snapshot.
+
+Expected effort: 1–2 days. Expected effect: list cost becomes proportional mainly to changed files; session after page 50 becomes reachable.
+
+### Slice C — Historical tool path and generic ACP batching
+
+- skip workspace reconstruction;
+- lazy diff/details;
+- Pi tool notification reduction;
+- generic collector/batches only if measured.
+
+Expected effort: 1–2 days depending on tool rendering refactor and agent compatibility.
 
 ## Risks and mitigations
 
-| Risk                                                       | Mitigation                                                                                                    |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Compaction merges blocks across a real turn boundary       | State-machine tests for every content/tool/user boundary; metadata alone must not split user message          |
-| Queue removal reintroduces ordering race                    | Do not remove ordering queues; queue compact batches instead                                                  |
-| One batch payload freezes serialization                    | Enforce event/byte limits and send oversized event alone                                                      |
-| Image data URL dominates payload                           | Byte-aware batching; do not duplicate image data in multiple representations                                 |
-| `session/load` response precedes late notifications        | Generation-aware notification accounting and measured quiescence barrier if required                         |
-| Skip diff reconstruction changes historical UI            | Preserve agent-provided diff; show tool summary/output; document that current workspace is not historical truth |
-| Lazy tool details break delegated actions                  | Render through existing tool block APIs and bind actions via delegation or one-time post-render hook          |
-| Multi-session compacted sequence causes false resync       | Snapshot carries raw `lastSeq`; tests cover next delta and activation revision                               |
-| Async remote list overwrites user selection                | Reconcile by `sessionId`, preserve active/selected item and ignore result after picker dispose                |
-| Instrumentation leaks chat content                         | Log counts/timings only; add tests/review checklist against raw payload logging                               |
+| Risk                                                        | Mitigation                                                                                           |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Stale Pi index points to moved/deleted file                 | Validate path/stat/header before use; fallback discovery repairs mapping                             |
+| Cache hides newly created external sessions                 | Cached list is stale display only; remote refresh remains authoritative                              |
+| Pagination repeats expensive scan                           | Pi page requests reuse one immutable discovery snapshot with bounded expiry/invalidation             |
+| Composite contract migration breaks command call sites      | Introduce adapter overload temporarily; migrate load/delete tests before removing ID-only path       |
+| Delta suppression loses late notifications                  | Publish snapshot boundary before live phase; late updates remain contiguous deltas                   |
+| `waitForIdle()` is mistaken for future-notification barrier | Treat it only as drain of currently received work; accept later notifications rather than sleep/drop |
+| Finalized render merges real block boundaries               | Preserve transcript event boundaries; add text → tool → text and thought → text tests                |
+| Lazy diff changes historical expanded/open state            | Add explicit history-only policy and manual visual comparison                                        |
+| Remote snapshot stores sensitive data                       | Persist metadata only: ID/title/cwd/time; no transcript/tool payload                                 |
+| Temporary ACP runtime startup remains slow                  | Measure first; runtime leasing/adoption is optional follow-up, not initial complexity                |
+| Pi full active-path parser retains all entries              | Profile memory; optimize separately only if large JSONL causes measured pressure                     |
 
-## Commit boundaries
+## Completion notes
 
-Để review và rollback an toàn, triển khai thành các commit độc lập:
+Implemented on 2026-07-15:
 
-1. `perf(history): add replay metrics and synthetic benchmarks`
-2. `perf(history): show cached sessions before remote list completes`
-3. `perf(history): compact ACP replay into bounded batches`
-4. `perf(webview): render finalized history blocks once`
-5. `fix(history): skip workspace diff reconstruction during replay`
-6. `perf(webview): lazy render historical tool diffs`
-7. `perf(multi-session): avoid duplicate history replay`
-8. `test(history): add performance and ordering regressions`
+- composite history references and page-aware cursor APIs;
+- immediate stale-while-revalidate QuickPick shared by load/delete, with persisted remote metadata cache, local fallback merge, lifecycle guards, and `Load more…`;
+- bundled Pi JSONL metadata index, canonical-file cache validation, reusable pagination snapshot, bulk/direct session mapping, and one historical tool notification;
+- multi-session collecting/live replay boundary with no history transcript deltas and one non-empty publication snapshot;
+- finalized snapshot text/thought rendering, suspended replay side effects, lazy cached historical tool details, and oversized diff guard;
+- history mode skips current-workspace diff reconstruction in both legacy and multi-session pipelines.
 
-Không trộn thay đổi thuật toán diff tổng quát hoặc refactor ACP multiplex vào cùng chuỗi commit.
+Verification completed:
 
-## Definition of done
+- root typecheck, focused lint, production package, VSIX package, and local installation;
+- focused VS Code integration suite: 91 passing;
+- vendored Pi suite: 140 passing.
 
-- Baseline và after metrics được ghi lại cho Small/Medium/Large profiles.
-- QuickPick hiện ngay và remote refresh không chặn UI.
-- Legacy và multi-session đều dùng compacted bounded history replay.
-- History text/thought được parse một lần trên mỗi finalized block.
-- Không có workspace reads để reconstruct historical diff.
-- Historical tool diff được render lazy.
-- Multi-session không delta-render rồi snapshot-render cùng history.
-- Ordering, history restoration, webview và multi-session tests pass.
-- Typecheck, lint, test và production package pass.
-- VSIX được package, cài bằng `code --install-extension ... --force` và kiểm tra sau `Developer: Reload Window`.
+Wall-clock benchmark thresholds for the synthetic Medium/Large profiles were not automated in CI; deterministic counters cover the correctness/performance invariants, and further generic batching remains conditional on profiling.
+
+## Definition of Done
+
+- Current agent-scoped history flow is represented by typed composite identity.
+- QuickPick appears before remote list completion and can show cached metadata.
+- ACP cursor pagination is supported; sessions after page 1 are reachable.
+- Bundled Pi warm listing avoids JSONL content parsing for unchanged files.
+- Bundled Pi load after list resolves directly without another global scan.
+- Selection does not call `session/list` again for title.
+- Multi-session history emits no transcript deltas during collection and publishes one final snapshot.
+- Snapshot restoration renders transcript once and Markdown once per finalized text/thought block.
+- Historical replay does not read current workspace to reconstruct diffs.
+- Late notifications, rapid activation and same-ID/different-agent cases are covered by tests.
+- Before/after metrics meet agreed gates or remaining bottlenecks are documented with evidence.
+- Typecheck, lint, relevant tests, production package, VSIX package and local install complete successfully when implementation changes code.

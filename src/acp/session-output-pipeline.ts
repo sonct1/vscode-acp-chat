@@ -8,6 +8,13 @@ import type { ACPClient, ContextUsageUpdate, SessionMetadata } from "./client";
 import type { FileHandler } from "./file-handler";
 import { extractMentions } from "../utils/mention-serializer";
 import { getPiContextUsageUnavailableMeta } from "./pi-context-usage-meta";
+import type { LiveToolOutputProfileId } from "./agents";
+import {
+  type LiveToolOutputProfile,
+  type LiveToolPresentation,
+  projectLiveToolOutput,
+} from "./tool-output-presentation";
+import { bundledPiLiveToolOutputProfile } from "../features/pi-agent/live-tool-output";
 
 export interface SessionRenderMessage {
   type: string;
@@ -22,20 +29,33 @@ type ToolCallMetadataUpdate = Pick<ToolCall | ToolCallUpdate, "toolCallId"> &
   Partial<
     Pick<
       ToolCall | ToolCallUpdate,
-      "rawInput" | "rawOutput" | "kind" | "title" | "content" | "locations"
+      | "rawInput"
+      | "rawOutput"
+      | "kind"
+      | "title"
+      | "content"
+      | "locations"
+      | "status"
     >
   >;
 
 export interface ToolCallRuntimeState {
   pending?: boolean;
+  completed?: boolean;
   startTime?: number;
   rawInput?: Record<string, unknown>;
   rawOutput?: unknown;
   kind?: string;
   title?: string;
+  status?: string;
   content?: ToolCall["content"];
   locations?: ToolCall["locations"];
   baseContent?: Promise<string | undefined>;
+  revision: number;
+  latestPresentation?: LiveToolPresentation;
+  lastProgressEmitAt?: number;
+  pendingProgress?: SessionRenderMessage;
+  progressTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface SessionOutputState {
@@ -54,6 +74,9 @@ export interface SessionOutputPipelineOptions {
   onContextUsageChanged?: (usage: ContextUsageUpdate | null) => void;
   onSessionInfoChanged?: (update: Record<string, unknown>) => void;
   onStructuredDiffContent?: (content: unknown) => void | Promise<void>;
+  onToolCallComplete?: () => void;
+  liveToolOutputProfile?: LiveToolOutputProfileId;
+  enableGenericLiveToolOutput?: boolean;
 }
 
 function createState(): SessionOutputState {
@@ -98,9 +121,16 @@ export class SessionOutputPipeline implements vscode.Disposable {
     this.state.isLoadingHistory = value;
   }
 
+  setLiveToolOutputProfile(profile: LiveToolOutputProfileId | undefined): void {
+    this.options.liveToolOutputProfile = profile;
+  }
+
   reset(): void {
     this.state.userMessageBuffer = "";
     this.state.userMessageImages = [];
+    for (const state of this.state.toolCalls.values()) {
+      this.cancelProgressTimer(state);
+    }
     this.state.toolCalls.clear();
     this.options.fileHandler.clearLastFileContents();
     for (const timer of this.cleanupTimers.values()) clearTimeout(timer);
@@ -213,17 +243,23 @@ export class SessionOutputPipeline implements vscode.Disposable {
         this.rememberToolCallMetadata(update);
         await this.completeToolCall(update);
       } else {
+        const wasPending = this.isToolCallPending(update.toolCallId);
         this.rememberToolCallMetadata(update);
         this.captureToolCallBaseContent(update);
-        if (this.hasToolCallPresentation(update)) {
-          const state = this.markToolCallPending(update.toolCallId);
-          this.options.emit({
-            type: "toolCallStart",
-            name: update.title || state.title || "Tool",
-            toolCallId: update.toolCallId,
-            kind: update.kind || state.kind,
-            rawInput: update.rawInput || state.rawInput,
-          });
+        const state = this.getToolCallState(update.toolCallId);
+        const presentation = this.projectProgress(
+          update.toolCallId,
+          state,
+          this.isExplicitOutputClear(update)
+        );
+        if (presentation) {
+          this.markToolCallPending(update.toolCallId);
+          if (!wasPending) this.emitToolCallStart(update.toolCallId, state);
+          this.scheduleToolProgress(update.toolCallId, presentation);
+        } else if (this.hasToolCallPresentation(update)) {
+          this.markToolCallPending(update.toolCallId);
+          if (!wasPending) this.emitToolCallStart(update.toolCallId, state);
+          this.scheduleToolCleanup(update.toolCallId);
         }
       }
       return;
@@ -307,14 +343,20 @@ export class SessionOutputPipeline implements vscode.Disposable {
   private getToolCallState(toolCallId: string): ToolCallRuntimeState {
     let state = this.state.toolCalls.get(toolCallId);
     if (!state) {
-      state = {};
+      state = { revision: 0 };
       this.state.toolCalls.set(toolCallId, state);
     }
     return state;
   }
 
+  markToolCallPendingForPermission(toolCallId: string): void {
+    this.markToolCallPending(toolCallId);
+    this.scheduleToolCleanup(toolCallId);
+  }
+
   private markToolCallPending(toolCallId: string): ToolCallRuntimeState {
     const state = this.getToolCallState(toolCallId);
+    state.completed = false;
     state.pending = true;
     return state;
   }
@@ -324,6 +366,8 @@ export class SessionOutputPipeline implements vscode.Disposable {
   }
 
   private cleanupToolCall(toolCallId: string): void {
+    const state = this.state.toolCalls.get(toolCallId);
+    this.cancelProgressTimer(state);
     this.state.toolCalls.delete(toolCallId);
     const timer = this.cleanupTimers.get(toolCallId);
     if (timer) clearTimeout(timer);
@@ -339,6 +383,143 @@ export class SessionOutputPipeline implements vscode.Disposable {
     );
     timer.unref?.();
     this.cleanupTimers.set(toolCallId, timer);
+  }
+
+  private emitToolCallStart(
+    toolCallId: string,
+    state: ToolCallRuntimeState
+  ): void {
+    this.options.emit({
+      type: "toolCallStart",
+      name: state.title || "Tool",
+      toolCallId,
+      kind: state.kind,
+      rawInput: state.rawInput,
+    });
+  }
+
+  private cancelProgressTimer(state: ToolCallRuntimeState | undefined): void {
+    if (state?.progressTimer) {
+      clearTimeout(state.progressTimer);
+      state.progressTimer = undefined;
+    }
+    if (state) state.pendingProgress = undefined;
+  }
+
+  private getLiveProfiles(): LiveToolOutputProfile[] {
+    return this.options.liveToolOutputProfile === "bundled-pi"
+      ? [bundledPiLiveToolOutputProfile]
+      : [];
+  }
+
+  private projectProgress(
+    toolCallId: string,
+    state: ToolCallRuntimeState,
+    outputCleared = false
+  ): LiveToolPresentation | undefined {
+    return projectLiveToolOutput(
+      {
+        agentId: this.options.client.getAgentId?.() ?? "",
+        toolCallId,
+        title: state.title,
+        kind: state.kind,
+        status: state.status,
+        rawInput: state.rawInput,
+        rawOutput: outputCleared ? undefined : state.rawOutput,
+        content: outputCleared ? undefined : state.content,
+        locations: state.locations,
+        outputCleared,
+      },
+      {
+        profiles: this.getLiveProfiles(),
+        enableGeneric: this.options.enableGenericLiveToolOutput === true,
+      }
+    );
+  }
+
+  private makeProgressMessage(
+    toolCallId: string,
+    state: ToolCallRuntimeState,
+    presentation: LiveToolPresentation
+  ): SessionRenderMessage {
+    return {
+      type: "toolCallProgress",
+      toolCallId,
+      revision: state.revision,
+      title: state.title || "Tool",
+      name: state.title || "Tool",
+      kind: state.kind,
+      status: state.status === "pending" ? "pending" : "in_progress",
+      rawInput: state.rawInput,
+      locations: state.locations,
+      presentation,
+    };
+  }
+
+  private scheduleToolProgress(
+    toolCallId: string,
+    presentation: LiveToolPresentation
+  ): void {
+    const state = this.getToolCallState(toolCallId);
+    if (state.completed) return;
+    this.markToolCallPending(toolCallId);
+    this.scheduleToolCleanup(toolCallId);
+    state.latestPresentation = presentation;
+    const message = this.makeProgressMessage(toolCallId, state, presentation);
+    const elapsed = state.lastProgressEmitAt
+      ? Date.now() - state.lastProgressEmitAt
+      : Number.POSITIVE_INFINITY;
+    if (elapsed >= 175 && !state.progressTimer) {
+      state.lastProgressEmitAt = Date.now();
+      this.options.emit(message);
+      return;
+    }
+
+    state.pendingProgress = message;
+    if (state.progressTimer) return;
+
+    state.progressTimer = setTimeout(
+      () => {
+        state.progressTimer = undefined;
+        const latest = state.pendingProgress;
+        state.pendingProgress = undefined;
+        if (!latest || state.completed || !this.isToolCallPending(toolCallId)) {
+          return;
+        }
+        state.lastProgressEmitAt = Date.now();
+        this.options.emit(latest);
+      },
+      Math.max(0, 175 - elapsed)
+    );
+    state.progressTimer.unref?.();
+  }
+
+  private isExplicitOutputClear(update: ToolCallUpdate): boolean {
+    const hasContent = Object.prototype.hasOwnProperty.call(update, "content");
+    const hasRawOutput = Object.prototype.hasOwnProperty.call(
+      update,
+      "rawOutput"
+    );
+    const contentCleared =
+      hasContent &&
+      (update.content === null ||
+        update.content === undefined ||
+        (Array.isArray(update.content) && update.content.length === 0));
+    const rawOutputCleared =
+      hasRawOutput &&
+      (update.rawOutput === null ||
+        update.rawOutput === undefined ||
+        update.rawOutput === "");
+    const contentDisplayable =
+      Array.isArray(update.content) && update.content.length > 0;
+    const rawOutputDisplayable =
+      typeof update.rawOutput === "string"
+        ? update.rawOutput.length > 0
+        : update.rawOutput !== null && update.rawOutput !== undefined;
+    return (
+      (contentCleared && !rawOutputDisplayable) ||
+      (rawOutputCleared && !contentDisplayable)
+    );
   }
 
   private isFinalToolCall(
@@ -393,15 +574,36 @@ export class SessionOutputPipeline implements vscode.Disposable {
   ): void {
     const state = this.getToolCallState(update.toolCallId);
     const rawInput = this.asRecord(update.rawInput);
-    if (rawInput) state.rawInput = rawInput;
-    if (update.rawOutput !== undefined) state.rawOutput = update.rawOutput;
-    if (typeof update.kind === "string") state.kind = update.kind;
-    if (typeof update.title === "string") state.title = update.title;
-    if (Array.isArray(update.content)) state.content = update.content;
-    if (Array.isArray(update.locations)) state.locations = update.locations;
+    if (Object.prototype.hasOwnProperty.call(update, "rawInput")) {
+      state.rawInput = rawInput;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "rawOutput")) {
+      state.rawOutput = update.rawOutput;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "kind")) {
+      state.kind = typeof update.kind === "string" ? update.kind : undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "title")) {
+      state.title = typeof update.title === "string" ? update.title : undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "content")) {
+      state.content = Array.isArray(update.content)
+        ? update.content
+        : undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "locations")) {
+      state.locations = Array.isArray(update.locations)
+        ? update.locations
+        : undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(update, "status")) {
+      state.status =
+        typeof update.status === "string" ? update.status : undefined;
+    }
     if (resetStartTime || state.startTime === undefined) {
       state.startTime = Date.now();
     }
+    state.revision += 1;
   }
 
   private captureToolCallBaseContent(
@@ -410,6 +612,7 @@ export class SessionOutputPipeline implements vscode.Disposable {
       "toolCallId" | "rawInput" | "kind" | "title"
     >
   ): void {
+    if (this.state.isLoadingHistory) return;
     const state = this.getToolCallState(update.toolCallId);
     if (state.baseContent) return;
     const rawInput = this.asRecord(update.rawInput) || state.rawInput;
@@ -422,9 +625,12 @@ export class SessionOutputPipeline implements vscode.Disposable {
   }
 
   private async completeToolCall(update: FinalToolCallUpdate): Promise<void> {
-    if (!this.isToolCallPending(update.toolCallId)) return;
+    const state = this.state.toolCalls.get(update.toolCallId);
+    if (!state?.pending || state.completed) return;
 
-    const state = this.getToolCallState(update.toolCallId);
+    state.completed = true;
+    state.revision += 1;
+    this.cancelProgressTimer(state);
     let content = update.content ?? state.content;
     const rawOutput =
       update.rawOutput !== undefined ? update.rawOutput : state.rawOutput;
@@ -444,8 +650,22 @@ export class SessionOutputPipeline implements vscode.Disposable {
     const path = this.extractPath(rawInput);
     const kind = update.kind || state.kind;
     const title = update.title || state.title;
+    const terminalSemantics =
+      this.projectProgress(update.toolCallId, state)?.format === "terminal";
+    const hasDisplayableFinalContent =
+      Array.isArray(update.content) && update.content.length > 0;
+    const hasDisplayableFinalRawOutput =
+      this.extractRawOutputText(update.rawOutput) !== undefined;
+    const fallbackPresentation =
+      hasDisplayableFinalContent || hasDisplayableFinalRawOutput
+        ? undefined
+        : state.latestPresentation;
 
-    if (path && this.isFileMutation(kind, title)) {
+    if (
+      path &&
+      this.isFileMutation(kind, title) &&
+      !this.state.isLoadingHistory
+    ) {
       let oldText: string | undefined;
       const captured = this.options.fileHandler.getLastFileContent(path);
       if (captured !== undefined) {
@@ -503,9 +723,10 @@ export class SessionOutputPipeline implements vscode.Disposable {
       }
     }
 
-    if (update.status === "completed") {
+    if (update.status === "completed" && !this.state.isLoadingHistory) {
       await this.options.onStructuredDiffContent?.(content);
     }
+    if (!this.isToolCallPending(update.toolCallId)) return;
 
     this.options.emit({
       type: "toolCallComplete",
@@ -517,9 +738,13 @@ export class SessionOutputPipeline implements vscode.Disposable {
       rawOutput,
       status: update.status,
       terminalOutput,
+      terminalSemantics,
+      presentation: fallbackPresentation,
       locations,
       duration: state.startTime ? Date.now() - state.startTime : undefined,
+      revision: state.revision,
     });
+    this.options.onToolCallComplete?.();
     this.cleanupToolCall(update.toolCallId);
   }
 

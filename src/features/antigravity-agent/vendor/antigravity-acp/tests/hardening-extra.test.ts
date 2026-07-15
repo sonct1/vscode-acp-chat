@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { BinaryReader } from "@bufbuild/protobuf/wire";
 import { Adapter } from "../src/acp/adapter.js";
 import { InterprocessLock } from "../src/binding/lock.js";
-import { ConversationDbError } from "../src/conversation/database.js";
+
 import { ReplayCache } from "../src/conversation/replay.js";
 import { resolveNewConversation } from "../src/conversation/scan.js";
 import { StepPayload } from "../src/gen/steps.js";
@@ -60,21 +60,23 @@ test("lock release only removes matching owner token and stale live-pid locks ar
 	assert.ok(Date.now() - start >= 9_000);
 });
 
-test("binding resolution reports none, single and ambiguous only after schema validation", async () => {
+test("binding resolution reports none, schema-pending, single, and ambiguous", async () => {
 	const dir = await tmpDir();
 	const before = new Set<string>();
 	assert.deepEqual(resolveNewConversation(dir, before, undefined), { kind: "none" });
 
-	createStepsDb(path.join(dir, "one.db"));
-	assert.deepEqual(resolveNewConversation(dir, before, undefined), { kind: "single", id: "one" });
+	const pending = new DatabaseSync(path.join(dir, "pending.db"));
+	pending.close();
+	assert.deepEqual(resolveNewConversation(dir, before, undefined), {
+		kind: "schema_pending",
+		id: "pending",
+		message: "steps table not found in pending.db",
+	});
+	createStepsDb(path.join(dir, "pending.db"));
+	assert.deepEqual(resolveNewConversation(dir, before, undefined), { kind: "single", id: "pending" });
 
 	createStepsDb(path.join(dir, "two.db"));
-	assert.deepEqual(resolveNewConversation(dir, before, undefined), { kind: "ambiguous", ids: ["one", "two"] });
-
-	const bad = new DatabaseSync(path.join(dir, "bad.db"));
-	bad.exec("CREATE TABLE other (id INTEGER)");
-	bad.close();
-	assert.throws(() => resolveNewConversation(dir, before, undefined), ConversationDbError);
+	assert.deepEqual(resolveNewConversation(dir, before, undefined), { kind: "ambiguous", ids: ["pending", "two"] });
 });
 
 test("replay cache notices WAL-only changes", () => {
@@ -163,6 +165,24 @@ test("non-zero exit remains an error after partial output", async () => {
 	const out = await adapter.runPrompt("s", session, "hello", clientStub(async () => {}));
 	assert.match(out.error ?? "", /Authentication failed/);
 	assert.equal(out.hadUpdates, true);
+});
+
+test("first turn waits for agy to finish initializing a newly created DB schema", async () => {
+	const dir = await tmpDir();
+	const bin = path.join(dir, process.platform === "win32" ? "agy.cmd" : "agy");
+	const script = process.platform === "win32"
+		? `@echo off\nnode -e "const {DatabaseSync}=require('node:sqlite'); const path=require('node:path'); const file=path.join(process.cwd(),'delayed.db'); new DatabaseSync(file).close(); setTimeout(() => { const db=new DatabaseSync(file); db.exec('CREATE TABLE steps (idx INTEGER, step_type INTEGER, status INTEGER, step_payload BLOB, error_details BLOB, permissions BLOB, task_details BLOB)'); db.close(); console.log('done'); }, 350);"\n`
+		: `#!/usr/bin/env node\nconst {DatabaseSync}=require('node:sqlite'); const path=require('node:path'); const file=path.join(process.cwd(),'delayed.db'); new DatabaseSync(file).close(); setTimeout(() => { const db=new DatabaseSync(file); db.exec('CREATE TABLE steps (idx INTEGER, step_type INTEGER, status INTEGER, step_payload BLOB, error_details BLOB, permissions BLOB, task_details BLOB)'); db.close(); console.log('done'); }, 350);\n`;
+	await fs.writeFile(bin, script, { mode: 0o755 });
+	const session: Session = { conversationId: null, lastStepIdx: -1, modelId: null, permissionMode: null, cwd: dir, additionalDirs: [], title: null, updatedAt: new Date().toISOString() };
+	const adapter = new Adapter({ binary: bin, conversationsDir: dir, workingDir: dir, stateDir: path.join(dir, "state"), skipNarration: false });
+	let persisted = "";
+	const out = await adapter.runPrompt("s", session, "hello", clientStub(async () => {}), async (conversationId) => {
+		persisted = conversationId;
+	});
+	assert.equal(out.error, undefined);
+	assert.equal(out.conversationId, "delayed");
+	assert.equal(persisted, "delayed");
 });
 
 test("first turn with incompatible DB schema returns an actionable schema error", async () => {

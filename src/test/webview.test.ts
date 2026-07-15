@@ -1119,6 +1119,112 @@ suite("Webview", () => {
         assert.strictEqual(tools["tool-1"].status, "running");
       });
 
+      test("replaces live tool progress in one running card and rejects stale revisions", () => {
+        controller.handleMessage({
+          type: "toolCallProgress",
+          toolCallId: "tool-live",
+          title: "bash",
+          kind: "other",
+          status: "in_progress",
+          revision: 2,
+          presentation: {
+            format: "terminal",
+            text: "10%\r20%",
+            truncated: false,
+          },
+        });
+        controller.handleMessage({
+          type: "toolCallProgress",
+          toolCallId: "tool-live",
+          title: "bash",
+          kind: "other",
+          status: "in_progress",
+          revision: 1,
+          presentation: {
+            format: "terminal",
+            text: "stale",
+            truncated: false,
+          },
+        });
+
+        assert.strictEqual(
+          elements.messagesEl.querySelectorAll(".block-tool").length,
+          1
+        );
+        assert.strictEqual(
+          elements.messagesEl.querySelector(".tool-output")?.textContent,
+          "20%"
+        );
+        assert.strictEqual(
+          elements.messagesEl.querySelectorAll(".tool-status.running").length,
+          1
+        );
+
+        controller.handleMessage({
+          type: "toolCallComplete",
+          toolCallId: "tool-live",
+          title: "bash",
+          kind: "other",
+          status: "completed",
+          revision: 3,
+          terminalOutput: "done",
+          terminalSemantics: true,
+        });
+        controller.handleMessage({
+          type: "toolCallProgress",
+          toolCallId: "tool-live",
+          title: "bash",
+          kind: "other",
+          status: "in_progress",
+          revision: 2,
+          presentation: {
+            format: "terminal",
+            text: "late",
+            truncated: false,
+          },
+        });
+
+        assert.strictEqual(
+          elements.messagesEl.querySelector(".tool-output")?.textContent,
+          "done"
+        );
+        assert.strictEqual(
+          elements.messagesEl.querySelectorAll(".tool-status.running").length,
+          0
+        );
+      });
+
+      test("escapes sub-agent live output and metadata", () => {
+        controller.handleMessage({
+          type: "toolCallProgress",
+          toolCallId: "delegate-live",
+          title: "delegate_explore",
+          status: "in_progress",
+          revision: 1,
+          presentation: {
+            format: "subagent",
+            text: '<img src=x onerror="alert(1)">',
+            truncated: false,
+            subagent: {
+              agent: '<script>alert("agent")</script>',
+              currentTool: "grep",
+              toolHistory: [
+                { name: "read", summary: '<svg onload="alert(2)">' },
+              ],
+            },
+          },
+        });
+
+        const details = elements.messagesEl.querySelector(
+          ".tool-details-content"
+        );
+        assert.strictEqual(details?.querySelector("img"), null);
+        assert.strictEqual(details?.querySelector("script"), null);
+        assert.strictEqual(details?.querySelector("svg"), null);
+        assert.ok(details?.textContent?.includes("<img src=x"));
+        assert.ok(details?.textContent?.includes("<script>"));
+      });
+
       test("handles toolCallComplete", () => {
         controller.handleMessage({
           type: "toolCallStart",
@@ -1579,7 +1685,7 @@ suite("Webview", () => {
       });
 
       test("invalidates message paint on scroll events", () => {
-        const { frames, runNextFrame } = installAnimationFrameQueue();
+        const { frames, runAllFrames } = installAnimationFrameQueue();
         Object.defineProperty(elements.messagesEl, "scrollHeight", {
           configurable: true,
           value: 1000,
@@ -1592,9 +1698,9 @@ suite("Webview", () => {
 
         elements.messagesEl.dispatchEvent(new window.Event("scroll"));
 
-        assert.strictEqual(frames.length, 1);
+        assert.ok(frames.length >= 1);
 
-        runNextFrame();
+        runAllFrames();
 
         assert.strictEqual(elements.messagesEl.dataset.paintBump, "1");
       });
@@ -3401,6 +3507,54 @@ suite("Webview", () => {
         const thoughtEl = elements.messagesEl.querySelector(".agent-thought");
         assert.strictEqual(thoughtEl, null);
       });
+
+      test("snapshot replay renders each finalized text and thought block once", () => {
+        let markdownRenderCount = 0;
+        controller.getEventBus().on("markdownRendered", () => {
+          markdownRenderCount += 1;
+        });
+
+        controller.beginSnapshotReplay();
+        controller.handleMessage({ type: "streamStart" });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "Hello ",
+          finalized: true,
+          historical: true,
+        });
+        controller.handleMessage({
+          type: "streamChunk",
+          text: "world",
+          finalized: true,
+          historical: true,
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "Think ",
+          finalized: true,
+          historical: true,
+        });
+        controller.handleMessage({
+          type: "thoughtChunk",
+          text: "once",
+          finalized: true,
+          historical: true,
+        });
+        controller.handleMessage({ type: "streamEnd" });
+        controller.endSnapshotReplay();
+
+        assert.strictEqual(markdownRenderCount, 2);
+        assert.strictEqual(
+          elements.messagesEl.querySelector(".block-text")?.textContent?.trim(),
+          "Hello world"
+        );
+        assert.strictEqual(
+          elements.messagesEl
+            .querySelector(".thought-content")
+            ?.textContent?.trim(),
+          "Think once"
+        );
+      });
     });
 
     suite("state persistence", () => {
@@ -3516,6 +3670,132 @@ suite("Webview", () => {
       );
     });
 
+    test("scrolls to the bottom after an explicit session activation snapshot", async () => {
+      const calls: string[] = [];
+      const localDom = new JSDOM(
+        "<!DOCTYPE html><html><head></head><body></body></html>",
+        {
+          url: "https://localhost",
+        }
+      );
+      const localDoc = localDom.window.document;
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: () => {},
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        localDoc,
+        {
+          reset: () => {},
+          dispatch: () => {},
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 120,
+          setScrollTop: (value) => calls.push(`restore:${value}`),
+          scrollToBottom: (force) => calls.push(`bottom:${force}`),
+          getWebviewState: () => ({
+            isConnected: true,
+            inputValue: "",
+            multiSession: { scrollTop: { "local-a": 120 } },
+          }),
+          saveWebviewState: () => {},
+        }
+      );
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+        scrollToBottom: true,
+      } as any);
+
+      assert.deepStrictEqual(calls, ["bottom:true"]);
+      localDom.window.close();
+    });
+
+    test("preserves the current scroll position during a passive resync", async () => {
+      const calls: string[] = [];
+      const localDom = new JSDOM(
+        "<!DOCTYPE html><html><head></head><body></body></html>",
+        {
+          url: "https://localhost",
+        }
+      );
+      const localDoc = localDom.window.document;
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: () => {},
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        localDoc,
+        {
+          reset: () => {},
+          dispatch: () => {},
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 360,
+          setScrollTop: (value) => calls.push(`restore:${value}`),
+          scrollToBottom: (force) => calls.push(`bottom:${force}`),
+          getWebviewState: () => ({
+            isConnected: true,
+            inputValue: "",
+            multiSession: { scrollTop: { "local-a": 120 } },
+          }),
+          saveWebviewState: () => {},
+        }
+      );
+
+      const snapshot = {
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any;
+      await feature.handleMessage(snapshot);
+      calls.length = 0;
+      await feature.handleMessage(snapshot);
+
+      assert.deepStrictEqual(calls, ["restore:360"]);
+      localDom.window.close();
+    });
+
     test("shows optimistic loading immediately when switching active sessions", async () => {
       await controller.handleMessage({
         type: "feature.multi-session.snapshot",
@@ -3575,6 +3855,7 @@ suite("Webview", () => {
         }
       );
       const localDoc = localDom.window.document;
+      let replayDepth = 0;
       const feature = new MultiSessionWebviewController(
         {
           postMessage: () => {},
@@ -3584,6 +3865,12 @@ suite("Webview", () => {
         localDoc,
         {
           reset: () => {},
+          beginSnapshotReplay: () => {
+            replayDepth += 1;
+          },
+          endSnapshotReplay: () => {
+            replayDepth -= 1;
+          },
           dispatch: async () => {
             throw new Error("replay failed");
           },
@@ -3592,6 +3879,7 @@ suite("Webview", () => {
           setInputHtml: () => {},
           getScrollTop: () => 0,
           setScrollTop: () => {},
+          scrollToBottom: () => {},
           getWebviewState: () => undefined,
           saveWebviewState: () => {},
         }
@@ -3628,6 +3916,7 @@ suite("Webview", () => {
         ".multi-session-loading"
       ) as HTMLElement;
       assert.strictEqual(loading.hidden, true);
+      assert.strictEqual(replayDepth, 0);
       localDom.window.close();
     });
 
@@ -3668,6 +3957,7 @@ suite("Webview", () => {
           setInputHtml: () => {},
           getScrollTop: () => 0,
           setScrollTop: () => {},
+          scrollToBottom: () => {},
           getWebviewState: () => undefined,
           saveWebviewState: () => {},
         }
@@ -4871,6 +5161,19 @@ suite("Webview", () => {
       const newText = "mod1\nmod2\nmod3";
       const result = renderDiff(undefined, oldText, newText);
       assert.ok(!result.includes("diff-hunk-separator"));
+    });
+
+    test("skips LCS allocation for many-line oversized diffs", () => {
+      const oldText = Array.from(
+        { length: 1500 },
+        (_, index) => `old-${index}`
+      ).join("\n");
+      const newText = Array.from(
+        { length: 1500 },
+        (_, index) => `new-${index}`
+      ).join("\n");
+      const result = renderDiff(undefined, oldText, newText);
+      assert.ok(result.includes("Diff is too large to render inline"));
     });
 
     test("renders change block without clickability or data attributes", () => {

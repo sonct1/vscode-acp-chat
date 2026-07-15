@@ -11,6 +11,11 @@ import type { ToolCallSummary, ToolKind } from "../types";
  * toolCallStart / toolCallComplete messages.
  */
 export class ToolBlock extends BlockWidget {
+  private cachedDetailsHtml: string | undefined;
+  private pendingDetailsInfo: ToolCallSummary | undefined;
+  private latestRevision = -1;
+  private lazyToggleBound = false;
+
   constructor(
     ctx: WebviewContext,
     element: HTMLElement,
@@ -48,6 +53,13 @@ export class ToolBlock extends BlockWidget {
   /**
    * Update the summary row (called on toolCallStart and toolCallComplete).
    */
+  acceptRevision(revision: number | undefined): boolean {
+    if (revision === undefined) return true;
+    if (revision < this.latestRevision) return false;
+    this.latestRevision = revision;
+    return true;
+  }
+
   updateSummary(info: ToolCallSummary): void {
     if (info.kind) this.kind = info.kind as ToolKind;
     if (info.title) this.title = info.title;
@@ -65,8 +77,48 @@ export class ToolBlock extends BlockWidget {
   /**
    * Render the full detail panel (called on toolCallComplete).
    */
-  updateDetails(info: ToolCallSummary): void {
-    this.contentEl.innerHTML = renderToolDetails(info);
+  updateDetails(info: ToolCallSummary, lazy = false): void {
+    const currentOutput =
+      this.contentEl.querySelector<HTMLElement>(".tool-output");
+    const wasPinnedToBottom = currentOutput
+      ? currentOutput.scrollHeight -
+          currentOutput.scrollTop -
+          currentOutput.clientHeight <=
+        4
+      : true;
+    const previousScrollTop = currentOutput?.scrollTop ?? 0;
+    this.pendingDetailsInfo = info;
+    this.cachedDetailsHtml = undefined;
+    if (lazy) {
+      this.contentEl.textContent = "Details available on expand.";
+      const details = this.element.querySelector("details");
+      details?.removeAttribute("open");
+      if (details && !this.lazyToggleBound) {
+        this.lazyToggleBound = true;
+        details.addEventListener("toggle", () => this.renderDetailsIfNeeded());
+      }
+      return;
+    }
+    this.renderDetailsIfNeeded();
+    const nextOutput =
+      this.contentEl.querySelector<HTMLElement>(".tool-output");
+    if (nextOutput) {
+      nextOutput.scrollTop = wasPinnedToBottom
+        ? nextOutput.scrollHeight
+        : Math.min(previousScrollTop, nextOutput.scrollHeight);
+    }
+  }
+
+  private renderDetailsIfNeeded(): void {
+    const details = this.element.querySelector("details");
+    if (details && !details.open) return;
+    if (!this.pendingDetailsInfo) return;
+    if (!this.cachedDetailsHtml) {
+      this.cachedDetailsHtml = renderToolDetails(this.pendingDetailsInfo);
+    }
+    if (this.contentEl.innerHTML !== this.cachedDetailsHtml) {
+      this.contentEl.innerHTML = this.cachedDetailsHtml;
+    }
   }
 
   /**

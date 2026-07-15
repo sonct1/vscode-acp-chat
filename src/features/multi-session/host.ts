@@ -17,6 +17,8 @@ import {
 } from "../../acp/agents";
 import type {
   AgentSessionManager,
+  HistorySessionPage,
+  HistorySessionRef,
   SessionInfo,
 } from "../../acp/session-manager";
 import { DiffManager } from "../../acp/diff-manager";
@@ -30,6 +32,10 @@ import {
   type SessionRenderMessage,
 } from "../../acp/session-output-pipeline";
 import { getWorkspaceRoot } from "../../utils/workspace";
+import {
+  readRemoteHistoryCatalog,
+  writeRemoteHistoryCatalogPage,
+} from "../fast-chat-history/cache";
 import { AsyncSerialProcessor } from "../../utils/async-queue";
 import type { Mention } from "../../utils/mention-serializer";
 import {
@@ -65,20 +71,6 @@ function newSessionFallbackTitle(
   sessionId: string
 ): string {
   return agent.id === "pi" ? `Pi ${sessionId}` : "New chat";
-}
-
-function realSessionTitle(info: SessionInfo | undefined): string | undefined {
-  const title = typeof info?.title === "string" ? info.title.trim() : "";
-  if (!info || !title) return undefined;
-
-  const fallbackTitles = new Set([
-    `Session ${info.sessionId}`,
-    historyFallbackTitle(info.sessionId),
-    `Pi ${info.sessionId}`,
-    "New chat",
-    "Untitled chat",
-  ]);
-  return fallbackTitles.has(title) ? undefined : title;
 }
 
 export interface MultiSessionRuntimeClient {
@@ -152,6 +144,8 @@ interface ManagedSession {
   stderrBuffer: string;
   isGenerating: boolean;
   isLoadingHistory: boolean;
+  historyReplayPhase: "live" | "collecting";
+  historyLoadEpoch: number;
   sendInFlight: boolean;
   recoveryPayloads: ComposerPayload[];
   eagerRuntimeAttempted?: boolean;
@@ -170,8 +164,6 @@ export class MultiSessionHostController implements vscode.Disposable {
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
   private defaultAgent: AgentConfig;
-  private readonly historySessionAgentById = new Map<string, string>();
-  private lastHistoryListAgentId: string | undefined;
   private readonly mutationCoordinator = new WorkspaceMutationCoordinator();
   private readonly catalog: SessionCatalogService;
   private documentSync?: DocumentSyncManager;
@@ -656,59 +648,82 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.sendSnapshot();
   }
 
-  async loadHistorySession(sessionId: string): Promise<void> {
+  async loadHistorySession(
+    refOrSessionId: HistorySessionRef | string
+  ): Promise<void> {
+    const ref = this.normalizeHistoryRef(refOrSessionId);
     for (const session of this.sessions.values()) {
-      if (session.acpSessionId === sessionId) {
+      if (
+        session.acpSessionId === ref.sessionId &&
+        session.agent.id === ref.agentId
+      ) {
         this.activate(session.localSessionId);
         return;
       }
     }
 
-    const historyAgent = this.resolveHistoryAgent(sessionId);
+    const historyAgent = getAgent(ref.agentId);
+    if (!historyAgent) {
+      throw new Error(`Unknown history agent: ${ref.agentId}`);
+    }
     const session = this.createDraftForAgent(historyAgent, "loading_history");
-    session.title = historyFallbackTitle(sessionId);
+    session.title = ref.title.trim() || historyFallbackTitle(ref.sessionId);
+    session.cwd = ref.cwd;
+    session.isLoadingHistory = true;
+    session.historyReplayPhase = "collecting";
     this.activate(session.localSessionId);
+    const loadEpoch = ++session.historyLoadEpoch;
 
     try {
       await this.ensureRuntime(session, false);
-      const historyTitle = await this.resolveHistorySessionTitle(
-        session,
-        sessionId
-      );
-      if (historyTitle) {
-        session.title = historyTitle;
-        this.touch(session);
-        this.sendState();
-      }
       if (!session.sessionManager?.supportsLoadSession) {
         throw new Error(
           `Agent "${session.agent.name}" does not support loading history sessions.`
         );
       }
-      session.isLoadingHistory = true;
       session.output!.setLoadingHistory(true);
-      await session.sessionManager.loadSession(sessionId, session.cwd);
-      session.acpSessionId = sessionId;
+      await session.sessionManager.loadSession(ref.sessionId, session.cwd);
+      if (!this.isCurrentHistoryLoad(session, loadEpoch)) {
+        return;
+      }
+      session.acpSessionId = ref.sessionId;
       this.rebindDocumentSync(session);
       await session.queue!.waitForIdle();
+      if (!this.isCurrentHistoryLoad(session, loadEpoch)) {
+        return;
+      }
       session.output!.flushUserMessageBuffer();
       session.status = "idle";
       session.metadata = clientMetadata(session.client!);
-      this.append(session, { type: "streamEnd", stopReason: "history_load" });
+      if (session.transcript.snapshot().length > 0) {
+        session.transcript.append({
+          type: "streamEnd",
+          stopReason: "history_load",
+        });
+      }
+      this.sendHistorySnapshot(session);
+      session.historyReplayPhase = "live";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      session.status = "error";
-      session.lastError = message;
-      this.append(session, {
-        type: "error",
-        text: `Failed to load history: ${message}`,
-      });
+      if (this.sessions.get(session.localSessionId) === session) {
+        session.status = "error";
+        session.lastError = message;
+        session.historyReplayPhase = "live";
+        this.append(session, {
+          type: "error",
+          text: `Failed to load history: ${message}`,
+        });
+      }
     } finally {
-      session.isLoadingHistory = false;
-      session.output?.setLoadingHistory(false);
-      this.touch(session);
-      this.sendState();
-      this.sendSnapshot();
+      if (this.sessions.get(session.localSessionId) === session) {
+        if (session.historyReplayPhase === "collecting") {
+          session.historyReplayPhase = "live";
+        }
+        session.isLoadingHistory = false;
+        session.output?.setLoadingHistory(false);
+        this.touch(session);
+        this.sendState();
+      }
     }
   }
 
@@ -718,18 +733,65 @@ export class MultiSessionHostController implements vscode.Disposable {
       session.agent,
       this.getCatalogRuntime(session)
     );
-    this.lastHistoryListAgentId = session.agent.id;
-    for (const item of sessions) {
-      this.historySessionAgentById.set(item.sessionId, session.agent.id);
-    }
     return sessions;
   }
 
-  async deleteHistorySession(sessionId: string): Promise<void> {
-    const agent = this.resolveHistoryAgent(sessionId);
+  getHistoryScope(): { agentId: string; cwd: string } {
+    const session = this.getActive() ?? this.createDraft();
+    return { agentId: session.agent.id, cwd: getWorkspaceRoot() };
+  }
+
+  async listSessionPage(cursor?: string | null): Promise<HistorySessionPage> {
+    const session = this.getActive() ?? this.createDraft();
+    const page = await this.catalog.listSessionPage(
+      session.agent,
+      this.getCatalogRuntime(session),
+      cursor
+    );
+    if (page.authoritative) {
+      try {
+        await writeRemoteHistoryCatalogPage(
+          this.globalState,
+          session.agent.id,
+          getWorkspaceRoot(),
+          page.sessions,
+          Boolean(cursor)
+        );
+      } catch (error) {
+        console.warn(
+          "[FastHistory] Failed to persist remote history catalog:",
+          error
+        );
+      }
+    }
+    return page;
+  }
+
+  getCachedHistorySessions(): HistorySessionRef[] {
+    const session = this.getActive() ?? this.createDraft();
+    return readRemoteHistoryCatalog(
+      this.globalState,
+      session.agent.id,
+      getWorkspaceRoot()
+    );
+  }
+
+  async getLocalHistorySessions(): Promise<HistorySessionRef[]> {
+    const session = this.getActive() ?? this.createDraft();
+    return this.catalog.listLocalSessions(session.agent);
+  }
+
+  async deleteHistorySession(
+    refOrSessionId: HistorySessionRef | string
+  ): Promise<void> {
+    const ref = this.normalizeHistoryRef(refOrSessionId);
+    const agent = getAgent(ref.agentId);
+    if (!agent) {
+      throw new Error(`Unknown history agent: ${ref.agentId}`);
+    }
     await this.catalog.deleteSession(
       agent,
-      sessionId,
+      ref.sessionId,
       this.getCatalogRuntimeForAgent(agent.id)
     );
   }
@@ -859,6 +921,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       stderrBuffer: "",
       isGenerating: false,
       isLoadingHistory: false,
+      historyReplayPhase: "live",
+      historyLoadEpoch: 0,
       sendInFlight: false,
       recoveryPayloads: [],
     };
@@ -1014,6 +1078,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       client,
       fileHandler: resources.fileHandler,
       emit: (message) => this.append(session, message),
+      liveToolOutputProfile: session.agent.liveToolOutputProfile,
       onMetadataChanged: (metadata) => {
         session.metadata = metadata;
         this.emitSessionMetadata(session);
@@ -1036,6 +1101,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         }
       },
       onStructuredDiffContent: async (content) => {
+        if (session.historyReplayPhase === "collecting") return;
         if (!resources.diffManager.isEnabled()) return;
         await recordStructuredDiffsFromContent(content, {
           cwd: session.cwd,
@@ -1207,9 +1273,23 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   private append(session: ManagedSession, message: SessionRenderMessage): void {
     const event = session.transcript.append(message);
-    this.touch(session);
+    const isProgress = message.type === "toolCallProgress";
+    if (!isProgress) {
+      this.touch(session);
+    }
 
     if (session.localSessionId !== this.activeLocalSessionId) {
+      return;
+    }
+
+    if (
+      session.historyReplayPhase === "collecting" &&
+      this.isTranscriptContentMessage(message)
+    ) {
+      if (!isProgress) {
+        this.scheduleChatState();
+        this.scheduleManagerState();
+      }
       return;
     }
 
@@ -1219,8 +1299,10 @@ export class MultiSessionHostController implements vscode.Disposable {
       activationRevision: this.activationRevision,
       event,
     });
-    this.scheduleChatState();
-    this.scheduleManagerState();
+    if (!isProgress) {
+      this.scheduleChatState();
+      this.scheduleManagerState();
+    }
   }
 
   activateSession(
@@ -1241,7 +1323,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.rebindDocumentSync(session);
     this.sendChatStateNow();
     this.sendManagerStateNow();
-    this.sendSnapshot();
+    this.sendSnapshot({ scrollToBottom: true });
     if (options.focusChat) {
       void Promise.resolve(this.focusChat()).catch((error) => {
         console.error("[MultiSession] Failed to focus chat view:", error);
@@ -1249,10 +1331,24 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
   }
 
-  private sendSnapshot(): void {
+  private sendSnapshot(options: { scrollToBottom?: boolean } = {}): void {
     const session = this.getActive();
     if (!session) return;
+    this.sendSessionSnapshot(session, options);
+  }
 
+  private sendHistorySnapshot(session: ManagedSession): void {
+    if (session.localSessionId !== this.activeLocalSessionId) return;
+    this.sendSessionSnapshot(session, { flushRecoveryPayloads: false });
+  }
+
+  private sendSessionSnapshot(
+    session: ManagedSession,
+    options: {
+      scrollToBottom?: boolean;
+      flushRecoveryPayloads?: boolean;
+    } = {}
+  ): void {
     this.post(
       session.messageQueue!.getSnapshot() as unknown as Record<string, unknown>
     );
@@ -1270,8 +1366,11 @@ export class MultiSessionHostController implements vscode.Disposable {
         this.permissionMessage(pending.id, pending.params)
       ),
       isGenerating: session.messageQueue!.getSnapshot().processing,
+      scrollToBottom: options.scrollToBottom,
     });
-    this.flushRecoveryPayloads(session);
+    if (options.flushRecoveryPayloads !== false) {
+      this.flushRecoveryPayloads(session);
+    }
   }
 
   private sendState(): void {
@@ -1447,24 +1546,45 @@ export class MultiSessionHostController implements vscode.Disposable {
       : undefined;
   }
 
-  private async resolveHistorySessionTitle(
+  private normalizeHistoryRef(
+    refOrSessionId: HistorySessionRef | string
+  ): HistorySessionRef {
+    if (typeof refOrSessionId !== "string") return refOrSessionId;
+    const active = this.getActive();
+    return {
+      agentId: active?.agent.id ?? this.defaultAgent.id,
+      sessionId: refOrSessionId,
+      title: historyFallbackTitle(refOrSessionId),
+      cwd: active?.cwd ?? getWorkspaceRoot(),
+      updatedAt: new Date(0).toISOString(),
+      source: "local-fallback",
+    };
+  }
+
+  private isCurrentHistoryLoad(
     session: ManagedSession,
-    sessionId: string
-  ): Promise<string | undefined> {
-    try {
-      const sessions = await this.catalog.listSessions(
-        session.agent,
-        this.getCatalogRuntime(session)
-      );
-      const info = sessions.find((item) => item.sessionId === sessionId);
-      return realSessionTitle(info);
-    } catch (error) {
-      console.debug(
-        "[MultiSession] Failed to resolve history session title:",
-        error
-      );
-      return undefined;
-    }
+    loadEpoch: number
+  ): boolean {
+    return (
+      this.sessions.get(session.localSessionId) === session &&
+      session.historyLoadEpoch === loadEpoch
+    );
+  }
+
+  private isTranscriptContentMessage(message: SessionRenderMessage): boolean {
+    return [
+      "userMessage",
+      "streamStart",
+      "streamChunk",
+      "thoughtChunk",
+      "toolCallStart",
+      "toolCallProgress",
+      "toolCallComplete",
+      "streamEnd",
+      "error",
+      "agentError",
+      "system",
+    ].includes(message.type);
   }
 
   private getCatalogRuntime(
@@ -1484,15 +1604,6 @@ export class MultiSessionHostController implements vscode.Disposable {
       if (runtime) return runtime;
     }
     return undefined;
-  }
-
-  private resolveHistoryAgent(sessionId: string): AgentConfig {
-    const agentId =
-      this.historySessionAgentById.get(sessionId) ??
-      this.lastHistoryListAgentId ??
-      this.getActive()?.agent.id ??
-      this.defaultAgent.id;
-    return getAgent(agentId) ?? this.defaultAgent;
   }
 
   private rebindDocumentSync(session: ManagedSession): void {

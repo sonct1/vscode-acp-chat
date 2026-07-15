@@ -5,6 +5,8 @@ import {
   AgentSessionManager,
   globalStateSessionStore,
   inMemorySessionStore,
+  type HistorySessionPage,
+  type HistorySessionRef,
   type SessionInfo,
   type SessionStore,
 } from "../../acp/session-manager";
@@ -54,23 +56,77 @@ export class SessionCatalogService implements vscode.Disposable {
     agent: AgentConfig,
     runtime?: SessionCatalogRuntime
   ): Promise<SessionInfo[]> {
-    if (runtime && !runtime.client.isConnected()) {
-      const records = await this.getStore(agent.id).read();
-      return records
-        .sort(
-          (a, b) =>
-            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        )
-        .map((record) => ({
-          sessionId: record.sessionId,
-          title: record.title,
-          cwd: record.cwd,
-          updatedAt: record.updatedAt,
-        }));
+    const first = await this.listSessionPage(agent, runtime, null);
+    let sessions = first.sessions;
+    let cursor = first.nextCursor ?? null;
+    while (cursor) {
+      const next = await this.listSessionPage(agent, runtime, cursor);
+      sessions = sessions.concat(next.sessions);
+      cursor = next.nextCursor ?? null;
     }
-    return this.withRuntime(agent, runtime, (manager) =>
-      manager.listSessions(getWorkspaceRoot())
+    return sessions;
+  }
+
+  async listSessionPage(
+    agent: AgentConfig,
+    runtime?: SessionCatalogRuntime,
+    cursor?: string | null
+  ): Promise<HistorySessionPage> {
+    const cwd = getWorkspaceRoot();
+    if (runtime && !runtime.client.isConnected()) {
+      if (cursor) {
+        return { sessions: [], nextCursor: null, authoritative: false };
+      }
+      const records = await this.getStore(agent.id).read();
+      return {
+        sessions: records
+          .filter((record) => record.cwd === cwd)
+          .sort(
+            (a, b) =>
+              new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+          )
+          .map((record) => ({
+            sessionId: record.sessionId,
+            agentId: agent.id,
+            title: record.title,
+            cwd: record.cwd,
+            updatedAt: record.updatedAt,
+            source: "local-fallback" as const,
+          })),
+        nextCursor: null,
+        authoritative: false,
+      };
+    }
+    const page = await this.withRuntime(agent, runtime, (manager) =>
+      manager.listSessionPage(cwd, cursor)
     );
+    return {
+      sessions: page.sessions.map((session): HistorySessionRef => ({
+        ...session,
+        agentId: session.agentId || agent.id,
+      })),
+      nextCursor: page.nextCursor,
+      authoritative: page.authoritative,
+    };
+  }
+
+  async listLocalSessions(agent: AgentConfig): Promise<HistorySessionRef[]> {
+    const cwd = getWorkspaceRoot();
+    const records = await this.getStore(agent.id).read();
+    return records
+      .filter((record) => record.cwd === cwd)
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      )
+      .map((record) => ({
+        agentId: agent.id,
+        sessionId: record.sessionId,
+        title: record.title,
+        cwd: record.cwd,
+        updatedAt: record.updatedAt,
+        source: "local-fallback",
+      }));
   }
 
   async deleteSession(

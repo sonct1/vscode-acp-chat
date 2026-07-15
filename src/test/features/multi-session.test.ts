@@ -35,6 +35,7 @@ class FakeSessionManager {
   newCalls = 0;
   loadCalls: string[] = [];
   deleteCalls: string[] = [];
+  listCalls = 0;
   listedSessions: Array<{
     sessionId: string;
     title: string;
@@ -55,9 +56,23 @@ class FakeSessionManager {
     return { sessionId };
   }
 
+  async listSessionPage(): Promise<{
+    sessions: Array<{
+      sessionId: string;
+      title: string;
+      cwd: string;
+      updatedAt: string;
+    }>;
+    nextCursor: string | null;
+  }> {
+    this.listCalls += 1;
+    return { sessions: this.listedSessions, nextCursor: null };
+  }
+
   async listSessions(): Promise<
     Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }>
   > {
+    this.listCalls += 1;
     return this.listedSessions;
   }
 
@@ -267,6 +282,58 @@ suite("multi-session feature", () => {
     assert.strictEqual(store.snapshot()[0].message.text, "original");
   });
 
+  test("tool progress compacts by tool id and completion supersedes it", () => {
+    const store = new TranscriptStore();
+    store.append({
+      type: "toolCallStart",
+      toolCallId: "tool-1",
+      name: "bash",
+    });
+    store.append({
+      type: "toolCallProgress",
+      toolCallId: "tool-1",
+      revision: 1,
+      presentation: { format: "terminal", text: "one", truncated: false },
+    });
+    store.append({
+      type: "toolCallProgress",
+      toolCallId: "tool-1",
+      revision: 2,
+      presentation: {
+        format: "terminal",
+        text: "one\ntwo",
+        truncated: false,
+      },
+    });
+
+    assert.deepStrictEqual(
+      store
+        .snapshot()
+        .map((event) => [
+          event.seq,
+          event.message.type,
+          (event.message.presentation as { text?: string } | undefined)?.text,
+        ]),
+      [
+        [1, "toolCallStart", undefined],
+        [3, "toolCallProgress", "one\ntwo"],
+      ]
+    );
+    assert.strictEqual(store.lastSeq, 3);
+
+    store.append({
+      type: "toolCallComplete",
+      toolCallId: "tool-1",
+      revision: 3,
+      status: "completed",
+    });
+    assert.deepStrictEqual(
+      store.snapshot().map((event) => event.message.type),
+      ["toolCallStart", "toolCallComplete"]
+    );
+    assert.strictEqual(store.lastSeq, 4);
+  });
+
   test("selecting an agent persists it and starts a new active session without mutating the old draft", async () => {
     const state = new TestMemento();
     const { controller, clients, managers } = createController(undefined, {
@@ -286,7 +353,10 @@ suite("multi-session feature", () => {
     assert.strictEqual(state.get("vscode-acp-chat.selectedAgent"), "opencode");
     assert.strictEqual(managerState.selectedAgentId, "opencode");
     assert.strictEqual(sessions.length, 2);
-    assert.strictEqual(sessions[0].localSessionId, originalSession.localSessionId);
+    assert.strictEqual(
+      sessions[0].localSessionId,
+      originalSession.localSessionId
+    );
     assert.strictEqual(sessions[0].agentId, originalSession.agentId);
     assert.strictEqual(activeSession?.agentId, "opencode");
     assert.strictEqual(activeSession?.agentName, "OpenCode");
@@ -456,6 +526,7 @@ suite("multi-session feature", () => {
           message.type === "feature.multi-session.snapshot" &&
           message.activeLocalSessionId === sessionA
       ) as any;
+    assert.strictEqual(snapshotA.scrollToBottom, true);
     assert.ok(
       snapshotA.transcript.some(
         (event: any) =>
@@ -480,7 +551,9 @@ suite("multi-session feature", () => {
 
   test("structured tool diffs are scoped to the owning session when low-resource mode is disabled", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", false, true);
     const tmpRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "vscode-acp-chat-scoped-")
@@ -585,7 +658,9 @@ suite("multi-session feature", () => {
 
   test("low-resource mode leaves file writes usable without diff state", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", true, true);
     const tmpRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "vscode-acp-chat-low-resource-write-")
@@ -605,7 +680,10 @@ suite("multi-session feature", () => {
 
       assert.strictEqual(fs.readFileSync(filePath, "utf8"), "created");
       assert.strictEqual(session.resources.diffManager.isEnabled(), false);
-      assert.deepStrictEqual(session.resources.diffManager.getPendingChanges(), []);
+      assert.deepStrictEqual(
+        session.resources.diffManager.getPendingChanges(),
+        []
+      );
       assert.deepStrictEqual(controller.getChatStateSnapshot().aggregate, {
         open: 1,
         running: 1,
@@ -622,7 +700,9 @@ suite("multi-session feature", () => {
 
   test("structured tool diff does not duplicate a matching writeTextFile change when low-resource mode is disabled", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", false, true);
     const { controller, clients } = createController();
     const prompt = controller.sendActiveMessage("A");
@@ -675,7 +755,9 @@ suite("multi-session feature", () => {
 
   test("mismatched structured tool diff is not actionable or stale-marking when low-resource mode is disabled", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", false, true);
     const mismatchPath = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-mismatch-")),
@@ -760,7 +842,9 @@ suite("multi-session feature", () => {
 
   test("structured tool diffs skip conflict bookkeeping in low-resource mode", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", true, true);
     const conflictPath = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-low-conflict-")),
@@ -839,7 +923,9 @@ suite("multi-session feature", () => {
 
   test("structured tool diffs mark other sessions pending on the same path as conflicted when low-resource mode is disabled", async () => {
     const config = vscode.workspace.getConfiguration("vscode-acp-chat");
-    const original = config.inspect<boolean>("multiSession.lowResourceMode")?.globalValue;
+    const original = config.inspect<boolean>(
+      "multiSession.lowResourceMode"
+    )?.globalValue;
     await config.update("multiSession.lowResourceMode", false, true);
     const conflictPath = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-chat-conflict-")),
@@ -1082,14 +1168,29 @@ suite("multi-session feature", () => {
 
     controller.activateSession(piSessionId);
     const sessions = await controller.listSessions();
-    await controller.loadHistorySession("pi-history");
-    await controller.deleteHistorySession("pi-history");
+    await controller.loadHistorySession({
+      agentId: "pi",
+      sessionId: "pi-history",
+      title: "Pi history",
+      cwd: "/workspace",
+      updatedAt: new Date().toISOString(),
+      source: "agent",
+    });
+    await controller.deleteHistorySession({
+      agentId: "pi",
+      sessionId: "pi-history",
+      title: "Pi history",
+      cwd: "/workspace",
+      updatedAt: new Date().toISOString(),
+      source: "agent",
+    });
 
     const active = controller
       .getStateForTest()
       .sessions.find(
         (session) =>
-          session.localSessionId === controller.getStateForTest().activeLocalSessionId
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
       );
 
     assert.strictEqual(controller.getDefaultAgentId(), "opencode");
@@ -1102,6 +1203,7 @@ suite("multi-session feature", () => {
     );
     assert.strictEqual(active?.agentId, "pi");
     assert.deepStrictEqual(managers[2].loadCalls, ["pi-history"]);
+    assert.strictEqual(managers[2].listCalls, 0);
     assert.deepStrictEqual(managers[0].deleteCalls, ["pi-history"]);
     assert.deepStrictEqual(managers[1].deleteCalls, []);
     controller.dispose();
@@ -1118,22 +1220,18 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("loading history uses a catalog title when available", async () => {
+  test("loading history uses selected item title without relisting", async () => {
     const fullSessionId = "019f5f61-1234-4567-89ab-full-history-id";
-    const { controller } = createController(undefined, {
-      configureManager: (manager) => {
-        manager.listedSessions = [
-          {
-            sessionId: fullSessionId,
-            title: "Backend debug",
-            cwd: "/workspace",
-            updatedAt: new Date().toISOString(),
-          },
-        ];
-      },
-    });
+    const { controller, managers } = createController();
 
-    await controller.loadHistorySession(fullSessionId);
+    await controller.loadHistorySession({
+      agentId: "pi",
+      sessionId: fullSessionId,
+      title: "Backend debug",
+      cwd: "/workspace",
+      updatedAt: new Date().toISOString(),
+      source: "agent",
+    });
 
     const state = controller.getStateForTest();
     const active = state.sessions.find(
@@ -1141,6 +1239,45 @@ suite("multi-session feature", () => {
     );
     assert.strictEqual(active?.title, "Backend debug");
     assert.strictEqual(active?.acpSessionId, fullSessionId);
+    assert.strictEqual(managers[0].listCalls, 0);
+    controller.dispose();
+  });
+
+  test("history collection suppresses content deltas and emits one snapshot", async () => {
+    const { controller, clients, messages } = createController();
+    const load = controller.loadHistorySession("history-snapshot");
+
+    clients[0].sessionUpdate?.({
+      sessionId: "history-snapshot",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "hello" },
+      },
+    });
+    await load;
+
+    const deltas = messages.filter(
+      (message) =>
+        message.type === "feature.multi-session.delta" &&
+        ["streamStart", "streamChunk", "streamEnd"].includes(
+          ((message as any).event as any)?.message?.type
+        )
+    );
+    const snapshots = messages.filter(
+      (message) => message.type === "feature.multi-session.snapshot"
+    ) as any[];
+    const nonEmptySnapshots = snapshots.filter(
+      (snapshot) => snapshot.transcript.length > 0
+    );
+    const finalSnapshot = nonEmptySnapshots[nonEmptySnapshots.length - 1];
+
+    assert.strictEqual(deltas.length, 0);
+    assert.strictEqual(nonEmptySnapshots.length, 1);
+    assert.ok(finalSnapshot.transcript.length > 0);
+    assert.strictEqual(
+      finalSnapshot.lastSeq,
+      finalSnapshot.transcript.at(-1).seq
+    );
     controller.dispose();
   });
 

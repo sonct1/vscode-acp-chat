@@ -25,7 +25,12 @@ import { getAuthMethods } from './auth.js'
 import { SessionManager, type PiAcpSession } from './session.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
-import { listPiSessions, findPiSession } from './pi-sessions.js'
+import {
+  discoverPiSessionsSnapshot,
+  findPiSession,
+  getLastPiSessionDiscoverySnapshot,
+  type PiSessionDiscoverySnapshot
+} from './pi-sessions.js'
 import { getPiHistoryLoadModeFromEnv } from './pi-history-load-mode.js'
 import { readPiSessionTranscript, type PiReplayMessage } from './pi-session-transcript.js'
 import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
@@ -160,7 +165,7 @@ async function replayPiMessages(
       const toolCallId = String((message as any)?.toolCallId ?? crypto.randomUUID())
       const isError = Boolean((message as any)?.isError)
 
-      // Create a synthetic ACP tool call to render historic tool usage.
+      const text = toolResultToText(message)
       await conn.sessionUpdate({
         sessionId,
         update: {
@@ -168,20 +173,9 @@ async function replayPiMessages(
           toolCallId,
           title: toolName,
           kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
-          status: 'completed',
-          rawInput: null,
-          rawOutput: message
-        }
-      })
-
-      const text = toolResultToText(message)
-      await conn.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: 'tool_call_update',
-          toolCallId,
           status: isError ? 'failed' : 'completed',
-          content: text ? [{ type: 'content', content: { type: 'text', text } }] : null,
+          content: text ? [{ type: 'content', content: { type: 'text', text } }] : undefined,
+          rawInput: null,
           rawOutput: message
         }
       })
@@ -192,11 +186,25 @@ import { fileURLToPath } from 'node:url'
 
 const pkg = readNearestPackageJson(import.meta.url)
 
+type PiSessionListCursor = {
+  snapshotId: string
+  offset: number
+  cwd: string | null
+}
+
+type PiSessionListSnapshot = {
+  id: string
+  snapshot: PiSessionDiscoverySnapshot
+  cwd: string | null
+  createdAt: number
+}
+
 export class PiAcpAgent implements ACPAgent {
   private readonly conn: AgentSideConnection
-  private readonly sessions = new SessionManager()
   private readonly store = new SessionStore()
+  private readonly sessions = new SessionManager(this.store)
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
+  private readonly listSnapshots = new Map<string, PiSessionListSnapshot>()
 
   dispose(): void {
     this.sessions.disposeAll()
@@ -230,24 +238,117 @@ export class PiAcpAgent implements ACPAgent {
   }
 
   private findStoredSession(sessionId: string): { cwd: string; sessionFile: string } | null {
+    const started = performance.now()
     const stored = this.store.get(sessionId)
     if (stored?.cwd && stored?.sessionFile) {
+      this.debugHistoryLookup('hit', performance.now() - started)
       return { cwd: stored.cwd, sessionFile: stored.sessionFile }
     }
 
-    const piSession = findPiSession(sessionId)
-    if (!piSession) return null
+    const before = getLastPiSessionDiscoverySnapshot()
+    const piSession = before?.items.find(s => s.sessionId === sessionId) ?? findPiSession(sessionId)
+    const after = getLastPiSessionDiscoverySnapshot()
+    if (!piSession) {
+      this.debugHistoryLookup(before === after ? 'miss-snapshot' : 'miss-scan', performance.now() - started)
+      return null
+    }
 
     this.store.upsert({
       sessionId,
       cwd: piSession.cwd,
       sessionFile: piSession.sessionFile
     })
+    this.debugHistoryLookup(before === after ? 'repair-snapshot' : 'repair-scan', performance.now() - started)
 
     return {
       cwd: piSession.cwd,
       sessionFile: piSession.sessionFile
     }
+  }
+
+  private debugHistoryLookup(result: string, elapsedMs: number): void {
+    if (process.env.PI_ACP_DEBUG_HISTORY !== 'true') return
+    console.warn(`[pi-acp] history lookup: result=${result} elapsedMs=${elapsedMs.toFixed(1)}`)
+  }
+
+  private encodeListCursor(cursor: PiSessionListCursor): string {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+  }
+
+  private decodeListCursor(cursor: string): PiSessionListCursor | null {
+    try {
+      const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown
+      if (!parsed || typeof parsed !== 'object') return null
+      const record = parsed as Record<string, unknown>
+      if (
+        typeof record.snapshotId !== 'string' ||
+        typeof record.offset !== 'number' ||
+        !Number.isInteger(record.offset) ||
+        record.offset < 0 ||
+        (record.cwd !== null && typeof record.cwd !== 'string')
+      ) {
+        return null
+      }
+      return {
+        snapshotId: record.snapshotId,
+        offset: record.offset,
+        cwd: record.cwd as string | null
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private cleanupListSnapshots(now = Date.now()): void {
+    const maxAgeMs = 2 * 60 * 1000
+    for (const [id, entry] of this.listSnapshots) {
+      if (now - entry.createdAt > maxAgeMs) this.listSnapshots.delete(id)
+    }
+    while (this.listSnapshots.size > 8) {
+      const oldest = [...this.listSnapshots.values()].sort((a, b) => a.createdAt - b.createdAt)[0]
+      if (!oldest) break
+      this.listSnapshots.delete(oldest.id)
+    }
+  }
+
+  private createListSnapshot(cwd: string | null): PiSessionListSnapshot {
+    this.cleanupListSnapshots()
+    const entry: PiSessionListSnapshot = {
+      id: crypto.randomUUID(),
+      snapshot: discoverPiSessionsSnapshot(),
+      cwd,
+      createdAt: Date.now()
+    }
+    this.listSnapshots.set(entry.id, entry)
+    return entry
+  }
+
+  private resolveListSnapshot(
+    cursor: string | null | undefined,
+    effectiveCwd: string | null
+  ): { entry: PiSessionListSnapshot; offset: number; reusedSnapshot: boolean } {
+    if (!cursor) {
+      return { entry: this.createListSnapshot(effectiveCwd), offset: 0, reusedSnapshot: false }
+    }
+
+    this.cleanupListSnapshots()
+    const decoded = this.decodeListCursor(cursor)
+    const entry = decoded ? this.listSnapshots.get(decoded.snapshotId) : undefined
+    if (!decoded || !entry || decoded.cwd !== effectiveCwd || entry.cwd !== effectiveCwd) {
+      throw RequestError.invalidParams('Invalid or expired session/list cursor')
+    }
+    return { entry, offset: decoded.offset, reusedSnapshot: true }
+  }
+
+  private debugHistoryList(
+    snapshot: PiSessionDiscoverySnapshot,
+    summary: { filtered: number; page: number; elapsedMs: number; reusedSnapshot: boolean }
+  ): void {
+    if (process.env.PI_ACP_DEBUG_HISTORY !== 'true') return
+    const c = snapshot.counters
+    console.warn(
+      `[pi-acp] history list: sessions=${snapshot.items.length} filtered=${summary.filtered} page=${summary.page} reusedSnapshot=${summary.reusedSnapshot} files=${c.filesEnumerated} parsed=${c.metadataParsed} warmHits=${c.unchangedIndexHits} elapsedMs=${summary.elapsedMs.toFixed(1)}`
+    )
   }
 
   private async restoreSession(
@@ -963,21 +1064,23 @@ export class PiAcpAgent implements ACPAgent {
   }
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-    // ACP: filter by cwd if provided.
-    // Zed currently sends `{}` (no cwd), so we default to the last session cwd to
-    // emulate pi's `/resume` picker (project-scoped).
-    const all = listPiSessions()
-
-    const effectiveCwd = (params as any).cwd ?? this.lastSessionCwd
+    const started = performance.now()
+    const effectiveCwd = ((params as any).cwd ?? this.lastSessionCwd) as string | null
+    const { entry, offset: start, reusedSnapshot } = this.resolveListSnapshot(params.cursor, effectiveCwd)
+    const snapshot = entry.snapshot
+    const all = snapshot.items
     const filtered = effectiveCwd ? all.filter(s => s.cwd === effectiveCwd) : all
-
-    // Cursor-based pagination (opaque cursor). For MVP, we use a simple numeric offset.
-    // If cursor is invalid, treat as 0.
-    const offset = params.cursor ? Number.parseInt(params.cursor, 10) : 0
-    const start = Number.isFinite(offset) && offset > 0 ? offset : 0
 
     const PAGE_SIZE = 50
     const page = filtered.slice(start, start + PAGE_SIZE)
+
+    this.store.upsertMany(
+      all.map(s => ({
+        sessionId: s.sessionId,
+        cwd: s.cwd,
+        sessionFile: s.sessionFile
+      }))
+    )
 
     const sessions: SessionInfo[] = page.map(s => ({
       sessionId: s.sessionId,
@@ -986,7 +1089,22 @@ export class PiAcpAgent implements ACPAgent {
       updatedAt: s.updatedAt
     }))
 
-    const nextCursor = start + PAGE_SIZE < filtered.length ? String(start + PAGE_SIZE) : null
+    const nextCursor =
+      start + PAGE_SIZE < filtered.length
+        ? this.encodeListCursor({
+            snapshotId: entry.id,
+            offset: start + PAGE_SIZE,
+            cwd: effectiveCwd
+          })
+        : null
+    if (!nextCursor) this.listSnapshots.delete(entry.id)
+
+    this.debugHistoryList(snapshot, {
+      filtered: filtered.length,
+      page: page.length,
+      elapsedMs: performance.now() - started,
+      reusedSnapshot
+    })
 
     return { sessions, nextCursor, _meta: {} }
   }

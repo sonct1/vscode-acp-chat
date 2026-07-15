@@ -967,7 +967,10 @@ body {
 .image-preview-popover {
   position: fixed;
   z-index: 2000;
-  background: var(--acp-flat-surface-background, var(--vscode-editor-background));
+  background: var(
+    --acp-flat-surface-background,
+    var(--vscode-editor-background)
+  );
   border: 1px solid var(--acp-flat-border, var(--vscode-panel-border));
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   padding: 4px;
@@ -1801,7 +1804,10 @@ kbd {
   z-index: 10;
   margin: 0;
   padding: 0;
-  background: var(--acp-flat-panel-background, var(--vscode-sideBar-background));
+  background: var(
+    --acp-flat-panel-background,
+    var(--vscode-sideBar-background)
+  );
   border-bottom: 1px solid var(--acp-flat-border, var(--vscode-panel-border));
   border-radius: 0;
 }
@@ -1973,7 +1979,8 @@ kbd {
   align-items: center;
   gap: 8px;
   transition: background 0.1s ease;
-  border-radius: 0 var(--acp-flat-radius, var(--border-radius-small)) var(--acp-flat-radius, var(--border-radius-small)) 0;
+  border-radius: 0 var(--acp-flat-radius, var(--border-radius-small))
+    var(--acp-flat-radius, var(--border-radius-small)) 0;
 }
 
 .agent-thought summary:hover {
@@ -2059,7 +2066,8 @@ kbd {
   font-family: var(--vscode-editor-font-family), monospace;
   font-size: var(--acp-font-size-xs);
   transition: background 0.1s ease;
-  border-radius: 0 var(--acp-flat-radius, var(--border-radius-small)) var(--acp-flat-radius, var(--border-radius-small)) 0;
+  border-radius: 0 var(--acp-flat-radius, var(--border-radius-small))
+    var(--acp-flat-radius, var(--border-radius-small)) 0;
   min-width: 0;
   /* Important for ellipsis in flexbox */
 }
@@ -2148,6 +2156,24 @@ kbd {
   border-left: 1px solid var(--vscode-panel-border);
 }
 
+.detail-hint {
+  margin: 4px 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--acp-font-size-xs);
+}
+
+.detail-metadata {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.tool-history {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  color: var(--vscode-descriptionForeground);
+}
+
 .block {
   margin-bottom: 0;
   /* Let child margins handle it */
@@ -2165,7 +2191,10 @@ kbd {
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   overflow: hidden;
   border: 1px solid var(--acp-flat-border, var(--vscode-panel-border));
-  background: var(--acp-flat-surface-background, var(--vscode-editor-background));
+  background: var(
+    --acp-flat-surface-background,
+    var(--vscode-editor-background)
+  );
   width: 100%;
 }
 
@@ -2285,7 +2314,10 @@ kbd {
 }
 
 .permission-dialog {
-  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
   border: 1px solid var(--vscode-widget-border, var(--acp-flat-border));
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   width: 90%;
@@ -2392,7 +2424,10 @@ kbd {
   margin: 8px 0;
   border: 1px solid var(--acp-flat-border, var(--vscode-panel-border));
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
-  background: var(--acp-flat-panel-background, var(--vscode-sideBar-background));
+  background: var(
+    --acp-flat-panel-background,
+    var(--vscode-sideBar-background)
+  );
   overflow: hidden;
 }
 
@@ -2511,7 +2546,10 @@ kbd {
 }
 
 .detail-input {
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
   padding: 8px;
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   margin: 4px 0;
@@ -2523,7 +2561,10 @@ kbd {
 
 /* 工具输出 */
 .tool-output {
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
   padding: 8px;
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   margin: 4px 0;
@@ -2750,15 +2791,6 @@ kbd {
   cursor: default;
 }
 
-.assistant-turn-highlight {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: 2px;
-  background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.16));
-  transition:
-    outline-color 0.2s ease,
-    background-color 0.2s ease;
-}
-
 /* Message Actions */
 .message.assistant {
   display: flex;
@@ -2818,7 +2850,10 @@ kbd {
 }
 
 .confirm-dialog {
-  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
   border: 1px solid var(--vscode-widget-border, var(--acp-flat-border));
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   width: 90%;

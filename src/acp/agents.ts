@@ -11,6 +11,8 @@ import { isCommandAvailable } from "../utils/bin-paths";
  * Configuration for an agent executable.
  * Represents the structure needed to launch an AI agent via CLI.
  */
+export type LiveToolOutputProfileId = "bundled-pi";
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -18,6 +20,7 @@ export interface AgentConfig {
   args: string[];
   env?: Record<string, string>;
   availabilityCommand?: string;
+  liveToolOutputProfile?: LiveToolOutputProfileId;
 }
 
 /**
