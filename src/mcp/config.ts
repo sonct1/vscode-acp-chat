@@ -162,7 +162,56 @@ function parseMcpServerConfig(
  *
  * @returns Array of normalized MCP server configurations ready for ACP protocol
  */
-export async function getMcpServerConfigs(): Promise<McpServerConfig[]> {
+type McpConfigSignature = {
+  path: string;
+  mtime: number | null;
+  size: number | null;
+};
+
+let cachedMcpServerConfigs:
+  | { signatures: McpConfigSignature[]; configs: McpServerConfig[] }
+  | null = null;
+
+async function getMcpJsonSignature(
+  uri: vscode.Uri
+): Promise<McpConfigSignature> {
+  try {
+    const stat = await vscode.workspace.fs.stat(uri);
+    return { path: uri.fsPath, mtime: stat.mtime, size: stat.size };
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" ||
+      (error as vscode.FileSystemError).code === "FileNotFound"
+    ) {
+      return { path: uri.fsPath, mtime: null, size: null };
+    }
+    console.warn(`[MCP] Failed to stat mcp.json from ${uri.fsPath}:`, error);
+    return { path: uri.fsPath, mtime: null, size: null };
+  }
+}
+
+function sameMcpConfigSignatures(
+  left: McpConfigSignature[],
+  right: McpConfigSignature[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (signature, index) =>
+        signature.path === right[index]?.path &&
+        signature.mtime === right[index]?.mtime &&
+        signature.size === right[index]?.size
+    )
+  );
+}
+
+export function clearMcpServerConfigCacheForTest(): void {
+  cachedMcpServerConfigs = null;
+}
+
+export async function getMcpServerConfigs(
+  opts: { forceRefresh?: boolean } = {}
+): Promise<McpServerConfig[]> {
   const configs: McpServerConfig[] = [];
   const inputs = new Map<string, string>();
 
@@ -172,15 +221,24 @@ export async function getMcpServerConfigs(): Promise<McpServerConfig[]> {
     : null;
   const userMcpPath = getUserMcpConfigPath();
 
-  const urisToCheck: Array<{ uri: vscode.Uri | null }> = [
-    {
-      uri: workspaceMcpPath ? vscode.Uri.file(workspaceMcpPath) : null,
-    },
-    { uri: vscode.Uri.file(userMcpPath) },
+  const urisToCheck: vscode.Uri[] = [
+    ...(workspaceMcpPath ? [vscode.Uri.file(workspaceMcpPath)] : []),
+    vscode.Uri.file(userMcpPath),
   ];
+  const signatures = await Promise.all(urisToCheck.map(getMcpJsonSignature));
 
-  for (const { uri } of urisToCheck) {
-    if (!uri) continue;
+  if (
+    !opts.forceRefresh &&
+    cachedMcpServerConfigs &&
+    sameMcpConfigSignatures(cachedMcpServerConfigs.signatures, signatures)
+  ) {
+    return cachedMcpServerConfigs.configs.slice();
+  }
+
+  for (let index = 0; index < urisToCheck.length; index += 1) {
+    const uri = urisToCheck[index];
+    const signature = signatures[index];
+    if (!uri || !signature || signature.mtime === null) continue;
 
     const rawConfig = await readMcpJsonFile(uri);
     if (!rawConfig) continue;
@@ -205,7 +263,8 @@ export async function getMcpServerConfigs(): Promise<McpServerConfig[]> {
     }
   }
 
-  return configs;
+  cachedMcpServerConfigs = { signatures, configs };
+  return configs.slice();
 }
 
 /**

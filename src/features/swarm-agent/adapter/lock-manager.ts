@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { SwarmEvidenceStore } from "./evidence-store";
 import type { SwarmMonitor } from "./monitor";
 
@@ -53,8 +55,12 @@ export class SwarmLockManager {
     return patterns.some((pattern) => normalized.includes(normalizeCommand(pattern)));
   }
 
-  pathLock(filePath: string): string {
-    return `workspace_write:${filePath}`;
+  pathLock(filePath: string, cwd = process.cwd()): string {
+    const absolute = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(cwd, filePath);
+    const normalized = canonicalizePath(absolute);
+    return `workspace_write:${process.platform === "win32" ? normalized.toLowerCase() : normalized}`;
   }
 
   private async release(lockId: string, stepId: string): Promise<void> {
@@ -85,4 +91,26 @@ export class SwarmLockManager {
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function canonicalizePath(filePath: string): string {
+  const normalized = path.normalize(filePath);
+  try {
+    return fs.realpathSync.native(normalized);
+  } catch {
+    const existingParent = findExistingParent(path.dirname(normalized));
+    if (!existingParent) return normalized;
+    const relative = path.relative(existingParent, normalized);
+    return path.join(fs.realpathSync.native(existingParent), relative);
+  }
+}
+
+function findExistingParent(directory: string): string | null {
+  let current = path.resolve(directory);
+  while (true) {
+    if (fs.existsSync(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }

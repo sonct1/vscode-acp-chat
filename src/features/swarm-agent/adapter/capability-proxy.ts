@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type {
   AgentContext,
   CreateTerminalRequest,
@@ -31,6 +32,8 @@ export interface CapabilityProxyContext {
 }
 
 export class SwarmCapabilityProxy {
+  private readonly ownedTerminalIds = new Set<string>();
+
   constructor(
     private readonly upstream: AgentContext,
     private readonly policy: SwarmCapabilityPolicy,
@@ -40,6 +43,7 @@ export class SwarmCapabilityProxy {
       lockManager?: SwarmLockManager;
       testLockPatterns?: string[];
       requireApprovalBeforeWrites?: boolean;
+      cwd?: string;
     } = {}
   ) {}
 
@@ -63,7 +67,7 @@ export class SwarmCapabilityProxy {
     const lockManager = this.options.lockManager;
     if (!lockManager) return action();
     return lockManager.withLocks(
-      [lockManager.pathLock(params.path)],
+      [lockManager.pathLock(params.path, this.options.cwd)],
       this.context.stepId,
       action
     );
@@ -72,18 +76,13 @@ export class SwarmCapabilityProxy {
   async createTerminal(
     params: CreateTerminalRequest
   ): Promise<CreateTerminalResponse> {
-    if (this.policy.terminal === false) {
-      throw this.deny(
-        "terminal",
-        `Role "${this.context.roleId}" cannot create terminals`
-      );
-    }
+    this.assertTerminalAllowed("create terminal");
 
     const commandText = commandLine(params);
     if (
       this.policy.terminal === "restricted" &&
       !this.policy.allowedTerminalCommands.some((pattern) =>
-        commandText.toLowerCase().includes(pattern.toLowerCase())
+        commandMatchesAllowedPattern(params, pattern)
       )
     ) {
       throw this.deny(
@@ -93,8 +92,14 @@ export class SwarmCapabilityProxy {
     }
 
     await this.maybeRequestTerminalApproval(params);
-    const action = () =>
-      this.upstream.request(methods.client.terminal.create, this.rewrite(params));
+    const action = async () => {
+      const response = await this.upstream.request(
+        methods.client.terminal.create,
+        this.rewrite(params)
+      );
+      this.ownedTerminalIds.add(response.terminalId);
+      return response;
+    };
     const lockManager = this.options.lockManager;
     const patterns = this.options.testLockPatterns ?? [];
     if (lockManager && this.policy.testLock && lockManager.isTestCommand(commandText, patterns)) {
@@ -106,23 +111,32 @@ export class SwarmCapabilityProxy {
   async terminalOutput(
     params: TerminalOutputRequest
   ): Promise<TerminalOutputResponse> {
+    this.assertOwnsTerminal(params.terminalId, "read terminal output");
     return this.upstream.request(methods.client.terminal.output, this.rewrite(params));
   }
 
   async waitForTerminalExit(
     params: WaitForTerminalExitRequest
   ): Promise<WaitForTerminalExitResponse> {
+    this.assertOwnsTerminal(params.terminalId, "wait for terminal");
     return this.upstream.request(methods.client.terminal.waitForExit, this.rewrite(params));
   }
 
   async killTerminal(params: KillTerminalRequest): Promise<KillTerminalResponse | void> {
+    this.assertOwnsTerminal(params.terminalId, "kill terminal");
     return this.upstream.request(methods.client.terminal.kill, this.rewrite(params));
   }
 
   async releaseTerminal(
     params: ReleaseTerminalRequest
   ): Promise<ReleaseTerminalResponse | void> {
-    return this.upstream.request(methods.client.terminal.release, this.rewrite(params));
+    this.assertOwnsTerminal(params.terminalId, "release terminal");
+    const response = await this.upstream.request(
+      methods.client.terminal.release,
+      this.rewrite(params)
+    );
+    this.ownedTerminalIds.delete(params.terminalId);
+    return response;
   }
 
   async requestPermission(
@@ -150,6 +164,25 @@ export class SwarmCapabilityProxy {
         workerSessionId: params.sessionId,
       },
     };
+  }
+
+  private assertTerminalAllowed(action: string): void {
+    if (this.policy.terminal === false) {
+      throw this.deny(
+        "terminal",
+        `Role "${this.context.roleId}" cannot ${action}`
+      );
+    }
+  }
+
+  private assertOwnsTerminal(terminalId: string, action: string): void {
+    this.assertTerminalAllowed(action);
+    if (!this.ownedTerminalIds.has(terminalId)) {
+      throw this.deny(
+        "terminal",
+        `Role "${this.context.roleId}" cannot ${action} ${terminalId}`
+      );
+    }
   }
 
   private async maybeRequestWriteApproval(params: WriteTextFileRequest): Promise<void> {
@@ -209,4 +242,22 @@ export class SwarmCapabilityProxy {
 
 function commandLine(params: CreateTerminalRequest): string {
   return [params.command, ...(params.args ?? [])].join(" ").trim();
+}
+
+function commandMatchesAllowedPattern(
+  params: CreateTerminalRequest,
+  pattern: string
+): boolean {
+  const expected = splitCommandPattern(pattern);
+  const actual = splitCommandPattern(commandLine(params));
+  if (!expected || !actual || actual.length < expected.length) return false;
+  const normalizedActual = [path.basename(actual[0]), ...actual.slice(1)];
+  return expected.every((token, index) => normalizedActual[index] === token);
+}
+
+function splitCommandPattern(pattern: string): string[] | null {
+  const trimmed = pattern.trim();
+  if (!trimmed || /[;&|`$<>\\\n\r]/.test(trimmed)) return null;
+  const tokens = trimmed.split(/\s+/);
+  return tokens.length > 0 ? tokens : null;
 }

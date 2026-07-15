@@ -92,7 +92,11 @@ suite("features/swarm-agent adapter", () => {
     await assert.rejects(() =>
       readOnly.writeTextFile({ sessionId: "worker", path: "/tmp/a", content: "x" })
     );
+    await assert.rejects(() =>
+      readOnly.terminalOutput({ sessionId: "worker", terminalId: "term-1" })
+    );
     assert.strictEqual(evidence.getViolations()[0].capability, "write");
+    assert.strictEqual(evidence.getViolations()[1].capability, "terminal");
 
     const writeCapable = new SwarmCapabilityProxy(
       upstream,
@@ -133,6 +137,38 @@ suite("features/swarm-agent adapter", () => {
     assert.deepStrictEqual(events, ["a-start", "a-end", "b-start", "b-end"]);
   });
 
+  test("capability proxy requires terminal command prefixes for restricted roles", async () => {
+    const evidence = new SwarmEvidenceStore();
+    const upstream = {
+      request: async (_method: string, _params: CreateTerminalRequest) => ({ terminalId: "t1" }),
+    } as unknown as AgentContext;
+    const proxy = new SwarmCapabilityProxy(
+      upstream,
+      {
+        read: true,
+        write: false,
+        terminal: "restricted",
+        allowFileDelete: false,
+        testLock: true,
+        allowedTerminalCommands: ["npm test"],
+        requireApprovalBeforeWrite: false,
+        requireApprovalBeforeTerminal: false,
+      },
+      context(),
+      { evidence }
+    );
+
+    await proxy.createTerminal({ sessionId: "worker", command: "npm", args: ["test"] });
+    await assert.rejects(() =>
+      proxy.createTerminal({
+        sessionId: "worker",
+        command: "sh",
+        args: ["-c", "echo npm test && rm -rf /tmp/nope"],
+      })
+    );
+    assert.strictEqual(evidence.getViolations()[0].capability, "terminal");
+  });
+
   test("capability proxy acquires test lock for configured terminal command patterns", async () => {
     const evidence = new SwarmEvidenceStore();
     const lockManager = new SwarmLockManager(undefined, evidence);
@@ -155,11 +191,16 @@ suite("features/swarm-agent adapter", () => {
       { lockManager, evidence, testLockPatterns: ["npm test"] }
     );
 
-    await proxy.createTerminal({ sessionId: "worker", command: "npm", args: ["test"] });
+    const terminal = await proxy.createTerminal({ sessionId: "worker", command: "npm", args: ["test"] });
+    await proxy.terminalOutput({ sessionId: "worker", terminalId: terminal.terminalId });
+    await assert.rejects(() =>
+      proxy.terminalOutput({ sessionId: "worker", terminalId: "other-terminal" })
+    );
     assert.deepStrictEqual(
       evidence.getLockEvents().map((event) => event.event),
       ["acquire", "release"]
     );
+    assert.strictEqual(evidence.getViolations()[0].capability, "terminal");
   });
 
   test("prompt renderer injects dependency outputs without root answer prefill", () => {

@@ -1,13 +1,125 @@
 import * as assert from "assert";
 import * as path from "path";
 import * as os from "os";
+import * as vscode from "vscode";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
 import {
+  clearMcpServerConfigCacheForTest,
+  getMcpServerConfigs,
   type McpServerConfig,
   type RawMcpServerConfig,
   type RawMcpConfig,
-} from "../../mcp/types";
+} from "../../mcp";
 
 suite("MCP Config", () => {
+  suite("getMcpServerConfigs cache", () => {
+    let originalWorkspaceFolders:
+      | readonly vscode.WorkspaceFolder[]
+      | undefined;
+    setup(() => {
+      clearMcpServerConfigCacheForTest();
+      originalWorkspaceFolders = vscode.workspace.workspaceFolders;
+    });
+
+    teardown(() => {
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: originalWorkspaceFolders,
+        configurable: true,
+      });
+      clearMcpServerConfigCacheForTest();
+    });
+
+    test("reuses parsed config until path signature changes", async () => {
+      const workspaceRoot = mkdtempSync(
+        path.join(os.tmpdir(), "vscode-acp-mcp-cache-")
+      );
+      const workspaceMcpPath = path.join(workspaceRoot, ".vscode", "mcp.json");
+      mkdirSync(path.dirname(workspaceMcpPath), { recursive: true });
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: [
+          {
+            uri: vscode.Uri.file(workspaceRoot),
+            name: "cache-test",
+            index: 0,
+          },
+        ],
+        configurable: true,
+      });
+
+      const firstMtime = new Date("2026-01-01T00:00:00.000Z");
+      const secondMtime = new Date("2026-01-02T00:00:00.000Z");
+      writeFileSync(
+        workspaceMcpPath,
+        JSON.stringify({ servers: { one: { command: "node" } } }),
+        "utf8"
+      );
+      utimesSync(workspaceMcpPath, firstMtime, firstMtime);
+
+      try {
+        const first = await getMcpServerConfigs();
+        const second = await getMcpServerConfigs();
+        assert.strictEqual(first[0]?.name, "one");
+        assert.strictEqual(second[0]?.name, "one");
+
+        writeFileSync(
+          workspaceMcpPath,
+          JSON.stringify({ servers: { two: { command: "node" } } }),
+          "utf8"
+        );
+        utimesSync(workspaceMcpPath, firstMtime, firstMtime);
+        assert.strictEqual((await getMcpServerConfigs())[0]?.name, "one");
+
+        utimesSync(workspaceMcpPath, secondMtime, secondMtime);
+        const refreshed = await getMcpServerConfigs();
+        assert.strictEqual(refreshed[0]?.name, "two");
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("force refresh bypasses unchanged signatures", async () => {
+      const workspaceRoot = mkdtempSync(
+        path.join(os.tmpdir(), "vscode-acp-mcp-force-")
+      );
+      const workspaceMcpPath = path.join(workspaceRoot, ".vscode", "mcp.json");
+      mkdirSync(path.dirname(workspaceMcpPath), { recursive: true });
+      Object.defineProperty(vscode.workspace, "workspaceFolders", {
+        value: [
+          {
+            uri: vscode.Uri.file(workspaceRoot),
+            name: "force-test",
+            index: 0,
+          },
+        ],
+        configurable: true,
+      });
+
+      const mtime = new Date("2026-01-01T00:00:00.000Z");
+      writeFileSync(
+        workspaceMcpPath,
+        JSON.stringify({ servers: { one: { command: "node" } } }),
+        "utf8"
+      );
+      utimesSync(workspaceMcpPath, mtime, mtime);
+
+      try {
+        assert.strictEqual((await getMcpServerConfigs())[0]?.name, "one");
+        writeFileSync(
+          workspaceMcpPath,
+          JSON.stringify({ servers: { two: { command: "node" } } }),
+          "utf8"
+        );
+        utimesSync(workspaceMcpPath, mtime, mtime);
+        assert.strictEqual(
+          (await getMcpServerConfigs({ forceRefresh: true }))[0]?.name,
+          "two"
+        );
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
   suite("getUserMcpConfigPath", () => {
     test("should return correct path on Linux", () => {
       const originalPlatform = process.platform;

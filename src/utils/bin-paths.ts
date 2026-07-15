@@ -12,6 +12,12 @@ import * as fs from "fs";
  * 3. Common fallback paths based on OS (pnpm, npm-global, ~/.local/bin, /usr/local/bin)
  */
 let cachedGlobalBinPaths: string[] | null = null;
+const commandAvailabilityCache = new Map<string, boolean>();
+
+export function clearBinPathCaches(): void {
+  cachedGlobalBinPaths = null;
+  commandAvailabilityCache.clear();
+}
 
 /**
  * Computes and caches global bin directory paths by querying pnpm/npm configs
@@ -86,7 +92,22 @@ export function getGlobalBinPaths(): string[] {
  * Special handling for npx (can install on demand) and absolute paths.
  * @param command - The command name or absolute path to check.
  */
-export function isCommandAvailable(command: string): boolean {
+export function isCommandAvailable(
+  command: string,
+  opts: { forceRefresh?: boolean } = {}
+): boolean {
+  const cacheKey = `${process.platform}\0${command}`;
+  if (!opts.forceRefresh) {
+    const cached = commandAvailabilityCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+
+  const available = probeCommandAvailable(command);
+  commandAvailabilityCache.set(cacheKey, available);
+  return available;
+}
+
+function probeCommandAvailable(command: string): boolean {
   // npx can install packages on demand, assume available if node/npm is installed
   if (command === "npx") {
     try {
@@ -127,7 +148,6 @@ export function isCommandAvailable(command: string): boolean {
         isWindows ? `${command}.cmd` : command
       );
       if (fs.existsSync(fullPath)) return true;
-
       // On Windows, also check .exe and .bat extensions
       if (isWindows) {
         if (

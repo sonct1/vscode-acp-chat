@@ -57,6 +57,7 @@ import {
   type Mention,
 } from "../utils/mention-serializer";
 import {
+  clearMcpServerConfigCacheForTest,
   getMcpServerConfigs,
   toMcpServerStdio,
   toMcpServerHttp,
@@ -257,6 +258,10 @@ type PermissionCallback = (
 
 const MCP_SERVER_NAME_INVALID_CHARS = /[^a-zA-Z0-9_-]+/g;
 
+export function clearAcpClientCachesForTest(): void {
+  clearMcpServerConfigCacheForTest();
+}
+
 function sanitizeMcpServerName(name: string): string {
   // VS Code MCP configs can use display-style names such as
   // `io.github.ChromeDevTools/chrome-devtools-mcp`. Some ACP agents reuse the
@@ -398,12 +403,12 @@ export class ACPClient {
     return () => this.permissionRequestListeners.delete(callback);
   }
 
-  async reloadMcpServers(): Promise<void> {
+  async reloadMcpServers(opts: { forceRefresh?: boolean } = {}): Promise<void> {
     const passMcpServers = vscode.workspace
       .getConfiguration("vscode-acp-chat")
       .get<boolean>("passMcpServers", true);
     if (passMcpServers) {
-      this.mcpServerConfigs = await getMcpServerConfigs();
+      this.mcpServerConfigs = await getMcpServerConfigs(opts);
     } else {
       this.mcpServerConfigs = [];
     }

@@ -9,7 +9,7 @@ import {
   isSwarmAgentEnabled,
 } from "../features/swarm-agent";
 import { validateAgents, showValidationWarnings } from "./agent-validator";
-import { isCommandAvailable } from "../utils/bin-paths";
+import { clearBinPathCaches, isCommandAvailable } from "../utils/bin-paths";
 
 /**
  * Configuration for an agent executable.
@@ -143,6 +143,7 @@ export function getBuiltinAgentConfigsForTest(): AgentConfig[] {
 
 export function clearAgentsCacheForTest(): void {
   cachedAgentsWithStatus = null;
+  clearBinPathCaches();
 }
 
 /**
@@ -191,6 +192,9 @@ let cachedAgentsWithStatus: AgentWithStatus[] | null = null;
 export function getAgentsWithStatus(forceRefresh = false): AgentWithStatus[] {
   if (cachedAgentsWithStatus && !forceRefresh) {
     return cachedAgentsWithStatus;
+  }
+  if (forceRefresh) {
+    clearBinPathCaches();
   }
 
   const mergedAgents = getMergedAgents();

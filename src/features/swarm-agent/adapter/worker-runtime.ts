@@ -53,6 +53,8 @@ export class SwarmWorkerRuntime {
   private connection: ClientConnection | null = null;
   private agentContext: import("@agentclientprotocol/sdk").ClientContext | null = null;
   private workerSessionId: string | null = null;
+  private capabilityProxy: SwarmCapabilityProxy | null = null;
+  private capabilityProxySessionId: string | null = null;
   private output = "";
 
   constructor(private readonly options: SwarmWorkerRuntimeOptions) {
@@ -105,6 +107,8 @@ export class SwarmWorkerRuntime {
     this.connection?.close();
     this.connection = null;
     this.agentContext = null;
+    this.capabilityProxy = null;
+    this.capabilityProxySessionId = null;
     this.child?.kill();
     this.child = null;
   }
@@ -115,7 +119,8 @@ export class SwarmWorkerRuntime {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: this.options.cwd,
       env: {
-        ...process.env,
+        ...baseWorkerEnv(),
+        ...decodeAgentEnv(this.options.agent.envKey),
         ...this.options.agent.env,
         [pathEnvName]: process.env[pathEnvName] ?? "",
       },
@@ -207,7 +212,11 @@ export class SwarmWorkerRuntime {
   }
 
   private proxy(): SwarmCapabilityProxy {
-    return new SwarmCapabilityProxy(
+    if (this.capabilityProxy && this.capabilityProxySessionId === this.workerSessionId) {
+      return this.capabilityProxy;
+    }
+
+    this.capabilityProxy = new SwarmCapabilityProxy(
       this.options.upstream,
       this.options.role.capabilities,
       {
@@ -222,8 +231,37 @@ export class SwarmWorkerRuntime {
         lockManager: this.options.lockManager,
         testLockPatterns: this.options.testLockPatterns,
         requireApprovalBeforeWrites: this.options.requireApprovalBeforeWrites,
+        cwd: this.options.cwd,
       }
     );
+    this.capabilityProxySessionId = this.workerSessionId;
+    return this.capabilityProxy;
+  }
+}
+
+function baseWorkerEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("VSCODE_ACP_CHAT_SWARM_AGENT_ENV_")) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
+function decodeAgentEnv(envKey: string | undefined): Record<string, string> {
+  if (!envKey) return {};
+  const encoded = process.env[envKey];
+  if (!encoded) return {};
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string") env[key] = value;
+    }
+    return env;
+  } catch {
+    return {};
   }
 }
 

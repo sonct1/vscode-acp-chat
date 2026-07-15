@@ -31,31 +31,33 @@ export function createSwarmAgentConfig(
   options: CreateSwarmAgentConfigOptions = {}
 ): AgentConfig {
   const runtimeConfigPath = getSwarmRuntimeConfigPath(getWorkspaceRoot());
-
-  return {
+  const baseEnv = {
+    ELECTRON_RUN_AS_NODE: "1",
+    VSCODE_ACP_CHAT_SWARM_CONFIG_PATH: runtimeConfigPath,
+  };
+  const agentConfig: AgentConfig = {
     id: SWARM_AGENT_ID,
     name: "Swarm (Experimental)",
     command: process.execPath,
     args: [getBundledSwarmAcpEntrypoint()],
-    env: {
-      ELECTRON_RUN_AS_NODE: "1",
-      VSCODE_ACP_CHAT_SWARM_CONFIG_PATH: runtimeConfigPath,
-    },
+    env: baseEnv,
     liveToolOutputProfile: "bundled-swarm",
     prepare: async () => {
-      await materializeSwarmRuntimeConfig({
+      const prepared = await materializeSwarmRuntimeConfig({
         runtimeConfigPath,
         agents: options.getAvailableAgents?.() ?? [],
       });
+      agentConfig.env = { ...baseEnv, ...prepared.env };
     },
   };
+  return agentConfig;
 }
 
 export async function materializeSwarmRuntimeConfig(options: {
   runtimeConfigPath?: string;
   agents: AgentConfig[];
   workspaceRoot?: string;
-}): Promise<string> {
+}): Promise<{ runtimeConfigPath: string; env: Record<string, string> }> {
   const workspaceRoot = options.workspaceRoot ?? getWorkspaceRoot();
   const config = vscode.workspace.getConfiguration("vscode-acp-chat");
   const configDirectorySetting = config.get<string>(
@@ -68,6 +70,7 @@ export async function materializeSwarmRuntimeConfig(options: {
   const runtimeConfigPath =
     options.runtimeConfigPath ?? getSwarmRuntimeConfigPath(workspaceRoot);
 
+  const envBridge: Record<string, string> = {};
   const runtimeConfig = await createSwarmRuntimeConfig({
     workspaceRoot,
     configDirectory,
@@ -89,22 +92,34 @@ export async function materializeSwarmRuntimeConfig(options: {
     ),
     agents: options.agents
       .filter((agent) => agent.id !== SWARM_AGENT_ID)
-      .map(toRuntimeAgentConfig),
+      .map((agent) => toRuntimeAgentConfig(agent, envBridge)),
   });
 
   await writeSwarmRuntimeConfig(runtimeConfigPath, runtimeConfig);
-  return runtimeConfigPath;
+  return { runtimeConfigPath, env: envBridge };
 }
 
-function toRuntimeAgentConfig(agent: AgentConfig): SwarmRuntimeAgentConfig {
-  return {
+function toRuntimeAgentConfig(
+  agent: AgentConfig,
+  envBridge: Record<string, string>
+): SwarmRuntimeAgentConfig {
+  const runtime: SwarmRuntimeAgentConfig = {
     id: agent.id,
     name: agent.name,
     command: agent.command,
     args: [...agent.args],
-    env: agent.env ? { ...agent.env } : undefined,
     availabilityCommand: agent.availabilityCommand,
   };
+
+  if (agent.env && Object.keys(agent.env).length > 0) {
+    const envKey = `VSCODE_ACP_CHAT_SWARM_AGENT_ENV_${crypto.randomUUID().replace(/-/g, "")}`;
+    envBridge[envKey] = Buffer.from(JSON.stringify(agent.env), "utf8").toString(
+      "base64"
+    );
+    runtime.envKey = envKey;
+  }
+
+  return runtime;
 }
 
 function getSwarmRuntimeConfigPath(workspaceRoot: string): string {

@@ -121,8 +121,18 @@ export async function writeSwarmRuntimeConfig(
   filePath: string,
   config: SwarmRuntimeConfig
 ): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  await fs.writeFile(tempPath, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.rename(tempPath, filePath);
+  await fs.chmod(filePath, 0o600);
 }
 
 async function readOptionalJson(

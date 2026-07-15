@@ -184,13 +184,15 @@ suite("features/swarm-agent", () => {
         maxWorkers: 4,
         requireApprovalBeforeWrites: true,
         testLockPatterns: ["npm test"],
-        agents: [{ id: "pi", name: "Pi", command: "pi", args: [] }],
+        agents: [{ id: "pi", name: "Pi", command: "pi", args: [], envKey: "ENV_KEY" }],
       });
 
       assert.strictEqual(runtime.defaultWorkflow, "review-only");
       assert.ok(runtime.roles.peer);
       assert.ok(runtime.workflows["review-only"]);
       assert.deepStrictEqual(runtime.locks.named, ["database"]);
+      assert.strictEqual(runtime.agents[0].env, undefined);
+      assert.strictEqual(runtime.agents[0].envKey, "ENV_KEY");
 
       const file = path.join(dir, "runtime.json");
       await fs.writeFile(file, JSON.stringify(runtime));

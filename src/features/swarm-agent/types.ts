@@ -35,6 +35,7 @@ export interface SwarmRuntimeAgentConfig {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  envKey?: string;
   availabilityCommand?: string;
 }
 
@@ -160,6 +161,7 @@ const runtimeAgentSchema = z
     command: nonEmptyString,
     args: z.array(z.string()),
     env: z.record(z.string()).optional(),
+    envKey: z.string().optional(),
     availabilityCommand: z.string().optional(),
   })
   .strict();
