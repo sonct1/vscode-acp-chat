@@ -666,21 +666,29 @@ Không có quyết định người dùng đang chặn plan ban đầu. Khuyến
 - Baseline metrics: chưa có baseline wall-clock/manual trace chuẩn hóa; các thay đổi dùng deterministic counters/tests (`discoveryScans`, notification count, first-send race assertions) thay vì đo thời gian.
 - Tác vụ đã triển khai:
   - Giai đoạn 1 một phần: New Chat activate draft ngay, background runtime startup dùng `ensureRuntime(session, false)`, first send reuse `runtimeStartPromise` và tạo đúng một ACP session; restore preferences skip no-op mode/model.
-  - Giai đoạn 2 một phần: Pi warm discovery snapshot có TTL fast path với counters `discoveryScans=0`, không walk/stat/parse trên warm hit; force refresh vẫn full discovery.
+  - Tác vụ 5: command availability cache tránh lặp sync shell probes trong lifecycle hiện tại, force refresh clear cache; MCP config cache dùng path/mtime/size signature và hỗ trợ force refresh.
+  - Giai đoạn 2: Pi warm discovery snapshot có TTL fast path với counters `discoveryScans=0`, không walk/stat/parse trên warm hit; force refresh vẫn full discovery; persisted direct session mapping lưu và validate `size/mtime` trước khi load.
   - Giai đoạn 3 một phần: Pi replay coalesce adjacent user/assistant text fragments, giữ tool result boundaries/final state; debug replay log có active `historyLoadMode`.
   - Giai đoạn 4 một phần: session switch loading overlay revision-safe, target/rendered state tách riêng, stale snapshots ignored, composer/transcript interaction locked during accepted cold replay.
-  - Giai đoạn 5 một phần: regression tests added/updated for the implemented behavior and feature/layout docs updated.
+  - Giai đoạn 5 một phần: regression tests added/updated for implemented behavior, feature/layout docs updated, production bundle packaged and installed locally.
 - Tác vụ bỏ qua/defer và lý do:
   - Tác vụ 1 instrumentation tổng quát: defer; hiện chỉ có Pi debug counters/logs, chưa có correlation ID/host queue/webview timing đầy đủ.
-  - Tác vụ 5 command/MCP cache hot path: defer; unrelated Swarm worktree changes đang làm root typecheck đỏ, tránh mở rộng phạm vi.
-  - Tác vụ 7 size/mtime validation cho persisted load mapping: phần direct mapping đã có từ fast-history work, nhưng size/mtime store validation chưa bổ sung trong pass này.
   - Tác vụ 9 bounded replay/backpressure: defer vì cần cancellation/dispose contract rõ hơn.
   - Tác vụ 11 DOM surface cache: defer; chưa triển khai cache rendered DOM/LRU, chỉ thêm overlay an toàn cho cold replay.
   - Tác vụ 13 full E2E fixtures/manual traces: defer ngoài các focused tests đã thêm.
 - Lệnh xác minh và kết quả:
-  - `npx tsc --noEmit --pretty false --noErrorTruncation` — chỉ còn lỗi ngoài phạm vi ở `src/features/swarm-agent/host.ts` (`"bundled-swarm"` không thuộc union `LiveToolOutputProfileId`).
-  - `npm run typecheck:antigravity-adapter` — pass.
-  - `(cd src/features/pi-agent/vendor/pi-acp && npm test -- --test-name-pattern 'Pi session index|replayPiMessages')` — pass, 149 tests.
-  - `npx eslint src/features/multi-session/webview.ts src/views/webview/main.ts src/test/webview.test.ts` — pass.
+  - `npm run check-types` — pass.
+  - `npm run compile-tests` — pass.
+  - `npx eslint src/utils/bin-paths.ts src/acp/agents.ts src/acp/client.ts src/mcp/config.ts src/mcp/index.ts src/features/multi-session/webview.ts src/views/webview/main.ts src/test/bin-paths.test.ts src/test/mcp/config.test.ts src/test/webview.test.ts` — pass.
+  - `npx vscode-test --run out/test/bin-paths.test.js out/test/mcp/config.test.js` — pass, 22 tests.
+  - `npx vscode-test --run out/test/webview.test.js --grep "stale session switch|composer interactions|snapshot state keeps|loading indicator"` — pass, 4 tests.
+  - `npx vscode-test --run out/test/features/assistant-turn-navigation.test.js --grep "tool-only|buttons navigate|skips completed"` — pass, 4 tests.
+  - `npx vscode-test --run out/test/features/chat-auto-scroll.test.js --grep "message-list uses configurable bottom threshold|jump button"` — pass, 3 tests.
+  - `npm --prefix src/features/pi-agent/vendor/pi-acp run typecheck` — pass.
+  - `npm --prefix src/features/pi-agent/vendor/pi-acp test -- --test-name-pattern 'Pi session index|PiAcpAgent:.*mapping|replayPiMessages'` — pass, 150 tests.
   - `git diff --check` — pass.
-- Kết quả VSIX package/install: chưa chạy được vì `npm run check-types`, `npm run compile-tests`, `npm run package` đều bị chặn bởi lỗi typecheck ngoài phạm vi ở uncommitted `src/features/swarm-agent/host.ts`. Cần sửa/hoàn tất Swarm type trước khi package và `code --install-extension`.
+  - `npm run package` — pass.
+- Kết quả VSIX package/install:
+  - `npx vsce package --out /tmp/vscode-acp-chat-performance.vsix` — pass, created VSIX.
+  - `code --install-extension /tmp/vscode-acp-chat-performance.vsix --force` — pass, extension installed.
+  - `rm -f /tmp/vscode-acp-chat-performance.vsix` — pass, temporary VSIX removed.
