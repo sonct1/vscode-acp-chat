@@ -12,7 +12,7 @@ export const CHAT_AUTO_SCROLL_STYLES = `
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--vscode-button-border, var(--acp-flat-border));
+  border: 1px solid var(--acp-flat-border, var(--vscode-widget-border, transparent));
   border-radius: 999px;
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
@@ -27,8 +27,10 @@ export const CHAT_AUTO_SCROLL_STYLES = `
 }
 
 .chat-auto-scroll-jump-button:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: 2px;
+  outline: none;
+  border-color: var(--acp-flat-border, var(--vscode-widget-border, transparent));
+  box-shadow: 0 0 0 1px var(--acp-flat-border, var(--vscode-widget-border, transparent)), 0 2px 8px rgba(0, 0, 0, 0.22);
+  opacity: 1;
 }
 
 .chat-auto-scroll-jump-button[hidden] {

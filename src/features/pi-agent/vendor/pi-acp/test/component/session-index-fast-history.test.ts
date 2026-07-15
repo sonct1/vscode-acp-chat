@@ -7,6 +7,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync
 } from 'node:fs'
@@ -60,7 +61,7 @@ function writeSessionFile(
   writeFileSync(path, lines.map(line => JSON.stringify(line)).join('\n') + '\n', 'utf8')
 }
 
-function readSessionMap(): Record<string, { cwd: string; sessionFile: string }> {
+function readSessionMap(): Record<string, { cwd: string; sessionFile: string; fileSize?: number | null; fileMtimeMs?: number | null }> {
   const path = getPiAcpSessionMapPath()
   if (!existsSync(path)) return {}
   return JSON.parse(readFileSync(path, 'utf8')).sessions
@@ -278,7 +279,62 @@ test('PiAcpAgent: stale stored mapping falls back to scan and repairs mapping', 
     try {
       const agent = new PiAcpAgent(asAgentConn(new FakeAgentSideConnection()))
       await agent.loadSession({ sessionId: 's1', cwd: '/tmp/project', mcpServers: [] } as any)
-      assert.equal(readSessionMap().s1?.sessionFile, file)
+      const repaired = readSessionMap().s1
+      const fileStat = statSync(file)
+      assert.equal(repaired?.sessionFile, file)
+      assert.equal(repaired?.fileSize, fileStat.size)
+      assert.equal(repaired?.fileMtimeMs, fileStat.mtimeMs)
+    } finally {
+      PiRpcProcess.spawn = originalSpawn
+    }
+  })
+})
+
+test('PiAcpAgent: stale size/mtime mapping is ignored and repaired before load', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-stale-signature-map-'))
+  const file = join(root, 'sessions', 'p', 's1.jsonl')
+  writeSessionFile(file, { id: 's1' })
+
+  await withPiAgentDir(root, async () => {
+    const mapPath = getPiAcpSessionMapPath()
+    mkdirSync(join(mapPath, '..'), { recursive: true })
+    writeFileSync(
+      mapPath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          s1: {
+            sessionId: 's1',
+            cwd: '/tmp/project',
+            sessionFile: file,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            fileSize: 1,
+            fileMtimeMs: 1
+          }
+        }
+      }) + '\n',
+      'utf8'
+    )
+
+    const originalSpawn = PiRpcProcess.spawn
+    ;(PiRpcProcess as any).spawn = async (params: any) => {
+      assert.equal(params.sessionPath, file)
+      return {
+        onEvent: () => () => {},
+        getMessages: async () => ({ messages: [] }),
+        getAvailableModels: async () => ({ models: [] }),
+        getState: async () => ({ thinkingLevel: 'medium' })
+      } as any
+    }
+
+    try {
+      const agent = new PiAcpAgent(asAgentConn(new FakeAgentSideConnection()))
+      await agent.loadSession({ sessionId: 's1', cwd: '/tmp/project', mcpServers: [] } as any)
+      const repaired = readSessionMap().s1
+      const fileStat = statSync(file)
+      assert.equal(repaired?.sessionFile, file)
+      assert.equal(repaired?.fileSize, fileStat.size)
+      assert.equal(repaired?.fileMtimeMs, fileStat.mtimeMs)
     } finally {
       PiRpcProcess.spawn = originalSpawn
     }

@@ -2,9 +2,9 @@
 
 | Thuộc tính | Giá trị |
 | ---------- | ------- |
-| Trạng thái | Bản nháp |
+| Trạng thái | Đã triển khai một phần |
 | Chủ sở hữu | Engineering |
-| Giai đoạn | Lập kế hoạch triển khai |
+| Giai đoạn | Rollout từng phần |
 | Phạm vi | Độ trễ cảm nhận của **New Chat**, đường nóng khởi động ACP runtime, bundled Pi history discovery/load, render snapshot multi-session, đo đạc hiệu năng, kiểm thử |
 | Phụ thuộc | [Fast Chat History Loading](./implement-fast-chat-history-loading.md), [Eager Multi-Session Runtime Loading](./implement-eager-multi-session-runtime.md) |
 | Liên quan | [Multi-Session Chat Surface DOM Cache](./implement-multi-session-dom-surface-cache.md), [Session Switch Loading](./implement-session-switch-loading.md), [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md) |
@@ -663,10 +663,24 @@ Không có quyết định người dùng đang chặn plan ban đầu. Khuyến
 
 ## Ghi chú hoàn tất
 
-Điền khi triển khai:
-
-- Baseline metrics:
+- Baseline metrics: chưa có baseline wall-clock/manual trace chuẩn hóa; các thay đổi dùng deterministic counters/tests (`discoveryScans`, notification count, first-send race assertions) thay vì đo thời gian.
 - Tác vụ đã triển khai:
+  - Giai đoạn 1 một phần: New Chat activate draft ngay, background runtime startup dùng `ensureRuntime(session, false)`, first send reuse `runtimeStartPromise` và tạo đúng một ACP session; restore preferences skip no-op mode/model.
+  - Giai đoạn 2 một phần: Pi warm discovery snapshot có TTL fast path với counters `discoveryScans=0`, không walk/stat/parse trên warm hit; force refresh vẫn full discovery.
+  - Giai đoạn 3 một phần: Pi replay coalesce adjacent user/assistant text fragments, giữ tool result boundaries/final state; debug replay log có active `historyLoadMode`.
+  - Giai đoạn 4 một phần: session switch loading overlay revision-safe, target/rendered state tách riêng, stale snapshots ignored, composer/transcript interaction locked during accepted cold replay.
+  - Giai đoạn 5 một phần: regression tests added/updated for the implemented behavior and feature/layout docs updated.
 - Tác vụ bỏ qua/defer và lý do:
+  - Tác vụ 1 instrumentation tổng quát: defer; hiện chỉ có Pi debug counters/logs, chưa có correlation ID/host queue/webview timing đầy đủ.
+  - Tác vụ 5 command/MCP cache hot path: defer; unrelated Swarm worktree changes đang làm root typecheck đỏ, tránh mở rộng phạm vi.
+  - Tác vụ 7 size/mtime validation cho persisted load mapping: phần direct mapping đã có từ fast-history work, nhưng size/mtime store validation chưa bổ sung trong pass này.
+  - Tác vụ 9 bounded replay/backpressure: defer vì cần cancellation/dispose contract rõ hơn.
+  - Tác vụ 11 DOM surface cache: defer; chưa triển khai cache rendered DOM/LRU, chỉ thêm overlay an toàn cho cold replay.
+  - Tác vụ 13 full E2E fixtures/manual traces: defer ngoài các focused tests đã thêm.
 - Lệnh xác minh và kết quả:
-- Kết quả VSIX package/install:
+  - `npx tsc --noEmit --pretty false --noErrorTruncation` — chỉ còn lỗi ngoài phạm vi ở `src/features/swarm-agent/host.ts` (`"bundled-swarm"` không thuộc union `LiveToolOutputProfileId`).
+  - `npm run typecheck:antigravity-adapter` — pass.
+  - `(cd src/features/pi-agent/vendor/pi-acp && npm test -- --test-name-pattern 'Pi session index|replayPiMessages')` — pass, 149 tests.
+  - `npx eslint src/features/multi-session/webview.ts src/views/webview/main.ts src/test/webview.test.ts` — pass.
+  - `git diff --check` — pass.
+- Kết quả VSIX package/install: chưa chạy được vì `npm run check-types`, `npm run compile-tests`, `npm run package` đều bị chặn bởi lỗi typecheck ngoài phạm vi ở uncommitted `src/features/swarm-agent/host.ts`. Cần sửa/hoàn tất Swarm type trước khi package và `code --install-extension`.

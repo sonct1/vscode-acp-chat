@@ -4462,6 +4462,140 @@ suite("Webview", () => {
       assert.strictEqual(loading.hidden, false);
       assert.ok(loading.textContent?.includes("Loading chat history"));
     });
+
+    test("ignores stale session switch snapshots and keeps latest transition locked", async () => {
+      const localMessages: unknown[] = [];
+      const dispatched: string[] = [];
+      const locks: boolean[] = [];
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: (message: unknown) => localMessages.push(message),
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        document,
+        {
+          reset: () => {
+            dispatched.push("reset");
+          },
+          dispatch: (message: any) => {
+            dispatched.push(message.type);
+          },
+          setSurfaceInteractionLocked: (value) => {
+            locks.push(value);
+          },
+          setGenerating: () => {},
+          getInputHtml: () => "draft-a",
+          setInputHtml: () => {},
+          getScrollTop: () => 7,
+          setScrollTop: () => {},
+          scrollToBottom: () => {},
+          getWebviewState: () => undefined,
+          saveWebviewState: () => {},
+        }
+      );
+
+      feature.handleMessage({
+        type: "feature.multi-session.chatState",
+        enabled: true,
+        activeLocalSessionId: "local-b",
+        activationRevision: 2,
+        active: {
+          localSessionId: "local-b",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "B",
+          status: "running",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        aggregate: { open: 2, running: 1, awaitingPermission: 0 },
+      } as any);
+      feature.handleMessage({
+        type: "feature.multi-session.chatState",
+        enabled: true,
+        activeLocalSessionId: "local-c",
+        activationRevision: 3,
+        active: {
+          localSessionId: "local-c",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "C",
+          status: "running",
+          createdAt: 2,
+          updatedAt: 2,
+          pendingPermissionCount: 0,
+        },
+        aggregate: { open: 2, running: 1, awaitingPermission: 0 },
+      } as any);
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-b",
+        activationRevision: 2,
+        session: {
+          localSessionId: "local-b",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "B",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [{ seq: 1, createdAt: 1, message: { type: "streamStart" } }],
+        lastSeq: 1,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      assert.deepStrictEqual(dispatched, []);
+      assert.deepStrictEqual(locks, [true, true]);
+      assert.strictEqual(
+        localMessages.some(
+          (message: any) => message.type === "feature.multi-session.resync"
+        ),
+        false
+      );
+    });
+
+    test("locks and unlocks composer interactions during accepted snapshot replay", async () => {
+      const input = document.getElementById("input") as HTMLElement;
+      const inputContainer = document.getElementById(
+        "input-container"
+      ) as HTMLElement;
+      const messagesContainer = document.getElementById(
+        "messages-container"
+      ) as HTMLElement;
+
+      controller.setSessionTransitionLocked(true);
+      assert.strictEqual(input.getAttribute("contenteditable"), "false");
+      assert.strictEqual(input.getAttribute("aria-disabled"), "true");
+      assert.strictEqual(inputContainer.getAttribute("aria-busy"), "true");
+      assert.strictEqual(messagesContainer.getAttribute("aria-busy"), "true");
+      assert.strictEqual(
+        document.getElementById("send")?.hasAttribute("disabled"),
+        true
+      );
+      assert.strictEqual(
+        document.getElementById("attach-image")?.hasAttribute("disabled"),
+        true
+      );
+
+      controller.setSessionTransitionLocked(false);
+      assert.strictEqual(input.getAttribute("contenteditable"), "true");
+      assert.strictEqual(input.hasAttribute("aria-disabled"), false);
+      assert.strictEqual(inputContainer.getAttribute("aria-busy"), "false");
+      assert.strictEqual(messagesContainer.getAttribute("aria-busy"), "false");
+      assert.strictEqual(
+        document.getElementById("attach-image")?.hasAttribute("disabled"),
+        false
+      );
+    });
   });
 
   suite("initWebview", () => {

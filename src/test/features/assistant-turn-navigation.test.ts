@@ -303,6 +303,88 @@ suite("assistant-turn-navigation feature", () => {
     assert.strictEqual(getCounter(), "Assistant 1 / 2");
   });
 
+  test("anchors navigation from a focused trailing tool-only turn", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Question 1", "Answer 1");
+    addCompletedAssistantTurn("Question 2", "Answer 2");
+    addToolOnlyAssistantTurn("Question 3");
+    await settleNavigation();
+
+    const assistantMsgs = Array.from(
+      messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
+    );
+    assert.strictEqual(getCounter(), "Assistant 2 / 2");
+
+    assistantMsgs[2].focus();
+    getNavButton("previous").click();
+
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[1].querySelector(".block-text")
+    );
+    assert.strictEqual(getCounter(), "Assistant 2 / 2");
+  });
+
+  test("uses the visible tool-only turn as the button navigation anchor", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Question 1", "Answer 1");
+    addCompletedAssistantTurn("Question 2", "Answer 2");
+    addToolOnlyAssistantTurn("Question 3");
+    await settleNavigation();
+
+    const assistantMsgs = Array.from(
+      messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
+    );
+    const toolOnlyBlock = assistantMsgs[2].querySelector<HTMLElement>(
+      ".block-tool"
+    );
+    assert.ok(toolOnlyBlock, "expected trailing tool-only assistant turn");
+
+    Object.defineProperty(messagesEl, "getBoundingClientRect", {
+      configurable: true,
+      value: () =>
+        ({
+          top: 0,
+          height: 400,
+          bottom: 400,
+          left: 0,
+          right: 300,
+          width: 300,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    });
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => toolOnlyBlock,
+    });
+
+    getNavButton("previous").click();
+
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[1].querySelector(".block-text")
+    );
+    assert.strictEqual(getCounter(), "Assistant 2 / 2");
+
+    getNavButton("previous").click();
+
+    assert.strictEqual(
+      scrollTargets.at(-1),
+      assistantMsgs[0].querySelector(".block-text")
+    );
+    assert.strictEqual(getCounter(), "Assistant 1 / 2");
+  });
+
   test("updates the counter from manual scroll position", async () => {
     addCompletedAssistantTurn("Question 1", "Answer 1");
     addCompletedAssistantTurn("Question 2", "Answer 2");

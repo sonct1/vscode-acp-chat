@@ -2,7 +2,7 @@
 
 | Attribute  | Value                                                                                                                                                                                                                                                                     |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Draft                                                                                                                                                                                                                                                                     |
+| Status     | Phase 1-3 MVP implemented; Phase 4 monitor/bootstrap deferred                                                                                                                                                                                                              |
 | Owner      | TBD                                                                                                                                                                                                                                                                       |
 | Scope      | Built-in ACP agent catalog, bundled Swarm ACP adapter, configurable role/workflow infrastructure, dedicated worker sessions, monitor/state normalization, capability policy, locks, live progress UI, tests, packaging                                                     |
 | References | `src/acp/agents.ts`, `src/acp/client.ts`, `src/acp/session-output-pipeline.ts`, `src/acp/tool-output-presentation.ts`, `src/features/pi-agent/`, `src/features/antigravity-agent/`, `src/features/multi-session/`, `src/features/register-host.ts`, `esbuild.js` |
@@ -549,10 +549,10 @@ Recommended default: disabled, because multi-worker write/test behavior is exper
 
 #### Checkpoint: Infrastructure config foundation
 
-- [ ] `Swarm` can be listed as an agent when enabled.
-- [ ] Runtime config can be generated deterministically.
-- [ ] Arbitrary roles/workflows validate.
-- [ ] No fixed planner/implementer/reviewer/proof workflow exists in code.
+- [x] `Swarm` can be listed as an agent when enabled.
+- [x] Runtime config can be generated deterministically.
+- [x] Arbitrary roles/workflows validate.
+- [x] No fixed planner/implementer/reviewer/proof workflow exists in code.
 
 ### Phase 2: Bundled ACP adapter and generic workflow engine
 
@@ -724,10 +724,10 @@ Recommended default: disabled, because multi-worker write/test behavior is exper
 
 #### Checkpoint: Runnable infrastructure MVP
 
-- [ ] Selecting `Swarm` can start a Swarm ACP session.
-- [ ] Configured workflow with arbitrary role ids can run against fake workers.
-- [ ] Cancel disposes workers.
-- [ ] Capability policy is enforced by code, not only prompt.
+- [x] Selecting `Swarm` can start a Swarm ACP session.
+- [x] Configured workflow with arbitrary role ids can run against worker ACP agents.
+- [x] Cancel disposes workers.
+- [x] Capability policy is enforced by code, not only prompt.
 
 ### Phase 3: Locks, prompt rendering and evidence
 
@@ -843,10 +843,10 @@ Recommended default: disabled, because multi-worker write/test behavior is exper
 
 #### Checkpoint: Generic configurable Swarm
 
-- [ ] Arbitrary workflow can run multiple configured roles.
-- [ ] Role/step policies and locks are enforced.
-- [ ] Outputs/evidence flow between steps.
-- [ ] No built-in assumption about planner/implementer/reviewer/proof exists.
+- [x] Arbitrary workflow can run multiple configured roles.
+- [x] Role/step policies and locks are enforced.
+- [x] Outputs/evidence flow between steps.
+- [x] No built-in assumption about planner/implementer/reviewer/proof exists.
 
 ### Phase 4: Optional UX and examples
 
@@ -987,13 +987,20 @@ Needs coordination:
 
 ## Definition of done
 
-- [ ] `Swarm` is selectable as a built-in agent when enabled.
-- [ ] User can define arbitrary role configs; role ids are not hard-coded.
-- [ ] User can define arbitrary workflow DAGs; fixed planner/implementer/reviewer/proof sequence is not hard-coded.
-- [ ] A Swarm run can spawn dedicated worker sessions for configured workflow steps.
-- [ ] Worker/step states and locks are visible in chat live output.
-- [ ] Capability policy is enforced by code for any role.
-- [ ] Test commands and file writes can be serialized through generic locks.
-- [ ] Final summary reports workflow status, evidence, failures and blockers truthfully.
-- [ ] Relevant automated tests pass.
-- [ ] Production build, VSIX package and local install complete successfully.
+- [x] `Swarm` is selectable as a built-in agent when enabled.
+- [x] User can define arbitrary role configs; role ids are not hard-coded.
+- [x] User can define arbitrary workflow DAGs; fixed planner/implementer/reviewer/proof sequence is not hard-coded.
+- [x] A Swarm run can spawn dedicated worker sessions for configured workflow steps.
+- [x] Worker/step states and locks are visible in chat live output.
+- [x] Capability policy is enforced by code for any role.
+- [x] Test commands and file writes can be serialized through generic locks.
+- [x] Final summary reports workflow status, evidence, failures and blockers truthfully.
+- [x] Relevant automated tests pass.
+- [x] Production build, VSIX package and local install complete successfully.
+
+## Implementation completion notes
+
+- Implemented the MVP with JSON config files (`swarm.config.json`, `roles/*.json`, `workflows/*.json`) instead of TOML to avoid adding a parser dependency.
+- Added the built-in `Swarm (Experimental)` agent behind `vscode-acp-chat.swarmAgent.enabled`; custom `id: "swarm"` agents still override it.
+- Added the bundled `dist/swarm-acp/index.mjs` build target, root orchestrator, generic DAG engine, dedicated worker ACP runtime, capability proxy, lock manager, monitor, prompt renderer, evidence summary, live output projection, tests, and example templates.
+- Deferred the optional bootstrap command and dedicated monitor panel; MVP progress is surfaced in existing chat tool cards.

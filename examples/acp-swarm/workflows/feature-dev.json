@@ -1,0 +1,28 @@
+{
+  "displayName": "Feature Development",
+  "maxWorkers": 2,
+  "steps": [
+    {
+      "id": "review-scope",
+      "role": "peer",
+      "prompt": "Identify scope, risks, and verification strategy for the user task.",
+      "produces": ["scope-notes"]
+    },
+    {
+      "id": "build",
+      "role": "builder",
+      "dependsOn": ["review-scope"],
+      "requiresLocks": ["workspace_write"],
+      "prompt": "Implement the task using the scope notes and original request.",
+      "produces": ["diff", "verification-log"],
+      "onFailure": "stop"
+    },
+    {
+      "id": "review",
+      "role": "peer",
+      "dependsOn": ["build"],
+      "prompt": "Review the implementation diff and verification log.",
+      "produces": ["review-findings"]
+    }
+  ]
+}

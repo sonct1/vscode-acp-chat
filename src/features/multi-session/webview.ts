@@ -15,6 +15,7 @@ interface ChatSurfaceBridge {
   dispatch(message: ExtensionMessage): Promise<void> | void;
   beginSnapshotReplay?(): void;
   endSnapshotReplay?(): void;
+  setSurfaceInteractionLocked?(value: boolean): void;
   setGenerating(value: boolean): void;
   getInputHtml(): string;
   setInputHtml(value: string): void;
@@ -45,7 +46,10 @@ export class MultiSessionWebviewController {
   private title: HTMLElement;
   private status: HTMLElement;
   private activeLocalSessionId: string | undefined;
+  private targetLocalSessionId: string | undefined;
+  private renderedLocalSessionId: string | undefined;
   private activationRevision = 0;
+  private targetActivationRevision = 0;
   private active: MultiSessionListItem | undefined;
   private aggregate: ChatAggregate = {
     open: 0,
@@ -157,21 +161,35 @@ export class MultiSessionWebviewController {
     if (!msg.enabled) {
       this.header.hidden = true;
       this.loading.hidden = true;
+      this.bridge.setSurfaceInteractionLocked?.(false);
+      return;
+    }
+
+    if (
+      this.targetActivationRevision > 0 &&
+      msg.activationRevision < this.targetActivationRevision
+    ) {
       return;
     }
 
     const activeChanged =
-      msg.activeLocalSessionId !== this.activeLocalSessionId ||
-      msg.activationRevision !== this.activationRevision;
+      msg.activeLocalSessionId !== this.targetLocalSessionId ||
+      msg.activationRevision !== this.targetActivationRevision;
     this.header.hidden = false;
+    if (activeChanged) {
+      this.saveRenderedSurfaceState();
+    }
     if (msg.activeLocalSessionId) {
       this.activeLocalSessionId = msg.activeLocalSessionId;
+      this.targetLocalSessionId = msg.activeLocalSessionId;
       this.activationRevision = msg.activationRevision;
+      this.targetActivationRevision = msg.activationRevision;
     }
     this.active = msg.active ?? this.active;
     this.aggregate = msg.aggregate;
     if (activeChanged && msg.activeLocalSessionId) {
       this.showOptimisticLoading("Opening chat…");
+      this.bridge.setSurfaceInteractionLocked?.(true);
     } else {
       this.clearOptimisticLoadingIfSettled();
     }
@@ -183,23 +201,30 @@ export class MultiSessionWebviewController {
   }
 
   private async applySnapshot(msg: MultiSessionSnapshot): Promise<void> {
-    const previousSessionId = this.activeLocalSessionId;
+    if (!this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+      return;
+    }
+
+    const previousRenderedSessionId = this.renderedLocalSessionId;
     if (
       this.hasRenderedSnapshot &&
       !msg.scrollToBottom &&
-      previousSessionId === msg.activeLocalSessionId
+      previousRenderedSessionId === msg.activeLocalSessionId
     ) {
       this.scrollTop[msg.activeLocalSessionId] = this.bridge.getScrollTop();
     } else if (
-      previousSessionId &&
-      previousSessionId !== msg.activeLocalSessionId
+      previousRenderedSessionId &&
+      previousRenderedSessionId !== msg.activeLocalSessionId
     ) {
-      this.saveActiveSurfaceState();
+      this.saveRenderedSurfaceState();
     }
     this.activeLocalSessionId = msg.activeLocalSessionId;
+    this.targetLocalSessionId = msg.activeLocalSessionId;
     this.activationRevision = msg.activationRevision;
+    this.targetActivationRevision = msg.activationRevision;
     this.active = msg.session;
     this.showOptimisticLoading("Loading chat…");
+    this.bridge.setSurfaceInteractionLocked?.(true);
 
     const replay: SnapshotReplay = {
       localSessionId: msg.activeLocalSessionId,
@@ -267,14 +292,19 @@ export class MultiSessionWebviewController {
       } else {
         this.bridge.setScrollTop(this.scrollTop[msg.activeLocalSessionId] ?? 0);
       }
+      this.renderedLocalSessionId = msg.activeLocalSessionId;
+
       this.clearOptimisticLoadingIfSettled();
       this.renderHeader();
       this.renderLoading();
       this.persistState();
       this.hasRenderedSnapshot = true;
     } catch (error) {
-      this.optimisticLoadingText = undefined;
-      this.renderLoading();
+      if (this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+        this.optimisticLoadingText = undefined;
+        this.renderLoading();
+        this.vscode.postMessage({ type: "feature.multi-session.resync" });
+      }
       throw error;
     } finally {
       if (snapshotReplayStarted) {
@@ -282,6 +312,9 @@ export class MultiSessionWebviewController {
       }
       if (this.snapshotReplay === replay) {
         this.snapshotReplay = undefined;
+      }
+      if (this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+        this.bridge.setSurfaceInteractionLocked?.(false);
       }
     }
 
@@ -323,16 +356,29 @@ export class MultiSessionWebviewController {
   }
 
   private updateActiveDraft(html: string): void {
-    if (!this.activeLocalSessionId) return;
-    this.drafts[this.activeLocalSessionId] = html;
+    const sessionId = this.renderedLocalSessionId ?? this.activeLocalSessionId;
+    if (!sessionId) return;
+    this.drafts[sessionId] = html;
     this.persistState({ inputValue: html });
   }
 
-  private saveActiveSurfaceState(): void {
-    if (!this.activeLocalSessionId) return;
-    this.drafts[this.activeLocalSessionId] = this.bridge.getInputHtml();
-    this.scrollTop[this.activeLocalSessionId] = this.bridge.getScrollTop();
+  private saveRenderedSurfaceState(): void {
+    const sessionId = this.renderedLocalSessionId ?? this.activeLocalSessionId;
+    if (!sessionId) return;
+    this.drafts[sessionId] = this.bridge.getInputHtml();
+    this.scrollTop[sessionId] = this.bridge.getScrollTop();
     this.persistState();
+  }
+
+  private isCurrentTarget(
+    localSessionId: string,
+    activationRevision: number
+  ): boolean {
+    if (!this.targetLocalSessionId) return true;
+    return (
+      this.targetLocalSessionId === localSessionId &&
+      this.targetActivationRevision === activationRevision
+    );
   }
 
   private renderHeader(): void {
@@ -425,6 +471,8 @@ export class MultiSessionWebviewController {
     this.drafts = state?.multiSession?.drafts ?? {};
     this.scrollTop = state?.multiSession?.scrollTop ?? {};
     this.activeLocalSessionId = state?.multiSession?.activeLocalSessionId;
+    this.targetLocalSessionId = this.activeLocalSessionId;
+    this.renderedLocalSessionId = this.activeLocalSessionId;
   }
 
   private persistState(
@@ -504,6 +552,8 @@ export function registerMultiSessionWebviewFeature(
       },
       beginSnapshotReplay: () => controller.beginSnapshotReplay(),
       endSnapshotReplay: () => controller.endSnapshotReplay(),
+      setSurfaceInteractionLocked: (value) =>
+        controller.setSessionTransitionLocked(value),
       setGenerating: (value) => controller.setTurnGenerating(value),
       getInputHtml: () => controller.inputPanel.getInputHtml(),
       setInputHtml: (value) => controller.inputPanel.setInputHtml(value),

@@ -1,4 +1,4 @@
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { getPiAcpSessionMapPath } from './paths.js'
 
@@ -7,6 +7,8 @@ export type StoredSession = {
   cwd: string
   sessionFile: string
   updatedAt: string
+  fileSize: number | null
+  fileMtimeMs: number | null
 }
 
 type SessionMapFile = {
@@ -31,18 +33,21 @@ function loadFile(path: string): SessionMapFile {
     }
     const sessions: Record<string, StoredSession> = {}
     for (const [sessionId, entry] of Object.entries(parsed.sessions)) {
-      if (
-        entry &&
-        typeof entry === 'object' &&
-        typeof entry.sessionId === 'string' &&
-        typeof entry.cwd === 'string' &&
-        typeof entry.sessionFile === 'string'
-      ) {
-        sessions[sessionId] = {
-          sessionId: entry.sessionId,
-          cwd: entry.cwd,
-          sessionFile: entry.sessionFile,
-          updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : new Date(0).toISOString()
+      if (entry && typeof entry === 'object') {
+        const record = entry as Record<string, unknown>
+        if (
+          typeof record.sessionId === 'string' &&
+          typeof record.cwd === 'string' &&
+          typeof record.sessionFile === 'string'
+        ) {
+          sessions[sessionId] = {
+            sessionId: record.sessionId,
+            cwd: record.cwd,
+            sessionFile: record.sessionFile,
+            updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : new Date(0).toISOString(),
+            fileSize: typeof record.fileSize === 'number' && Number.isFinite(record.fileSize) ? record.fileSize : null,
+            fileMtimeMs: typeof record.fileMtimeMs === 'number' && Number.isFinite(record.fileMtimeMs) ? record.fileMtimeMs : null
+          }
         }
       }
     }
@@ -137,13 +142,19 @@ function withFileLock<T>(path: string, action: () => T): T {
   }
 }
 
-function isValidMappedFile(path: string): boolean {
+function fileSignature(path: string): { size: number; mtimeMs: number } | null {
   try {
-    if (!existsSync(path)) return false
-    return statSync(path).isFile()
+    const st = statSync(path)
+    if (!st.isFile()) return null
+    return { size: st.size, mtimeMs: st.mtimeMs }
   } catch {
-    return false
+    return null
   }
+}
+
+function signatureMatches(stored: StoredSession, current: { size: number; mtimeMs: number }): boolean {
+  if (stored.fileSize === null || stored.fileMtimeMs === null) return true
+  return stored.fileSize === current.size && stored.fileMtimeMs === current.mtimeMs
 }
 
 export class SessionStore {
@@ -176,7 +187,8 @@ export class SessionStore {
     const db = this.reload()
     const stored = db.sessions[sessionId]
     if (!stored) return null
-    if (!isValidMappedFile(stored.sessionFile)) {
+    const signature = fileSignature(stored.sessionFile)
+    if (!signature || !signatureMatches(stored, signature)) {
       this.mutate(current => {
         if (!current.sessions[sessionId]) return false
         delete current.sessions[sessionId]
@@ -194,13 +206,23 @@ export class SessionStore {
   upsertMany(entries: Array<{ sessionId: string; cwd: string; sessionFile: string }>): void {
     if (entries.length === 0) return
     const updatedAt = new Date().toISOString()
+    const materialized = entries.map(entry => {
+      const signature = fileSignature(entry.sessionFile)
+      return {
+        ...entry,
+        fileSize: signature?.size ?? null,
+        fileMtimeMs: signature?.mtimeMs ?? null
+      }
+    })
     this.mutate(db => {
-      for (const entry of entries) {
+      for (const entry of materialized) {
         db.sessions[entry.sessionId] = {
           sessionId: entry.sessionId,
           cwd: entry.cwd,
           sessionFile: entry.sessionFile,
-          updatedAt
+          updatedAt,
+          fileSize: entry.fileSize,
+          fileMtimeMs: entry.fileMtimeMs
         }
       }
       return true

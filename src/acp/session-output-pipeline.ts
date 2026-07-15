@@ -15,6 +15,7 @@ import {
   projectLiveToolOutput,
 } from "./tool-output-presentation";
 import { bundledPiLiveToolOutputProfile } from "../features/pi-agent/live-tool-output";
+import { bundledSwarmLiveToolOutputProfile } from "../features/swarm-agent/live-tool-output";
 
 export interface SessionRenderMessage {
   type: string;
@@ -407,9 +408,14 @@ export class SessionOutputPipeline implements vscode.Disposable {
   }
 
   private getLiveProfiles(): LiveToolOutputProfile[] {
-    return this.options.liveToolOutputProfile === "bundled-pi"
-      ? [bundledPiLiveToolOutputProfile]
-      : [];
+    switch (this.options.liveToolOutputProfile) {
+      case "bundled-pi":
+        return [bundledPiLiveToolOutputProfile];
+      case "bundled-swarm":
+        return [bundledSwarmLiveToolOutputProfile];
+      default:
+        return [];
+    }
   }
 
   private projectProgress(

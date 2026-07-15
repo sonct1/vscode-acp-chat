@@ -530,6 +530,8 @@ export class ACPClient {
     this.setState("connecting");
 
     try {
+      await this.agentConfig.prepare?.();
+
       // Build the PATH including global bin directories
       const globalBinPaths = getGlobalBinPaths();
       const pathEnvName = process.platform === "win32" ? "Path" : "PATH";

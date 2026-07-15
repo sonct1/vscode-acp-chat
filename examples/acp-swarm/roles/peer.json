@@ -1,0 +1,12 @@
+{
+  "displayName": "Peer Reviewer",
+  "agentId": "pi",
+  "prompt": "Review independently. Report concrete findings, evidence, and uncertainty. Do not modify files.",
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "terminal": "restricted",
+    "allowedTerminalCommands": ["npm test", "npm run test", "npm run check-types"],
+    "testLock": true
+  }
+}

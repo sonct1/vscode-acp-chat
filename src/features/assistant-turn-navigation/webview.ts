@@ -18,12 +18,21 @@ export class AssistantTurnNavigationWebviewFeature {
   private entries: AssistantTurnEntry[] = [];
   private activeIndex = -1;
   private rebuildFrame: number | null = null;
+  private lastFocusedAssistantElement: HTMLElement | null = null;
+  private hasButtonNavigationAnchor = false;
+  private readonly clearButtonNavigationAnchor = () => {
+    this.hasButtonNavigationAnchor = false;
+    this.lastFocusedAssistantElement = null;
+  };
   private readonly onMessagesScroll = () => this.updateActiveFromScroll();
   private readonly onMessagesFocusIn = (event: Event) => {
     const target = (event.target as Element | null)?.closest(
       ".message.assistant"
     ) as HTMLElement | null;
-    if (target) this.setActiveByElement(target);
+    if (!target) return;
+    this.clearButtonNavigationAnchor();
+    this.lastFocusedAssistantElement = target;
+    this.setActiveByElement(target);
   };
 
   constructor(private readonly controller: WebviewController) {
@@ -47,6 +56,19 @@ export class AssistantTurnNavigationWebviewFeature {
 
     this.messagesEl.addEventListener("scroll", this.onMessagesScroll);
     this.messagesEl.addEventListener("focusin", this.onMessagesFocusIn);
+    this.messagesEl.addEventListener("wheel", this.clearButtonNavigationAnchor);
+    this.messagesEl.addEventListener(
+      "pointerdown",
+      this.clearButtonNavigationAnchor
+    );
+    this.messagesEl.addEventListener(
+      "touchstart",
+      this.clearButtonNavigationAnchor
+    );
+    this.messagesEl.addEventListener(
+      "keydown",
+      this.clearButtonNavigationAnchor
+    );
 
     this.rebuildEntries();
   }
@@ -59,17 +81,33 @@ export class AssistantTurnNavigationWebviewFeature {
     }
     this.messagesEl.removeEventListener("scroll", this.onMessagesScroll);
     this.messagesEl.removeEventListener("focusin", this.onMessagesFocusIn);
+    this.messagesEl.removeEventListener(
+      "wheel",
+      this.clearButtonNavigationAnchor
+    );
+    this.messagesEl.removeEventListener(
+      "pointerdown",
+      this.clearButtonNavigationAnchor
+    );
+    this.messagesEl.removeEventListener(
+      "touchstart",
+      this.clearButtonNavigationAnchor
+    );
+    this.messagesEl.removeEventListener(
+      "keydown",
+      this.clearButtonNavigationAnchor
+    );
     this.navigatorEl.remove();
   }
 
   navigate(direction: AssistantTurnNavigationDirection): boolean {
     if (this.entries.length === 0) return false;
 
-    this.ensureActiveIndex();
+    const baseIndex = this.getNavigationBaseIndex(direction);
     const offset = direction === "previous" ? -1 : 1;
     const nextIndex = Math.max(
       0,
-      Math.min(this.entries.length - 1, this.activeIndex + offset)
+      Math.min(this.entries.length - 1, baseIndex + offset)
     );
 
     this.jumpTo(nextIndex);
@@ -189,12 +227,18 @@ export class AssistantTurnNavigationWebviewFeature {
         previousActiveWasLast && this.entries.length > previousEntriesLength
           ? this.entries.length - 1
           : nextIndex;
-      if (this.activeIndex < 0) this.activeIndex = this.entries.length - 1;
+      if (this.activeIndex < 0) {
+        this.hasButtonNavigationAnchor = false;
+        this.activeIndex = this.entries.length - 1;
+      }
     } else {
       this.activeIndex = this.entries.length - 1;
     }
 
-    if (this.entries.length === 0) this.activeIndex = -1;
+    if (this.entries.length === 0) {
+      this.activeIndex = -1;
+      this.clearButtonNavigationAnchor();
+    }
     this.updateNavigator();
   }
 
@@ -234,25 +278,132 @@ export class AssistantTurnNavigationWebviewFeature {
       return;
     }
 
-    const focusedAssistant = (
-      this.doc.activeElement as Element | null
-    )?.closest(".message.assistant") as HTMLElement | null;
+    const focusedAssistant = this.getFocusedAssistantElement();
     if (focusedAssistant && this.setActiveByElement(focusedAssistant)) return;
 
     if (this.activeIndex >= 0 && this.activeIndex < this.entries.length) return;
     this.activeIndex = this.findNearestIndexFromScroll();
   }
 
+  private getNavigationBaseIndex(
+    direction: AssistantTurnNavigationDirection
+  ): number {
+    const focusedAssistant = this.getFocusedAssistantElement();
+    if (focusedAssistant) {
+      return this.getBaseIndexForAnchor(focusedAssistant, direction);
+    }
+
+    if (
+      this.hasButtonNavigationAnchor &&
+      this.activeIndex >= 0 &&
+      this.activeIndex < this.entries.length
+    ) {
+      return this.activeIndex;
+    }
+
+    const anchor = this.getNavigationAnchorElement();
+    if (anchor) return this.getBaseIndexForAnchor(anchor, direction);
+
+    this.ensureActiveIndex();
+    return this.activeIndex;
+  }
+
+  private getBaseIndexForAnchor(
+    element: HTMLElement,
+    direction: AssistantTurnNavigationDirection
+  ): number {
+    const index = this.findEntryIndexByElement(element);
+    if (index >= 0) {
+      this.activeIndex = index;
+      return index;
+    }
+
+    const insertionIndex = this.findEntryInsertionIndex(element);
+    if (insertionIndex >= 0) {
+      return direction === "previous" ? insertionIndex : insertionIndex - 1;
+    }
+
+    this.ensureActiveIndex();
+    return this.activeIndex;
+  }
+
+  private getNavigationAnchorElement(): HTMLElement | null {
+    return (
+      this.getViewportAssistantElement() ?? this.getLastFocusedAssistantElement()
+    );
+  }
+
+  private getFocusedAssistantElement(): HTMLElement | null {
+    const element = (this.doc.activeElement as Element | null)?.closest(
+      ".message.assistant"
+    ) as HTMLElement | null;
+    return element && this.messagesEl.contains(element) ? element : null;
+  }
+
+  private getLastFocusedAssistantElement(): HTMLElement | null {
+    return this.lastFocusedAssistantElement &&
+      this.messagesEl.contains(this.lastFocusedAssistantElement)
+      ? this.lastFocusedAssistantElement
+      : null;
+  }
+
+  private getViewportAssistantElement(): HTMLElement | null {
+    if (typeof this.doc.elementFromPoint !== "function") return null;
+
+    const rect = this.messagesEl.getBoundingClientRect();
+    const x = rect.left + Math.max(1, rect.width / 2);
+    const y = rect.top + Math.max(24, rect.height * 0.25);
+    const element = this.doc.elementFromPoint(x, y);
+    if (!element || !this.messagesEl.contains(element)) return null;
+
+    return element.closest(".message.assistant") as HTMLElement | null;
+  }
+
   private setActiveByElement(element: HTMLElement): boolean {
-    const index = this.entries.findIndex((entry) => entry.element === element);
-    if (index < 0) return false;
-    this.activeIndex = index;
+    const index = this.findEntryIndexByElement(element);
+    if (index >= 0) {
+      this.activeIndex = index;
+      this.updateNavigator();
+      return true;
+    }
+
+    const insertionIndex = this.findEntryInsertionIndex(element);
+    if (insertionIndex < 0) return false;
+
+    this.activeIndex = Math.max(
+      0,
+      Math.min(this.entries.length - 1, insertionIndex - 1)
+    );
     this.updateNavigator();
     return true;
   }
 
+  private findEntryIndexByElement(element: HTMLElement): number {
+    return this.entries.findIndex((entry) => entry.element === element);
+  }
+
+  private findEntryInsertionIndex(element: HTMLElement): number {
+    const assistantMessages = Array.from(
+      this.messagesEl.querySelectorAll<HTMLElement>(".message.assistant")
+    );
+    const assistantIndex = assistantMessages.indexOf(element);
+    if (assistantIndex < 0) return -1;
+
+    const entryElements = new Set(this.entries.map((entry) => entry.element));
+    let insertionIndex = 0;
+    for (let index = 0; index < assistantIndex; index++) {
+      if (entryElements.has(assistantMessages[index])) insertionIndex += 1;
+    }
+    return insertionIndex;
+  }
+
   private updateActiveFromScroll(): void {
     if (this.entries.length === 0) return;
+    if (this.hasButtonNavigationAnchor) return;
+
+    const viewportAssistant = this.getViewportAssistantElement();
+    if (viewportAssistant && this.setActiveByElement(viewportAssistant)) return;
+
     this.activeIndex = this.findNearestIndexFromScroll();
     this.updateNavigator();
   }
@@ -283,6 +434,7 @@ export class AssistantTurnNavigationWebviewFeature {
     if (!entry) return;
 
     this.activeIndex = index;
+    this.hasButtonNavigationAnchor = true;
     this.controller.messageList.disableAutoScroll();
     entry.scrollTarget.scrollIntoView?.({ behavior: "smooth", block: "start" });
     this.updateNavigator();

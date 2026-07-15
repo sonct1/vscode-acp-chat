@@ -1,0 +1,11 @@
+{
+  "displayName": "Review Only",
+  "steps": [
+    {
+      "id": "review",
+      "role": "peer",
+      "prompt": "Review the user's request and the workspace state. Produce findings and recommended next actions.",
+      "produces": ["review-findings"]
+    }
+  ]
+}

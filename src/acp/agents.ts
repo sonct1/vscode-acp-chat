@@ -4,6 +4,10 @@ import {
   isAntigravityAgentEnabled,
 } from "../features/antigravity-agent";
 import { createPiAgentConfig } from "../features/pi-agent";
+import {
+  createSwarmAgentConfig,
+  isSwarmAgentEnabled,
+} from "../features/swarm-agent";
 import { validateAgents, showValidationWarnings } from "./agent-validator";
 import { isCommandAvailable } from "../utils/bin-paths";
 
@@ -11,7 +15,7 @@ import { isCommandAvailable } from "../utils/bin-paths";
  * Configuration for an agent executable.
  * Represents the structure needed to launch an AI agent via CLI.
  */
-export type LiveToolOutputProfileId = "bundled-pi";
+export type LiveToolOutputProfileId = "bundled-pi" | "bundled-swarm";
 
 export interface AgentConfig {
   id: string;
@@ -21,6 +25,7 @@ export interface AgentConfig {
   env?: Record<string, string>;
   availabilityCommand?: string;
   liveToolOutputProfile?: LiveToolOutputProfileId;
+  prepare?: () => Promise<void>;
 }
 
 /**
@@ -123,6 +128,9 @@ function getBuiltinAgents(): AgentConfig[] {
       args: ["--acp"],
     },
     ...(isAntigravityAgentEnabled() ? [createAntigravityAgentConfig()] : []),
+    ...(isSwarmAgentEnabled()
+      ? [createSwarmAgentConfig({ getAvailableAgents: () => getMergedAgents() })]
+      : []),
     createPiAgentConfig(),
   ];
 }

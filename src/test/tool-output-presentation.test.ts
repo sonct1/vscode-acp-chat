@@ -5,6 +5,7 @@ import {
   tailTextUtf8,
 } from "../acp/tool-output-presentation";
 import { bundledPiLiveToolOutputProfile } from "../features/pi-agent/live-tool-output";
+import { bundledSwarmLiveToolOutputProfile } from "../features/swarm-agent/live-tool-output";
 
 suite("Live tool output presentation", () => {
   test("normalizes safe generic textual shapes", () => {
@@ -114,5 +115,48 @@ suite("Live tool output presentation", () => {
       }),
       undefined
     );
+  });
+
+  test("projects bundled Swarm step and lock updates as bounded subagent output", () => {
+    const step = bundledSwarmLiveToolOutputProfile.project({
+      agentId: "swarm",
+      toolCallId: "swarm-step-1",
+      title: "swarm_step",
+      rawOutput: {
+        kind: "swarm_step",
+        workflowId: "feature-dev",
+        stepId: "review",
+        roleId: "security-reviewer",
+        state: "RUNNING",
+        elapsedMs: 42,
+        preview: "Reviewing diff",
+        secret: "not forwarded",
+      },
+    });
+
+    assert.strictEqual(step?.format, "subagent");
+    assert.ok(step?.text.includes("Swarm step"));
+    assert.ok(step?.text.includes("Reviewing diff"));
+    if (step?.format === "subagent") {
+      assert.strictEqual(step.subagent.agent, "security-reviewer");
+      assert.strictEqual(step.subagent.status, "RUNNING");
+      assert.strictEqual(step.subagent.elapsedMs, 42);
+      assert.strictEqual("secret" in step.subagent, false);
+    }
+
+    const lock = bundledSwarmLiveToolOutputProfile.project({
+      agentId: "swarm",
+      toolCallId: "swarm-lock-1",
+      title: "swarm_lock",
+      rawOutput: {
+        kind: "swarm_lock",
+        stepId: "tests",
+        lockId: "test_runner",
+        event: "wait",
+      },
+    });
+    assert.strictEqual(lock?.format, "subagent");
+    assert.ok(lock?.text.includes("Swarm lock"));
+    assert.ok(lock?.text.includes("test_runner"));
   });
 });

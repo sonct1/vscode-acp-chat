@@ -10,8 +10,8 @@ export const MULTI_SESSION_STYLES = `
 .multi-session-status.multi-session-status-awaiting_permission::before{background:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow));opacity:1}
 .multi-session-status.multi-session-status-error::before{background:var(--vscode-errorForeground);opacity:1}
 .multi-session-status.multi-session-status-draft::before{background:transparent;border:1px solid var(--vscode-descriptionForeground)}
-.multi-session-loading{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);font-size:var(--acp-font-size-sm);background:var(--vscode-sideBar-background)}
-.multi-session-spinner{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:multi-session-spin .8s linear infinite}
+.multi-session-loading{position:fixed;left:0;right:0;top:42px;bottom:0;z-index:19;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;border-top:1px solid var(--vscode-panel-border);box-sizing:border-box;color:var(--vscode-descriptionForeground);font-size:var(--acp-font-size-sm);text-align:center;background:var(--vscode-sideBar-background)}
+.multi-session-spinner{width:18px;height:18px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:multi-session-spin .8s linear infinite}
 .multi-session-button{font:inherit;min-height:24px;display:inline-flex;align-items:center;justify-content:center;gap:4px;border-radius:var(--acp-flat-radius,var(--border-radius-small,3px));border:1px solid transparent;padding:3px 7px;cursor:pointer;line-height:1.2;color:var(--vscode-foreground);background:transparent;white-space:nowrap}
 .multi-session-button:hover:not(:disabled){background:var(--acp-flat-hover-background,rgba(255,255,255,.12))}
 .multi-session-button:disabled{opacity:.55;cursor:default}

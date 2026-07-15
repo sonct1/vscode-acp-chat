@@ -78,6 +78,13 @@ export function validateAgent(agent: AgentConfig): ValidationResult {
     };
   }
 
+  if (agent.prepare !== undefined && typeof agent.prepare !== "function") {
+    return {
+      valid: false,
+      error: "Agent prepare must be a function or undefined",
+    };
+  }
+
   return { valid: true };
 }
 

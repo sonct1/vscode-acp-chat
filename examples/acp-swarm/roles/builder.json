@@ -1,0 +1,13 @@
+{
+  "displayName": "Builder",
+  "agentId": "pi",
+  "prompt": "Implement the assigned step. Keep changes minimal and verify them. Report files changed and commands run.",
+  "capabilities": {
+    "read": true,
+    "write": true,
+    "terminal": "restricted",
+    "allowedTerminalCommands": ["npm run check-types", "npm test", "npm run package"],
+    "testLock": true,
+    "requireApprovalBeforeWrite": true
+  }
+}

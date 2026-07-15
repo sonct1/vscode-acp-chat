@@ -118,6 +118,24 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin, antigravityLicensePlugin],
   });
 
+  const swarmAcpCtx = await esbuild.context({
+    entryPoints: ["src/features/swarm-agent/adapter/index.ts"],
+    bundle: true,
+    format: "esm",
+    target: "node22",
+    minify: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "node",
+    outfile: "dist/swarm-acp/index.mjs",
+    external: ["vscode", "node:*"],
+    logLevel: "warning",
+    banner: {
+      js: "#!/usr/bin/env node",
+    },
+    plugins: [esbuildProblemMatcherPlugin],
+  });
+
   if (watch) {
     await Promise.all([
       extensionCtx.watch(),
@@ -125,6 +143,7 @@ async function main() {
       sessionManagerWebviewCtx.watch(),
       piAcpCtx.watch(),
       antigravityAcpCtx.watch(),
+      swarmAcpCtx.watch(),
     ]);
   } else {
     await Promise.all([
@@ -133,6 +152,7 @@ async function main() {
       sessionManagerWebviewCtx.rebuild(),
       piAcpCtx.rebuild(),
       antigravityAcpCtx.rebuild(),
+      swarmAcpCtx.rebuild(),
     ]);
     await Promise.all([
       extensionCtx.dispose(),
@@ -140,6 +160,7 @@ async function main() {
       sessionManagerWebviewCtx.dispose(),
       piAcpCtx.dispose(),
       antigravityAcpCtx.dispose(),
+      swarmAcpCtx.dispose(),
     ]);
   }
 }

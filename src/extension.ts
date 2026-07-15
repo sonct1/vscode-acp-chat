@@ -94,7 +94,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (
         e.affectsConfiguration("vscode-acp-chat.customAgents") ||
         e.affectsConfiguration("vscode-acp-chat.pi.historyLoadMode") ||
-        e.affectsConfiguration("vscode-acp-chat.antigravity.enabled")
+        e.affectsConfiguration("vscode-acp-chat.antigravity.enabled") ||
+        e.affectsConfiguration("vscode-acp-chat.swarmAgent.enabled")
       ) {
         getAgentsWithStatus(true); // Force refresh agents cache and re-validate
       }

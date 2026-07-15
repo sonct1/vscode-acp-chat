@@ -248,6 +248,40 @@
           "default": false,
           "description": "Enable the bundled experimental Antigravity ACP adapter. Google states that third-party access using Antigravity OAuth may violate the Antigravity Terms of Service and may result in account suspension or termination. See https://antigravity.google/terms and https://antigravity.google/docs/faq before enabling."
         },
+        "vscode-acp-chat.swarmAgent.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the bundled experimental Swarm ACP root orchestrator. Swarm reads user-defined roles and workflows from the workspace and can spawn multiple worker ACP agents."
+        },
+        "vscode-acp-chat.swarmAgent.configDirectory": {
+          "type": "string",
+          "default": ".vscode/acp-swarm",
+          "description": "Workspace-relative or absolute directory containing Swarm roles, workflows, and swarm.config.json."
+        },
+        "vscode-acp-chat.swarmAgent.defaultWorkflow": {
+          "type": "string",
+          "default": "default",
+          "description": "Default Swarm workflow id to execute for new Swarm prompts."
+        },
+        "vscode-acp-chat.swarmAgent.maxWorkers": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "description": "Maximum number of concurrent Swarm worker ACP sessions."
+        },
+        "vscode-acp-chat.swarmAgent.requireApprovalBeforeWrites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require client permission before Swarm forwards write-capable worker actions."
+        },
+        "vscode-acp-chat.swarmAgent.testLockPatterns": {
+          "type": "array",
+          "default": ["npm test", "npm run test", "cargo test", "go test", "pytest"],
+          "description": "Terminal command fragments that acquire the Swarm test_runner lock.",
+          "items": {
+            "type": "string"
+          }
+        },
         "vscode-acp-chat.pi.historyLoadMode": {
           "type": "string",
           "enum": [

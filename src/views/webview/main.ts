@@ -53,6 +53,10 @@ export class WebviewController implements MessageHandler {
 
   private permissionDialog: PermissionDialog;
   private isConnected = false;
+  private sessionTransitionLocked = false;
+  private previousInputContentEditable: string | null = null;
+  private previousSendDisabled: boolean | null = null;
+  private previousAttachDisabled: boolean | null = null;
 
   constructor(vscode: VsCodeApi, doc: Document, win: Window) {
     this.messageRouter = new MessageRouter();
@@ -366,6 +370,43 @@ export class WebviewController implements MessageHandler {
 
   restoreDraftPayloads(sessionId: string | undefined, html: string): void {
     this.features?.multiSession.restoreDraftPayloads(sessionId, html);
+  }
+
+  setSessionTransitionLocked(value: boolean): void {
+    if (this.sessionTransitionLocked === value) return;
+    this.sessionTransitionLocked = value;
+
+    const { inputEl, sendBtn, attachImageBtn } = this.inputPanel.elements;
+    const messagesContainer = this.messageList.elements.containerEl;
+    const inputContainer = this.ctx.doc.getElementById("input-container");
+
+    messagesContainer.setAttribute("aria-busy", value ? "true" : "false");
+    inputContainer?.setAttribute("aria-busy", value ? "true" : "false");
+    inputContainer?.toggleAttribute("inert", value);
+    messagesContainer.toggleAttribute("inert", value);
+
+    if (value) {
+      this.previousInputContentEditable = inputEl.getAttribute("contenteditable");
+      this.previousSendDisabled = sendBtn.disabled;
+      this.previousAttachDisabled = attachImageBtn.disabled;
+      inputEl.setAttribute("contenteditable", "false");
+      inputEl.setAttribute("aria-disabled", "true");
+      sendBtn.disabled = true;
+      attachImageBtn.disabled = true;
+      return;
+    }
+
+    inputEl.setAttribute(
+      "contenteditable",
+      this.previousInputContentEditable ?? "true"
+    );
+    inputEl.removeAttribute("aria-disabled");
+    sendBtn.disabled = this.previousSendDisabled ?? sendBtn.disabled;
+    attachImageBtn.disabled = this.previousAttachDisabled ?? false;
+    this.inputPanel.updateInputState();
+    this.previousInputContentEditable = null;
+    this.previousSendDisabled = null;
+    this.previousAttachDisabled = null;
   }
 
   setTurnGenerating(value: boolean): void {

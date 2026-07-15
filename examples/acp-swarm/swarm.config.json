@@ -1,0 +1,9 @@
+{
+  "defaultWorkflow": "review-only",
+  "maxWorkers": 2,
+  "requireApprovalBeforeWrites": true,
+  "testLockPatterns": ["npm test", "npm run test", "pytest", "go test", "cargo test"],
+  "locks": {
+    "named": ["database"]
+  }
+}

@@ -561,9 +561,10 @@ suite("chat-auto-scroll feature", () => {
     messagesEl.style.overflow = "auto";
     messagesEl.style.height = "200px";
     let scrollTop = 0;
+    let scrollHeight = 1000;
     Object.defineProperty(messagesEl, "scrollHeight", {
       configurable: true,
-      get: () => 1000,
+      get: () => scrollHeight,
     });
     Object.defineProperty(messagesEl, "clientHeight", {
       configurable: true,
@@ -650,5 +651,19 @@ suite("chat-auto-scroll feature", () => {
     messageList.scrollToBottom();
     flushFrames();
     assert.strictEqual(scrollTop, messagesEl.scrollHeight);
+
+    const positions: MessageScrollPosition[] = [];
+    const subscription = messageList.onScrollPositionChange((position) => {
+      positions.push(position);
+    });
+    try {
+      messageList.setScrollTop(650);
+      scrollHeight = 200;
+      messageList.clear();
+      assert.strictEqual(scrollTop, 0);
+      assert.strictEqual(positions.at(-1)?.isNearBottom, true);
+    } finally {
+      subscription.dispose();
+    }
   });
 });
