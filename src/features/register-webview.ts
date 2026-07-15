@@ -1,5 +1,6 @@
 import type { WebviewController } from "../views/webview/main";
 import { registerAssistantTurnNavigationWebviewFeature } from "./assistant-turn-navigation/webview";
+import { registerChatAutoScrollWebviewFeature } from "./chat-auto-scroll/webview";
 import { registerChatFontSizeWebviewFeature } from "./chat-font-size/webview";
 import { registerClickableResourceLinksWebviewFeature } from "./clickable-resource-links/webview";
 import { registerLatestUserPromptTipWebviewFeature } from "./latest-user-prompt-tip/webview";
@@ -9,6 +10,7 @@ import { registerPromptHistoryNavigationWebviewFeature } from "./prompt-history-
 import { registerTableCopyWebviewFeature } from "./table-copy/webview";
 
 export interface RegisteredWebviewFeatures {
+  chatAutoScroll: ReturnType<typeof registerChatAutoScrollWebviewFeature>;
   chatFontSize: ReturnType<typeof registerChatFontSizeWebviewFeature>;
   clickableResourceLinks: ReturnType<
     typeof registerClickableResourceLinksWebviewFeature
@@ -31,6 +33,7 @@ export function registerWebviewFeatures(
   controller: WebviewController
 ): RegisteredWebviewFeatures {
   return {
+    chatAutoScroll: registerChatAutoScrollWebviewFeature(controller),
     chatFontSize: registerChatFontSizeWebviewFeature(controller),
     clickableResourceLinks:
       registerClickableResourceLinksWebviewFeature(controller),

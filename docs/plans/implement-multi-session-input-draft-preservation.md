@@ -225,6 +225,34 @@ The exact API can differ, but the final behavior must be covered by tests.
 
 **Estimated scope:** Small
 
+#### Task 5a: Move message queue preview above chat input
+
+**Description:** Move the `Steering` / `Follow-up` queue preview from below the rich prompt input to the top of the composer, above the text input, so queued guidance remains visible before the user reaches the lower toolbar area.
+
+**Acceptance criteria:**
+
+- [ ] `#message-queue-preview` is inserted in `#chat-input-area` before `#input-container`.
+- [ ] Existing preview text, truncation, hidden state, `role="status"`, and `aria-live="polite"` behavior remain unchanged.
+- [ ] Queue keyboard behavior is unchanged: processing `Enter` queues steering, `Alt+Enter` queues follow-up, and `Alt+Up` restores queued messages.
+- [ ] Layout documentation reflects the queue preview above the rich input.
+
+**Verification:**
+
+- [ ] Add/adjust a webview DOM-order test for the queue preview.
+- [ ] `npm run check-types` passes.
+- [ ] Focused webview/message-queue tests pass.
+
+**Dependencies:** Task 5
+
+**Files likely touched:**
+
+- `src/features/message-queue/webview.ts`
+- `src/features/message-queue/styles.ts`
+- `src/test/webview.test.ts`
+- `docs/architecture/acp-chat-layout.md`
+
+**Estimated scope:** Small
+
 ### Phase 4: Verification and release packaging
 
 #### Task 6: Run focused and full quality gates

@@ -42,6 +42,7 @@ import { toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
 import { existsSync, readFileSync, realpathSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import { join, dirname, basename } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -127,62 +128,95 @@ async function readCompactedMessagesFromRpc(proc: PiRpcProcess): Promise<PiRepla
     .filter((message): message is PiReplayMessage => message !== null)
 }
 
-async function replayPiMessages(
+async function emitUserChunk(conn: AgentSideConnection, sessionId: string, text: string): Promise<void> {
+  await conn.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text }
+    }
+  })
+}
+
+async function emitAssistantChunk(conn: AgentSideConnection, sessionId: string, text: string): Promise<void> {
+  await conn.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text }
+    }
+  })
+}
+
+async function emitToolCall(conn: AgentSideConnection, sessionId: string, message: unknown): Promise<void> {
+  const toolName = String((message as any)?.toolName ?? 'tool')
+  const toolCallId = String((message as any)?.toolCallId ?? crypto.randomUUID())
+  const isError = Boolean((message as any)?.isError)
+
+  const text = toolResultToText(message)
+  await conn.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: 'tool_call',
+      toolCallId,
+      title: toolName,
+      kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
+      status: isError ? 'failed' : 'completed',
+      content: text ? [{ type: 'content', content: { type: 'text', text } }] : undefined,
+      rawInput: null,
+      rawOutput: message
+    }
+  })
+}
+
+/** Flush any accumulated user/assistant batch to the connection */
+async function flushBatch(
+  conn: AgentSideConnection,
+  sessionId: string,
+  batch: { role: 'user' | 'assistant'; texts: string[] } | null
+): Promise<void> {
+  if (!batch || batch.texts.length === 0) return
+  const text = batch.texts.filter(Boolean).join('')
+  if (!text) return
+  if (batch.role === 'user') {
+    await emitUserChunk(conn, sessionId, text)
+  } else {
+    await emitAssistantChunk(conn, sessionId, text)
+  }
+}
+
+export async function replayPiMessages(
   conn: AgentSideConnection,
   sessionId: string,
   messages: PiReplayMessage[]
 ): Promise<void> {
+  let batch: { role: 'user' | 'assistant'; texts: string[] } | null = null
+
   for (const replayMessage of messages) {
-    if (replayMessage.role === 'user') {
-      const text = normalizePiMessageText(replayMessage.content)
-      if (text) {
-        await conn.sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: 'user_message_chunk',
-            content: { type: 'text', text }
-          }
-        })
-      }
-    }
-
-    if (replayMessage.role === 'assistant') {
-      const text = normalizePiAssistantText(replayMessage.content)
-      if (text) {
-        await conn.sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: 'agent_message_chunk',
-            content: { type: 'text', text }
-          }
-        })
-      }
-    }
-
     if (replayMessage.role === 'toolResult') {
-      const message = replayMessage.message
-      const toolName = String((message as any)?.toolName ?? 'tool')
-      const toolCallId = String((message as any)?.toolCallId ?? crypto.randomUUID())
-      const isError = Boolean((message as any)?.isError)
-
-      const text = toolResultToText(message)
-      await conn.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: 'tool_call',
-          toolCallId,
-          title: toolName,
-          kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
-          status: isError ? 'failed' : 'completed',
-          content: text ? [{ type: 'content', content: { type: 'text', text } }] : undefined,
-          rawInput: null,
-          rawOutput: message
-        }
-      })
+      await flushBatch(conn, sessionId, batch)
+      batch = null
+      await emitToolCall(conn, sessionId, replayMessage.message)
+      continue
     }
+
+    const role = replayMessage.role
+    const normalize = role === 'user' ? normalizePiMessageText : normalizePiAssistantText
+    const text = normalize(replayMessage.content)
+    if (!text) continue
+
+    if (batch && batch.role !== role) {
+      await flushBatch(conn, sessionId, batch)
+      batch = null
+    }
+    if (!batch) {
+      batch = { role, texts: [] }
+    }
+    batch.texts.push(text)
   }
+
+  await flushBatch(conn, sessionId, batch)
 }
-import { fileURLToPath } from 'node:url'
 
 const pkg = readNearestPackageJson(import.meta.url)
 
@@ -1169,6 +1203,12 @@ export class PiAcpAgent implements ACPAgent {
     }
 
     await replayPiMessages(this.conn, session.sessionId, messages)
+
+    if (process.env.PI_ACP_DEBUG_HISTORY === 'true') {
+      console.warn(
+        `[pi-acp] history replay: mode=${loadMode} messages=${messages.length} sessionId=${session.sessionId}`
+      )
+    }
 
     const { configOptions, models, modes } = await getSessionConfiguration(proc)
 

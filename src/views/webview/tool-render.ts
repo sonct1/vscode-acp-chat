@@ -277,12 +277,12 @@ function renderLivePresentation(info: ToolCallSummary): string {
         typeof row[1] === "string" && row[1].length > 0
     );
     const history = meta.toolHistory?.length
-      ? `<div class="detail-section"><span class="detail-label">Recent nested tools:</span><ul class="tool-history">${meta.toolHistory
+      ? `<div class="detail-section"><span class="detail-label">Recent nested tools:</span><div class="tool-history-box" aria-label="Recent nested tools"><ul class="tool-history-list">${meta.toolHistory
           .map(
             (entry) =>
               `<li><strong>${escapeHtml(entry.name)}</strong>${entry.summary ? ` — ${escapeHtml(entry.summary)}` : ""}</li>`
           )
-          .join("")}</ul></div>`
+          .join("")}</ul></div></div>`
       : "";
     return `<div class="tool-details-panel">${
       rows.length

@@ -18,6 +18,15 @@ import { getRequiredElement } from "../widget/dom";
 const BOTTOM_THRESHOLD_PX = 100;
 const AUTO_SCROLL_SETTLE_FRAMES = 3;
 
+/**
+ * Settings interface consumed by {@link applyAutoScrollSettings}.
+ * These match the shape produced by the chat-auto-scroll feature.
+ */
+export interface AutoScrollSettings {
+  bottomThresholdPx: number;
+  settleFrames: number;
+}
+
 type MessageType = "user" | "assistant" | "error" | "system";
 
 /**
@@ -43,6 +52,8 @@ export class MessageListComponent implements MessageHandler {
   private pendingBottomScrollFrame: number | null = null;
   private pendingBottomScrollForce = false;
   private bottomScrollSettleFrames = 0;
+  private autoScrollBottomThreshold = BOTTOM_THRESHOLD_PX;
+  private autoScrollSettleFrames = AUTO_SCROLL_SETTLE_FRAMES;
   private pendingPaintFrame: number | null = null;
   private paintBump = false;
   private userScrollIntent = false;
@@ -538,7 +549,7 @@ export class MessageListComponent implements MessageHandler {
     this.pendingBottomScrollForce = this.pendingBottomScrollForce || force;
     this.bottomScrollSettleFrames = Math.max(
       this.bottomScrollSettleFrames,
-      AUTO_SCROLL_SETTLE_FRAMES
+      this.autoScrollSettleFrames
     );
     this.scheduleBottomScrollFrame();
   }
@@ -570,6 +581,18 @@ export class MessageListComponent implements MessageHandler {
         break;
       }
     }
+  }
+
+  /**
+   * Apply runtime auto-scroll settings received from the extension host.
+   * Called by the chat-auto-scroll feature controller.
+   */
+  applyAutoScrollSettings(settings: AutoScrollSettings): void {
+    this.autoScrollBottomThreshold = settings.bottomThresholdPx;
+    this.autoScrollSettleFrames = settings.settleFrames;
+    this.isAutoScrollEnabled = this.isNearMessagesBottom();
+    this.notifyScrollPositionChange();
+    this.scheduleMessagesPaintInvalidation();
   }
 
   // -------------------------------------------------------------------
@@ -888,7 +911,7 @@ export class MessageListComponent implements MessageHandler {
       messagesEl.scrollHeight -
         messagesEl.scrollTop -
         messagesEl.clientHeight <=
-      BOTTOM_THRESHOLD_PX
+      this.autoScrollBottomThreshold
     );
   }
 

@@ -2168,10 +2168,29 @@ kbd {
   margin-top: 4px;
 }
 
-.tool-history {
-  margin: 4px 0 0;
+.tool-history-box {
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: var(--acp-flat-radius, var(--border-radius-small));
+  margin: 4px 0;
+  padding: 8px;
+  max-height: 300px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.tool-history-list {
+  margin: 0;
   padding-left: 20px;
   color: var(--vscode-descriptionForeground);
+}
+
+.tool-history-list li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .block {

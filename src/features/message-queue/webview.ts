@@ -246,8 +246,13 @@ export class MessageQueueWebviewFeature {
     preview.setAttribute("role", "status");
     preview.setAttribute("aria-live", "polite");
     preview.hidden = true;
-    const container = doc.getElementById("input-container");
-    container?.appendChild(preview);
+    const composer = doc.getElementById("chat-input-area");
+    const inputContainer = doc.getElementById("input-container");
+    if (composer && inputContainer) {
+      composer.insertBefore(preview, inputContainer);
+    } else {
+      inputContainer?.prepend(preview);
+    }
     return preview;
   }
 

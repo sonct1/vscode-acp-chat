@@ -1,10 +1,10 @@
 export const MULTI_SESSION_STYLES = `
 :root{--acp-flat-radius:var(--border-radius-small,3px);--acp-flat-border:var(--vscode-panel-border,var(--vscode-widget-border));--acp-flat-hover-background:var(--vscode-toolbar-hoverBackground,var(--vscode-list-hoverBackground))}
 .multi-session-header[hidden],.multi-session-loading[hidden]{display:none!important}
-.multi-session-header{display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);position:sticky;top:0;z-index:20;min-height:38px}
-.multi-session-heading{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.multi-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--acp-font-size-base);font-weight:600;line-height:1.25;color:var(--vscode-foreground)}
-.multi-session-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--acp-font-size-xs);line-height:1.25;color:var(--vscode-descriptionForeground)}
+.multi-session-header{display:flex;align-items:center;gap:6px;padding:7px 8px 5px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);position:sticky;top:0;z-index:20;min-height:42px}
+.multi-session-heading{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;padding-top:1px;box-sizing:border-box}
+.multi-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--acp-font-size-base);font-weight:600;line-height:1.4;padding-top:1px;color:var(--vscode-foreground)}
+.multi-session-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--acp-font-size-xs);line-height:1.3;color:var(--vscode-descriptionForeground)}
 .multi-session-status::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--vscode-descriptionForeground);vertical-align:1px;opacity:.75}
 .multi-session-status.busy::before{width:8px;height:8px;border:1.5px solid currentColor;border-right-color:transparent;background:transparent;animation:multi-session-spin .8s linear infinite;vertical-align:-1px;opacity:1}
 .multi-session-status.multi-session-status-awaiting_permission::before{background:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow));opacity:1}

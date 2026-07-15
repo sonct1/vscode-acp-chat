@@ -3,6 +3,30 @@ import { renderToolSummary, renderToolDetails } from "../tool-render";
 import type { WebviewContext } from "../context";
 import type { ToolCallSummary, ToolKind } from "../types";
 
+interface ScrollState {
+  pinnedToBottom: boolean;
+  scrollTop: number;
+}
+
+function captureScrollState(element: HTMLElement | null): ScrollState {
+  return {
+    pinnedToBottom: element
+      ? element.scrollHeight - element.scrollTop - element.clientHeight <= 4
+      : true,
+    scrollTop: element?.scrollTop ?? 0,
+  };
+}
+
+function restoreScrollState(
+  element: HTMLElement | null,
+  state: ScrollState
+): void {
+  if (!element) return;
+  element.scrollTop = state.pinnedToBottom
+    ? element.scrollHeight
+    : Math.min(state.scrollTop, element.scrollHeight);
+}
+
 /**
  * Streaming tool block. Renders as a collapsible <details> element with
  * summary (icon + label) and detail panel (input/output/diff).
@@ -80,13 +104,10 @@ export class ToolBlock extends BlockWidget {
   updateDetails(info: ToolCallSummary, lazy = false): void {
     const currentOutput =
       this.contentEl.querySelector<HTMLElement>(".tool-output");
-    const wasPinnedToBottom = currentOutput
-      ? currentOutput.scrollHeight -
-          currentOutput.scrollTop -
-          currentOutput.clientHeight <=
-        4
-      : true;
-    const previousScrollTop = currentOutput?.scrollTop ?? 0;
+    const currentHistory =
+      this.contentEl.querySelector<HTMLElement>(".tool-history-box");
+    const outputScroll = captureScrollState(currentOutput);
+    const historyScroll = captureScrollState(currentHistory);
     this.pendingDetailsInfo = info;
     this.cachedDetailsHtml = undefined;
     if (lazy) {
@@ -100,13 +121,14 @@ export class ToolBlock extends BlockWidget {
       return;
     }
     this.renderDetailsIfNeeded();
-    const nextOutput =
-      this.contentEl.querySelector<HTMLElement>(".tool-output");
-    if (nextOutput) {
-      nextOutput.scrollTop = wasPinnedToBottom
-        ? nextOutput.scrollHeight
-        : Math.min(previousScrollTop, nextOutput.scrollHeight);
-    }
+    restoreScrollState(
+      this.contentEl.querySelector<HTMLElement>(".tool-output"),
+      outputScroll
+    );
+    restoreScrollState(
+      this.contentEl.querySelector<HTMLElement>(".tool-history-box"),
+      historyScroll
+    );
   }
 
   private renderDetailsIfNeeded(): void {

@@ -999,7 +999,7 @@ Sau khi cài:
 - Pi-specific profile nằm trong `src/features/pi-agent/live-tool-output.ts`, chỉ match bundled Pi `bash` và năm `delegate_*` tool allowlist; custom agent chỉ trùng id `pi` không được parse theo Pi profile nếu thiếu marker.
 - `SessionOutputPipeline` xử lý replacement-aware merge theo property presence, revision tăng đơn điệu, per-tool throttle 175ms, completion/reset/dispose cancellation, và progress projection bounded trước khi gửi webview.
 - Legacy path dùng shared pipeline cho ACP session updates/tool lifecycle; multi-session truyền profile theo session agent, giữ progress ephemeral, không touch session ordering/manager churn, và transcript compact latest progress theo tool id.
-- Webview nhận `toolCallProgress`, reuse cùng tool block, bỏ stale revision, giữ spinner, render text/terminal/subagent presentation; terminal live output luôn đi qua `ansiToHtml()` để hỗ trợ CR/backspace/erase kể cả khi không có SGR color.
+- Webview nhận `toolCallProgress`, reuse cùng tool block, bỏ stale revision, giữ spinner, render text/terminal/subagent presentation; terminal live output luôn đi qua `ansiToHtml()` để hỗ trợ CR/backspace/erase kể cả khi không có SGR color. Sub-agent `Recent nested tools` render trong scroll box riêng giống `Live preview`, không dùng `.tool-output` để tránh ảnh hưởng copy/output scroll.
 - Tests tập trung được thêm cho adapter fixture, normalizer/Pi profile, replacement/throttle/final-wins lifecycle, webview revision/XSS/terminal rendering, legacy parity và multi-session compaction.
 - Quality gates đã pass: typecheck, ESLint trên các file thay đổi, toàn bộ VS Code test suite qua `xvfb-run` (`753 passing`), production package, VSIX package và local install.
 

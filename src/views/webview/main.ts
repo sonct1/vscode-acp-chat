@@ -139,6 +139,10 @@ export class WebviewController implements MessageHandler {
     const chatFontSizeResult = this.features?.chatFontSize.handleMessage(msg);
     if (chatFontSizeResult === true) return true;
 
+    const chatAutoScrollResult =
+      this.features?.chatAutoScroll.handleMessage(msg);
+    if (chatAutoScrollResult === true) return true;
+
     const messageQueueResult = this.features?.messageQueue.handleMessage(msg);
     if (messageQueueResult === true) return true;
 

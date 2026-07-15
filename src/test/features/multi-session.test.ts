@@ -191,8 +191,15 @@ class FakeClient {
     this.cancelCalls += 1;
   }
 
-  async setMode(): Promise<void> {}
-  async setModel(): Promise<void> {}
+  setModeCalls = 0;
+  setModelCalls = 0;
+
+  async setMode(): Promise<void> {
+    this.setModeCalls += 1;
+  }
+  async setModel(): Promise<void> {
+    this.setModelCalls += 1;
+  }
   async setConfigOption(configId: string, value: string): Promise<void> {
     this.setConfigOptionCalls.push({ configId, value });
   }
@@ -436,15 +443,19 @@ suite("multi-session feature", () => {
     assert.strictEqual(clients.length, 1);
 
     await controller.newChat();
+    // newChat starts runtime in background; let it complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.strictEqual(clients[0].cancelCalls, 0);
     assert.strictEqual(clients.length, 2);
-    assert.strictEqual(managers[1].newCalls, 1);
+    // New Chat no longer creates an ACP session immediately
+    assert.strictEqual(managers[1].newCalls, 0);
     assert.strictEqual(clients[1].state, "connected");
 
     const promptB = controller.sendActiveMessage("B");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.strictEqual(clients.length, 2);
+    // ACP session is created on first send
     assert.strictEqual(managers[1].newCalls, 1);
     assert.strictEqual(clients[0].promptResolvers.length, 1);
     assert.strictEqual(clients[1].promptResolvers.length, 1);
@@ -1307,13 +1318,24 @@ suite("multi-session feature", () => {
     });
 
     await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const initialState = controller.getStateForTest();
-    let active = initialState.sessions.find(
-      (session) => session.localSessionId === initialState.activeLocalSessionId
+    // Draft is created but no ACP session yet
+    let active = controller.getStateForTest().sessions.find(
+      (session) => session.localSessionId === controller.getStateForTest().activeLocalSessionId
     );
-    assert.strictEqual(active?.title, `Pi ${fullSessionId}`);
+    assert.strictEqual(active?.acpSessionId, undefined);
+    assert.strictEqual(active?.title, "Untitled chat");
+
+    // First send creates the ACP session with the expected session ID
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    active = controller.getStateForTest().sessions.find(
+      (session) => session.localSessionId === controller.getStateForTest().activeLocalSessionId
+    );
     assert.strictEqual(active?.acpSessionId, fullSessionId);
+    assert.strictEqual(active?.title, `Pi ${fullSessionId}`);
 
     clients[0].sessionUpdate?.({
       sessionId: fullSessionId,
@@ -1332,6 +1354,9 @@ suite("multi-session feature", () => {
         (session) => session.localSessionId === active?.localSessionId
       );
     assert.strictEqual(active?.title, "Backend debug");
+
+    clients[0].resolvePrompt();
+    await prompt;
     controller.dispose();
   });
 
@@ -1520,6 +1545,168 @@ suite("multi-session feature", () => {
     await prompt;
     await ready;
     controller.dispose();
+  });
+
+  test("newChat activates a draft before background connect resolves", async () => {
+    let releaseConnect!: () => void;
+    const { controller, messages, clients } = createController((client) => {
+      client.connectPromise = new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+      });
+    });
+
+    await controller.newChat();
+
+    // newChat resolved; draft is active but connect hasn't resolved yet
+    const state = controller.getStateForTest();
+    const active = state.sessions.find(
+      (s) => s.localSessionId === state.activeLocalSessionId
+    )!;
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].connectCalls, 1);
+    assert.strictEqual(clients[0].state, "disconnected"); // still connecting
+    // Status is "starting" because startRuntime completes synchronously
+    // up to setting the status before yielding on connectPromise
+    assert.strictEqual(active.status, "starting");
+
+    // Verify snapshot was posted before connect resolved
+    assert.ok(
+      messages.some((m) => m.type === "feature.multi-session.snapshot")
+    );
+
+    releaseConnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.dispose();
+  });
+
+  test("newChat does not call manager.newSession() by itself", async () => {
+    const { controller, clients, managers } = createController();
+
+    await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = controller.getStateForTest();
+    const active = state.sessions.find(
+      (s) => s.localSessionId === state.activeLocalSessionId
+    )!;
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.acpSessionId, undefined);
+    assert.strictEqual(active.status, "idle");
+    controller.dispose();
+  });
+
+  test("background connect failure does not reject newChat and leaves retryable draft", async () => {
+    const { controller, messages, clients, managers } = createController(
+      (client) => {
+        client.connectError = new Error("connect failed");
+      }
+    );
+
+    await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const state = controller.getStateForTest();
+    const active = state.sessions.find(
+      (s) => s.localSessionId === state.activeLocalSessionId
+    )!;
+    const errors = messages.filter(
+      (m) =>
+        m.type === "feature.multi-session.delta" &&
+        (m.event as any)?.message?.type === "error"
+    );
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].disposeCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.status, "draft");
+    assert.match(active.lastError ?? "", /connect failed/);
+    assert.strictEqual(errors.length, 1);
+    controller.dispose();
+  });
+
+  test("first send during pending newChat background startup reuses the same client and creates exactly one ACP session before send", async () => {
+    let releaseConnect!: () => void;
+    let resolveConnectStarted!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      resolveConnectStarted = resolve;
+    });
+    const { controller, clients, managers } = createController((client) => {
+      client.connectPromise = new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+        resolveConnectStarted();
+      });
+    });
+
+    // Start newChat (background runtime begins connecting)
+    const newChatPromise = controller.newChat();
+    await connectStarted;
+
+    // Send a message while runtime is still connecting
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Only one client, prompt not yet sent (connect still pending)
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].promptResolvers.length, 0);
+
+    // Release the connect
+    releaseConnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // After connect: single client, single ACP session, one send proceeding
+    assert.strictEqual(clients.length, 1);
+    assert.strictEqual(clients[0].connectCalls, 1);
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(clients[0].promptResolvers.length, 1);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    await newChatPromise;
+    controller.dispose();
+  });
+
+  test("preference restore skips setMode/setModel when metadata already advertises current values", async () => {
+    const state = new TestMemento();
+    await state.update("vscode-acp-chat.agentPreferences.v1", {
+      "test-agent": {
+        modeId: "chat",
+        modelId: "claude-sonnet-4",
+        configOptionValues: {},
+        starredModels: [],
+      },
+    });
+
+    const { controller: ctrl, clients } = createController(
+      (client) => {
+        client.metadata = {
+          modes: {
+            currentModeId: "chat",
+            availableModes: [{ id: "chat", name: "Chat" }],
+          },
+          models: {
+            currentModelId: "claude-sonnet-4",
+            availableModels: [
+              { modelId: "claude-sonnet-4", name: "Claude Sonnet 4" },
+            ],
+          },
+          genericConfigOptions: [],
+          commands: null,
+        };
+      },
+      { state }
+    );
+
+    // First send triggers ensureRuntime which restores preferences
+    const prompt = ctrl.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // setMode and setModel should NOT be called since current values match
+    assert.strictEqual(clients[0].setModeCalls, 0);
+    assert.strictEqual(clients[0].setModelCalls, 0);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    ctrl.dispose();
   });
 
   test("start chat opens the active chat surface", async () => {

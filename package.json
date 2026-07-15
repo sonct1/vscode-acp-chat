@@ -174,6 +174,20 @@
           "default": true,
           "description": "Enable the collective diff summary for file modifications."
         },
+        "vscode-acp-chat.autoScroll.bottomThreshold": {
+          "type": "number",
+          "default": 100,
+          "minimum": 0,
+          "maximum": 500,
+          "description": "Distance from the bottom of the chat transcript in pixels below which auto-scroll remains enabled. A value of 0 means only the exact bottom keeps auto-scroll active. Default 100."
+        },
+        "vscode-acp-chat.autoScroll.settleFrames": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of animation frames to keep pinning the chat transcript to the bottom after each content change. Higher values reduce missed bottom-locking during streaming at the cost of stronger bottom pinning. Default 3."
+        },
         "vscode-acp-chat.fontSize": {
           "type": "number",
           "default": 0,

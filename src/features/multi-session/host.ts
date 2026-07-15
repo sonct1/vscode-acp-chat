@@ -411,18 +411,34 @@ export class MultiSessionHostController implements vscode.Disposable {
     const session = this.createDraft();
     this.activate(session.localSessionId, options);
 
-    try {
-      await this.ensureRuntime(session, true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      session.status = "draft";
-      session.lastError = message;
-      this.append(session, { type: "error", text: message });
-      this.sendState();
-      if (session.localSessionId === this.activeLocalSessionId) {
-        this.sendSnapshot();
+    // Start runtime in background; do not block UI on connect or create ACP session.
+    // The ensureRuntime guard (runtimeStartPromise) prevents duplicate client/session
+    // when the first send races with background startup.
+    this.ensureRuntime(session, false).then(
+      () => {
+        if (!this.sessions.has(session.localSessionId)) return;
+        if (!session.acpSessionId && session.status === "starting") {
+          session.status = "idle";
+          this.touch(session);
+          this.sendState();
+        }
+        if (session.localSessionId === this.activeLocalSessionId) {
+          this.sendSnapshot();
+        }
+      },
+      (error) => {
+        if (!this.sessions.has(session.localSessionId)) return;
+        const message = error instanceof Error ? error.message : String(error);
+        session.lastError = message;
+        session.status = "draft";
+        this.append(session, { type: "error", text: message });
+        this.touch(session);
+        this.sendState();
+        if (session.localSessionId === this.activeLocalSessionId) {
+          this.sendSnapshot();
+        }
       }
-    }
+    );
   }
 
   openManager(): void {
@@ -1889,7 +1905,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       preference.modeId &&
       metadata?.modes?.availableModes.some(
         (mode) => mode.id === preference.modeId
-      )
+      ) &&
+      metadata.modes.currentModeId !== preference.modeId
     ) {
       await client.setMode(preference.modeId);
     }
@@ -1897,7 +1914,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       preference.modelId &&
       metadata?.models?.availableModels.some(
         (model) => model.modelId === preference.modelId
-      )
+      ) &&
+      metadata.models.currentModelId !== preference.modelId
     ) {
       await client.setModel(preference.modelId);
     }

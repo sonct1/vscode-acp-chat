@@ -48,6 +48,8 @@ let lastSettingsSignature: {
 let lastSessionsDir: string | null = null
 let lastSnapshot: PiSessionDiscoverySnapshot | null = null
 
+const WARM_SNAPSHOT_TTL_MS = 5000
+
 function getPiAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR) : join(homedir(), '.pi', 'agent')
 }
@@ -265,6 +267,35 @@ export function discoverPiSessionsSnapshot(opts: { force?: boolean } = {}): PiSe
     lastSettingsSignature.settingsMtimeMs !== signature.settingsMtimeMs ||
     lastSettingsSignature.settingsSize !== signature.settingsSize
   const sessionsDirChanged = lastSessionsDir !== sessionsDir
+
+  // Fast path: return cached snapshot when nothing changed and snapshot is fresh
+  if (!opts.force && !settingsChanged && !sessionsDirChanged && lastSnapshot) {
+    if (Date.now() - lastSnapshot.createdAt < WARM_SNAPSHOT_TTL_MS) {
+      const snapshot: PiSessionDiscoverySnapshot = Object.freeze({
+        sessionsDir: lastSnapshot.sessionsDir,
+        settingsPath: lastSnapshot.settingsPath,
+        settingsMtimeMs: lastSnapshot.settingsMtimeMs,
+        settingsSize: lastSnapshot.settingsSize,
+        createdAt: Date.now(),
+        items: lastSnapshot.items,
+        counters: Object.freeze({
+          filesEnumerated: 0,
+          filesStat: 0,
+          metadataParsed: 0,
+          unchangedIndexHits: 0,
+          deletedIndexEntries: 0,
+          discoveryScans: 0
+        })
+      })
+      if (process.env.PI_ACP_DEBUG_HISTORY === 'true') {
+        console.warn(
+          `[pi-acp] history discovery: warm-cached snapshotTtlMs=${(Date.now() - lastSnapshot.createdAt).toFixed(0)}`
+        )
+      }
+      lastSnapshot = snapshot
+      return snapshot
+    }
+  }
 
   if (opts.force || settingsChanged || sessionsDirChanged) {
     metadataCache.clear()

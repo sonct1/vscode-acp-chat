@@ -5,6 +5,7 @@ import {
   type ChatMentionTarget,
 } from "./add-to-chat/host";
 import { registerOpenSettingsHostFeature } from "./open-settings/host";
+import { registerChatAutoScrollHostFeature } from "./chat-auto-scroll/host";
 import { registerChatFontSizeHostFeature } from "./chat-font-size/host";
 import { registerClickableResourceLinksHostFeature } from "./clickable-resource-links/host";
 import {
@@ -16,6 +17,7 @@ import { registerMessageQueueHostFeature } from "./message-queue/host";
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
   agentSelection?: ReturnType<typeof registerAgentSelectionHostFeature>;
+  chatAutoScroll?: ReturnType<typeof registerChatAutoScrollHostFeature>;
   chatFontSize?: ReturnType<typeof registerChatFontSizeHostFeature>;
   clickableResourceLinks?: ReturnType<
     typeof registerClickableResourceLinksHostFeature
@@ -34,6 +36,9 @@ export function registerHostFeatures(options: {
   onQuickSwitch?: () => Thenable<void> | void;
 }): HostFeatureRegistry {
   const features: HostFeatureRegistry = {
+    chatAutoScroll: registerChatAutoScrollHostFeature({
+      postMessage: options.postMessage,
+    }),
     chatFontSize: registerChatFontSizeHostFeature({
       postMessage: options.postMessage,
     }),

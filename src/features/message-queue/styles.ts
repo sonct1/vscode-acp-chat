@@ -14,6 +14,10 @@ export const messageQueueStyles = `
   text-overflow: ellipsis;
 }
 
+.message-queue-preview:not([hidden]) + #input-container {
+  padding-top: 4px;
+}
+
 .message-queue-preview:empty,
 .message-queue-preview[hidden] {
   display: none;

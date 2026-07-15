@@ -26,6 +26,7 @@ Current plans:
 - [Bundled Antigravity ACP Agent](./implement-bundled-antigravity-agent.md) — fork, harden, and bundle an opt-in Antigravity ACP adapter that reuses the installed `agy` CLI and its OAuth session.
 - [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md) — fix bundled Pi history loading by replaying full active-path transcript from Pi JSONL files instead of compacted RPC state.
 - [Fast Chat History Loading](./implement-fast-chat-history-loading.md) — optimize agent-scoped history listing and restoration with Pi metadata indexing, paged cached pickers, single-pass multi-session publication, and finalized webview rendering.
+- [Chat Startup and History Load Performance](./implement-chat-startup-history-performance.md) — giảm độ trễ cảm nhận của New Chat, Pi history list/load và repeated session-switch bằng instrumentation, async runtime startup, Pi indexing/replay reduction và DOM cache rollout.
 - [Pi Agent Toolbar Thinking and Context Usage Fixes](./implement-pi-agent-toolbar-context-fixes.md) — remove duplicate Pi thinking selectors and surface Pi context/token usage in the chat toolbar.
 - [Pi Context Usage Synchronization](./implement-pi-context-usage-sync.md) — keep ACP Chat context usage synchronized with Pi terminal lifecycle, clear stale post-compaction values, and refresh on model changes.
 - [Live Tool Output — Rollout Pi First](./implement-pi-live-tool-output.md) — add generic non-final ACP `tool_call_update` plumbing, activate bundled Pi bash/sub-agent profiles first, then expand safe textual progress to other agents.
@@ -39,5 +40,6 @@ Current plans:
 - [Searchable Model Picker](./implement-searchable-model-picker.md) — add search/filter support to the model selection dropdown.
 - [Secondary Sidebar Settings Action](./implement-secondary-sidebar-settings-action.md) — add a settings gear action to the ACP Chat secondary sidebar title area.
 - [Low-Resource Multi-Session Telemetry](./implement-low-resource-multi-session-telemetry.md) — remove live unread/diff/conflict session telemetry and disable costly multi-session bookkeeping for lower CPU/RAM use.
+- [Built-in Swarm Agent Infrastructure](./implement-built-in-swarm-agent.md) — add an experimental built-in Root Orchestrator infrastructure with user-defined roles/workflows, dedicated worker sessions, monitor/state normalization, capability policies, locks, and live progress.
 
 Do not put long-lived technical design, API contracts, backlog items, active task status, or operational runbooks here. Use Beads for executable tasks and status.

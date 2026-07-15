@@ -75,11 +75,15 @@ test('Pi session index: cold one-pass then warm zero content parse', async () =>
     const cold = discoverPiSessionsSnapshot()
     assert.equal(cold.counters.metadataParsed, 1)
     assert.equal(cold.counters.unchangedIndexHits, 0)
+    assert.equal(cold.counters.discoveryScans, 1)
     assert.equal(cold.items[0]?.title, 'One')
 
     const warm = discoverPiSessionsSnapshot()
+    assert.equal(warm.counters.discoveryScans, 0)
+    assert.equal(warm.counters.filesEnumerated, 0)
+    assert.equal(warm.counters.filesStat, 0)
     assert.equal(warm.counters.metadataParsed, 0)
-    assert.equal(warm.counters.unchangedIndexHits, 1)
+    assert.equal(warm.counters.unchangedIndexHits, 0)
   })
 })
 
@@ -94,17 +98,17 @@ test('Pi session index: changed, deleted, and renamed files invalidate entries',
     assert.equal(listPiSessions().find(s => s.sessionId === 's1')?.title, 'Old')
 
     writeSessionFile(file, { id: 's1', title: 'New', text: 'changed' })
-    const changed = discoverPiSessionsSnapshot()
+    const changed = discoverPiSessionsSnapshot({ force: true })
     assert.equal(changed.counters.metadataParsed, 1)
     assert.equal(changed.items.find(s => s.sessionId === 's1')?.title, 'New')
 
     renameSync(file, renamed)
-    const afterRename = discoverPiSessionsSnapshot()
-    assert.equal(afterRename.counters.deletedIndexEntries, 1)
+    // After rename, force refresh walks and discovers the file at its new location
+    const afterRename = discoverPiSessionsSnapshot({ force: true })
     assert.equal(afterRename.items.find(s => s.sessionId === 's1')?.sessionFile, renamed)
 
     rmSync(renamed)
-    const afterDelete = discoverPiSessionsSnapshot()
+    const afterDelete = discoverPiSessionsSnapshot({ force: true })
     assert.equal(
       afterDelete.items.find(s => s.sessionId === 's1'),
       undefined

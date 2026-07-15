@@ -9,11 +9,15 @@ EXT_VERSION="$(node -p "require('./package.json').version")"
 EXT_PUBLISHER="$(node -p "require('./package.json').publisher")"
 VSIX_PATH="${TMPDIR:-/tmp}/${EXT_NAME}-${EXT_VERSION}.vsix"
 
-echo "==> Linting"
-npx eslint src
+echo "==> Installing dependencies"
+if command -v pnpm &>/dev/null && [ -f "pnpm-lock.yaml" ]; then
+  pnpm install
+else
+  npm install
+fi
 
-echo "==> Building production bundle"
-npm run package
+echo "==> Linting"
+npm run lint
 
 echo "==> Packaging VSIX: ${VSIX_PATH}"
 npx vsce package --out "$VSIX_PATH"

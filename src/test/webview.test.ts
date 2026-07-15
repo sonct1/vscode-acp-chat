@@ -756,6 +756,62 @@ suite("Webview", () => {
       );
     });
 
+    test("renders queued steering preview above the prompt input", () => {
+      const preview = document.getElementById("message-queue-preview");
+      const composer = document.getElementById("chat-input-area");
+      const inputContainer = document.getElementById("input-container");
+
+      assert.ok(preview);
+      assert.strictEqual(preview.parentElement, composer);
+      assert.strictEqual(preview.nextElementSibling, inputContainer);
+      assert.strictEqual(preview.hidden, true);
+
+      controller.handleMessage({
+        type: "feature.message-queue.state",
+        sessionId: "local-a",
+        revision: 1,
+        ownership: "host",
+        processing: true,
+        steering: [
+          {
+            id: "steer-1",
+            intent: "steer",
+            createdAt: 1,
+            payload: {
+              text: "lỗi muốn thêm 1 icon ở góc phải bên dưới trên chat input khi tôi scroll lên",
+              images: [],
+              mentions: [],
+              composerHtml:
+                "lỗi muốn thêm 1 icon ở góc phải bên dưới trên chat input khi tôi scroll lên",
+            },
+          },
+        ],
+        followUp: [],
+        effectiveSteering: "after-current-acp-turn",
+      } as any);
+
+      assert.strictEqual(preview.hidden, false);
+      assert.ok(preview.textContent?.includes("Steering (1): lỗi muốn thêm"));
+      assert.ok(
+        preview.textContent?.includes("Alt+Up to edit queued messages")
+      );
+      assert.strictEqual(preview.nextElementSibling, inputContainer);
+
+      controller.handleMessage({
+        type: "feature.message-queue.state",
+        sessionId: "local-a",
+        revision: 2,
+        ownership: "host",
+        processing: false,
+        steering: [],
+        followUp: [],
+        effectiveSteering: "after-current-acp-turn",
+      } as any);
+
+      assert.strictEqual(preview.hidden, true);
+      assert.strictEqual(preview.textContent, "");
+    });
+
     suite("addMessage", () => {
       test("adds user message to DOM", () => {
         controller.messageList.addMessage("Hello!", "user");
@@ -1223,6 +1279,171 @@ suite("Webview", () => {
         assert.strictEqual(details?.querySelector("svg"), null);
         assert.ok(details?.textContent?.includes("<img src=x"));
         assert.ok(details?.textContent?.includes("<script>"));
+        assert.ok(details?.textContent?.includes('<svg onload="alert(2)">'));
+      });
+
+      test("renders sub-agent recent nested tools in a separate scrollable box", () => {
+        const { runAllFrames } = installAnimationFrameQueue();
+        controller.handleMessage({
+          type: "toolCallProgress",
+          toolCallId: "delegate-history",
+          title: "delegate_explore",
+          status: "in_progress",
+          revision: 1,
+          presentation: {
+            format: "subagent",
+            text: "live preview",
+            truncated: false,
+            subagent: {
+              toolHistory: [
+                { name: "read", summary: "src/file.ts" },
+                { name: "grep", summary: "pattern" },
+              ],
+            },
+          },
+        });
+
+        const details = elements.messagesEl.querySelector(
+          ".tool-details-content"
+        );
+        const historyBox = details?.querySelector<HTMLElement>(
+          ".tool-history-box"
+        );
+        assert.ok(historyBox);
+        assert.strictEqual(historyBox.classList.contains("tool-output"), false);
+        assert.ok(historyBox.querySelector(".tool-history-list"));
+        assert.ok(historyBox.textContent?.includes("read — src/file.ts"));
+
+        const output = elements.messagesEl.querySelector(".tool-output");
+        assert.strictEqual(output?.textContent, "live preview");
+        assert.strictEqual(details?.querySelectorAll(".tool-output").length, 1);
+
+        let scrollHeight = 1000;
+        let scrollTop = 800;
+        const clientHeight = 200;
+        Object.defineProperty(elements.messagesEl, "scrollHeight", {
+          configurable: true,
+          get: () => scrollHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "clientHeight", {
+          configurable: true,
+          get: () => clientHeight,
+        });
+        Object.defineProperty(elements.messagesEl, "scrollTop", {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        });
+
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+        historyBox.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        );
+        scrollTop = 500;
+        elements.messagesEl.dispatchEvent(new window.Event("scroll"));
+
+        scrollHeight = 2400;
+        controller.handleMessage({ type: "streamChunk", text: "More output" });
+        runAllFrames();
+
+        assert.notStrictEqual(scrollTop, 500);
+      });
+
+      test("preserves sub-agent recent nested tools scroll across live updates", () => {
+        const originalScrollHeight = Object.getOwnPropertyDescriptor(
+          window.HTMLElement.prototype,
+          "scrollHeight"
+        );
+        const originalClientHeight = Object.getOwnPropertyDescriptor(
+          window.HTMLElement.prototype,
+          "clientHeight"
+        );
+
+        Object.defineProperty(window.HTMLElement.prototype, "scrollHeight", {
+          configurable: true,
+          get() {
+            return this instanceof window.HTMLElement &&
+              this.classList.contains("tool-history-box")
+              ? 1000
+              : 0;
+          },
+        });
+        Object.defineProperty(window.HTMLElement.prototype, "clientHeight", {
+          configurable: true,
+          get() {
+            return this instanceof window.HTMLElement &&
+              this.classList.contains("tool-history-box")
+              ? 100
+              : 0;
+          },
+        });
+
+        try {
+          controller.handleMessage({
+            type: "toolCallProgress",
+            toolCallId: "delegate-history-scroll",
+            title: "delegate_explore",
+            status: "in_progress",
+            revision: 1,
+            presentation: {
+              format: "subagent",
+              text: "first preview",
+              truncated: false,
+              subagent: {
+                toolHistory: [{ name: "read", summary: "src/file.ts" }],
+              },
+            },
+          });
+
+          const historyBox = elements.messagesEl.querySelector<HTMLElement>(
+            ".tool-history-box"
+          );
+          assert.ok(historyBox);
+          historyBox.scrollTop = 250;
+
+          controller.handleMessage({
+            type: "toolCallProgress",
+            toolCallId: "delegate-history-scroll",
+            title: "delegate_explore",
+            status: "in_progress",
+            revision: 2,
+            presentation: {
+              format: "subagent",
+              text: "second preview",
+              truncated: false,
+              subagent: {
+                toolHistory: [
+                  { name: "read", summary: "src/file.ts" },
+                  { name: "grep", summary: "pattern" },
+                ],
+              },
+            },
+          });
+
+          const updatedHistoryBox =
+            elements.messagesEl.querySelector<HTMLElement>(
+              ".tool-history-box"
+            );
+          assert.ok(updatedHistoryBox);
+          assert.strictEqual(updatedHistoryBox.scrollTop, 250);
+        } finally {
+          if (originalScrollHeight) {
+            Object.defineProperty(
+              window.HTMLElement.prototype,
+              "scrollHeight",
+              originalScrollHeight
+            );
+          }
+          if (originalClientHeight) {
+            Object.defineProperty(
+              window.HTMLElement.prototype,
+              "clientHeight",
+              originalClientHeight
+            );
+          }
+        }
       });
 
       test("handles toolCallComplete", () => {
