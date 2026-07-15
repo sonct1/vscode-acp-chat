@@ -12,7 +12,7 @@
 
 ## 🚀 Features
 
-- **Multi-Agent Support** — Connect to OpenCode, Pi, Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
+- **Multi-Agent Support** — Connect to OpenCode, Pi, Antigravity (experimental opt-in), Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
 - **Native Chat Interface** — Integrated sidebar chat that feels like a native part of VS Code.
 - **Context-Aware** — Send code selections or terminal output directly to the chat via context menus.
 - **Tool Visibility** — See what commands the AI runs with expandable input/output and file diffs.
@@ -35,6 +35,7 @@ You need at least one ACP-compatible agent installed and available in your `$PAT
 - **[Pi](https://github.com/earendil-works/pi)**: `npm install -g @earendil-works/pi-coding-agent`
 - **[Claude Code](https://claude.ai/code)**: `npm install -g @anthropic-ai/claude-code`
 - **[Gemini CLI](https://github.com/google/gemini-cli)**: `npm install -g @google/gemini-cli`
+- **[Google Antigravity](https://antigravity.google/)** (experimental bundled adapter, disabled by default): install the official `agy` CLI separately, then run `agy` and `agy models` in an interactive terminal before enabling `vscode-acp-chat.antigravity.enabled`.
 
 > [!IMPORTANT]
 > Ensure you have completed the agent's login/authentication setup before connecting via VS Code.
@@ -63,6 +64,7 @@ The extension automatically detects installed agents by checking your system's `
 | -------------- | ------------------------------------------- | -------------- |
 | OpenCode       | `opencode acp`                              | Checks `$PATH` |
 | Pi             | bundled `pi-acp` adapter                    | Checks `pi`    |
+| Antigravity    | bundled experimental adapter                | Checks `agy`   |
 | Claude Code    | `npx @agentclientprotocol/claude-agent-acp` | Checks `$PATH` |
 | Codex CLI      | `npx @agentclientprotocol/codex-acp`        | Checks `$PATH` |
 | CodeBuddy Code | `codebuddy --acp`                           | Checks `$PATH` |
@@ -77,6 +79,28 @@ The extension automatically detects installed agents by checking your system's `
 | Qwen Code      | `qwen --acp`                                | Checks `$PATH` |
 | Kiro CLI       | `kiro-cli acp`                              | Checks `$PATH` |
 | Cursor Cli     | `agent acp`                                 | Checks `$PATH` |
+
+### Antigravity (Experimental, opt-in)
+
+The extension can launch a bundled ACP adapter for Google Antigravity with built-in id `antigravity`, but it is **disabled by default**. Enable `vscode-acp-chat.antigravity.enabled` only after reviewing Google's official terms and FAQ:
+
+- https://antigravity.google/terms
+- https://antigravity.google/docs/faq
+
+Google states that third-party software access using Antigravity OAuth may violate the Antigravity Terms of Service and may result in account suspension or termination. This extension and bundled adapter are unofficial and unsupported by Google.
+
+Setup:
+
+```bash
+agy
+agy models
+```
+
+Use the official `agy` CLI to install/sign in and verify models. The bundled adapter does not install `agy`, does not store OAuth credentials, and does not require or claim API-key authentication for this path; it reuses the existing `agy` OAuth/keyring session. It runs with VS Code's Electron Node runtime, not Bun.
+
+Antigravity modes are the native `agy` modes exposed by the adapter: default, `accept-edits`, and `plan`. The adapter does not add `--dangerously-skip-permissions`. Interactive permission prompts and MCP configuration remain governed by Antigravity/`agy`; VS Code ACP MCP server forwarding is not passed through to `agy`, so configure MCP servers in Antigravity itself.
+
+If you previously configured an external custom agent with `id: "antigravity"`, it continues to override the bundled entry when the bundled feature is enabled, and it continues to work when the bundled feature is disabled. Remove that custom entry only when you want to migrate to the bundled adapter.
 
 ### Custom Agents
 

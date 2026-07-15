@@ -67,6 +67,7 @@ export function updateContextUsageRing(
       "usage-full"
     );
     wrapper.removeAttribute("acp-title");
+    wrapper.removeAttribute("aria-label");
     return;
   }
 
@@ -96,7 +97,10 @@ export function updateContextUsageRing(
   fg.style.strokeDasharray = `${clamped * circumference} ${circumference}`;
 
   const pct = (ratio * 100).toFixed(1);
-  const lines: string[] = [`Total: ${size}`, `Used: ${used} (${pct}%)`];
+  const lines: string[] = [
+    `Context window: ${size.toLocaleString()}`,
+    `Used: ${used.toLocaleString()} (${pct}%)`,
+  ];
   if (data.cost && typeof data.cost.amount === "number" && data.cost.currency) {
     lines.push(
       `Cost: ${formatContextCost(data.cost.amount, data.cost.currency)}`

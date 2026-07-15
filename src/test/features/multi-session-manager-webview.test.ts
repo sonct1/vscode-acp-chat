@@ -62,7 +62,8 @@ suite("multi-session manager webview", () => {
       })
     );
 
-    const summary = dom.window.document.querySelector(".manager-summary")?.textContent ?? "";
+    const summary =
+      dom.window.document.querySelector(".manager-summary")?.textContent ?? "";
     assert.ok(summary.includes("Running 1"));
     assert.ok(summary.includes("Waiting 1"));
     assert.ok(summary.includes("Open 2"));
@@ -132,6 +133,20 @@ suite("multi-session manager webview", () => {
     );
   });
 
+  test("narrow sidebar styles stack filters and prevent overflow", () => {
+    new MultiSessionManagerWebview(dom.window.document);
+
+    const styles = [...dom.window.document.querySelectorAll("style")]
+      .map((style) => style.textContent ?? "")
+      .join("\n");
+
+    assert.ok(styles.includes("@media(max-width:360px)"));
+    assert.ok(styles.includes(".manager-filters{flex-direction:column}"));
+    assert.ok(styles.includes("height:100vh;min-height:0"));
+    assert.ok(styles.includes("flex:1;flex-direction:column"));
+    assert.ok(styles.includes("min-height:0;overflow:auto"));
+  });
+
   test("permission-waiting rows expose non-destructive stop action", () => {
     new MultiSessionManagerWebview(dom.window.document);
     dom.window.dispatchEvent(
@@ -197,7 +212,7 @@ suite("multi-session manager webview", () => {
     );
   });
 
-  test("keeps same-priority sessions ordered by creation time instead of activity", () => {
+  test("orders all sessions by creation time regardless of status or activity", () => {
     new MultiSessionManagerWebview(dom.window.document);
     dom.window.dispatchEvent(
       new dom.window.MessageEvent("message", {
@@ -205,7 +220,7 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-b",
-          aggregate: { open: 2, running: 0, awaitingPermission: 0 },
+          aggregate: { open: 3, running: 1, awaitingPermission: 1 },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -229,6 +244,16 @@ suite("multi-session manager webview", () => {
               updatedAt: 10,
               pendingPermissionCount: 0,
             },
+            {
+              localSessionId: "local-c",
+              agentId: "test-agent",
+              agentName: "Test Agent",
+              title: "Oldest and needs permission",
+              status: "awaiting_permission",
+              createdAt: 0,
+              updatedAt: 200,
+              pendingPermissionCount: 1,
+            },
           ],
         },
       })
@@ -237,6 +262,7 @@ suite("multi-session manager webview", () => {
     const rows = [...dom.window.document.querySelectorAll(".session-row")];
     assert.ok(rows[0]?.textContent?.includes("Newer but quiet"));
     assert.ok(rows[1]?.textContent?.includes("Older but recently updated"));
+    assert.ok(rows[2]?.textContent?.includes("Oldest and needs permission"));
   });
 
   test("row actions post selected localSessionId", () => {

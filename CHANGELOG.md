@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## Unreleased
+
+### Features
+
+- Add an experimental bundled Google Antigravity ACP adapter behind the opt-in `vscode-acp-chat.antigravity.enabled` setting. It uses the official `agy` CLI and existing OAuth/keyring session, checks `agy` availability, and remains overrideable by a custom agent with `id: "antigravity"`.
+
+### BREAKING CHANGES
+
+- Raise the minimum VS Code engine to `^1.101.0` so the bundled Antigravity adapter can run on an Electron/Node 22 runtime with `node:sqlite`.
+- Antigravity is disabled by default and documented with Google's third-party OAuth/Terms of Service suspension or termination warning; review https://antigravity.google/terms and https://antigravity.google/docs/faq before enabling.
+
 ### [1.18.7](https://github.com/pengjiantao/vscode-acp-chat/compare/v1.18.6...v1.18.7) (2026-07-09)
 
 ### Bug Fixes

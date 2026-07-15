@@ -32,7 +32,7 @@ body {
 }
 
 .welcome-view h3 {
-  font-size: 16px;
+  font-size: var(--acp-font-size-lg);
   font-weight: 600;
   color: var(--vscode-foreground);
   margin-bottom: 8px;
@@ -111,7 +111,7 @@ body {
   background: var(--vscode-textBlockQuote-background);
   color: var(--vscode-descriptionForeground);
   align-self: center;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   padding: 6px 12px;
 }
 
@@ -125,7 +125,7 @@ body {
 .message-content-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 1.1em;
+  font-size: var(--acp-font-size-prose);
 }
 
 .message.assistant .message-content-text {
@@ -135,21 +135,25 @@ body {
 /* Assistant Message Content */
 .message.assistant h1,
 .message.assistant h2,
-.message.assistant h3 {
+.message.assistant h3,
+.message.assistant h4,
+.message.assistant h5,
+.message.assistant h6 {
   margin: 12px 0 6px 0;
+  font-size: var(--acp-font-size-normal);
   font-weight: 600;
 }
 
 .message.assistant h1 {
-  font-size: 1.3em;
+  font-size: var(--acp-font-size-heading-1);
 }
 
 .message.assistant h2 {
-  font-size: 1.15em;
+  font-size: var(--acp-font-size-heading-2);
 }
 
 .message.assistant h3 {
-  font-size: 1.05em;
+  font-size: var(--acp-font-size-heading-3);
 }
 
 .message.assistant p {
@@ -176,14 +180,14 @@ body {
   padding: 2px 4px;
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   font-family: var(--vscode-editor-font-family), monospace;
-  font-size: 0.9em;
+  font-size: var(--acp-font-size-code);
 }
 
 .message.assistant .code-block-wrapper code {
   background: transparent;
   padding: 0;
   border-radius: 0;
-  font-size: 0.9em;
+  font-size: var(--acp-font-size-code);
 }
 
 /* Code Block Wrapper with Copy Button */
@@ -303,7 +307,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
 }
 
 .message .typing-indicator {
@@ -368,7 +372,7 @@ body {
 /* Tool Calls */
 .tool-details {
   margin-top: 16px;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   color: var(--vscode-descriptionForeground);
 }
 
@@ -456,13 +460,13 @@ body {
   font-family: var(--vscode-editor-font-family), monospace;
   color: var(--vscode-terminal-ansiGreen);
   margin: 4px 0;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
 }
 
 .tool-input-preview {
   color: var(--vscode-descriptionForeground);
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   opacity: 0.8;
 }
 
@@ -476,7 +480,7 @@ body {
   padding: 6px 8px;
   background: var(--vscode-textCodeBlock-background);
   border-radius: var(--border-radius-small);
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   line-height: 1.3;
   overflow-x: auto;
   max-height: 150px;
@@ -697,7 +701,7 @@ body {
 .command-chip.readonly {
   padding: 1px 8px;
   color: var(--vscode-textLink-foreground);
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   vertical-align: middle;
   top: 0;
 }
@@ -941,7 +945,7 @@ body {
   color: var(--vscode-editorHoverWidget-foreground);
   border: 1px solid var(--vscode-editorHoverWidget-border);
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   /* Matches VSCode native tooltip size */
   pointer-events: none;
   white-space: pre-wrap;
@@ -1224,7 +1228,7 @@ body {
 .command-name {
   font-family: var(--vscode-editor-font-family), monospace;
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--acp-font-size-base);
   line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
@@ -1253,7 +1257,7 @@ body {
   opacity: 0.7;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
 }
 
 .command-item.selected .file-path {
@@ -1262,7 +1266,7 @@ body {
 }
 
 .command-description {
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   color: var(--vscode-descriptionForeground);
   opacity: 0.85;
   line-height: 1.3;
@@ -1277,7 +1281,7 @@ body {
 }
 
 .command-hint {
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   color: var(--vscode-descriptionForeground);
   opacity: 0.6;
   font-style: italic;
@@ -1291,7 +1295,7 @@ body {
 
 /* Keyboard shortcut hint */
 .command-shortcut {
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   padding: 2px 6px;
   background: var(--vscode-keybindingLabel-background);
   color: var(--vscode-keybindingLabel-foreground);
@@ -1354,7 +1358,7 @@ body {
 #command-autocomplete.empty::after {
   content: "No results";
   color: var(--vscode-descriptionForeground);
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   font-style: italic;
 }
 
@@ -1371,7 +1375,7 @@ body {
   padding: 4px 8px;
   outline: none;
   font-family: var(--vscode-font-family);
-  font-size: var(--acp-chat-font-size, var(--vscode-font-size));
+  font-size: var(--acp-font-size-base);
   color: var(--vscode-input-foreground);
   line-height: 1.5;
   box-sizing: border-box;
@@ -1434,10 +1438,10 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   cursor: pointer;
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
-  height: 24px;
+  min-height: 24px;
   max-width: 320px; /* cap width so long labels ellipsize */
   flex: 0 1 auto; /* shrink if needed, don't grow */
   background: var(--vscode-dropdown-background, rgba(255, 255, 255, 0.03));
@@ -1541,8 +1545,8 @@ body {
   width: 100%;
   box-sizing: border-box;
   padding: 4px 6px;
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--acp-font-size-xs);
+  line-height: 1.45;
   color: var(--vscode-input-foreground, var(--vscode-foreground));
   background: var(--vscode-input-background, var(--vscode-dropdown-background));
   border: 1px solid var(--vscode-input-border, var(--vscode-dropdown-border));
@@ -1686,7 +1690,7 @@ body {
 .dropdown-header {
   padding: 8px 12px 4px 12px;
   margin: 0 4px;
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   font-weight: bold;
   text-transform: uppercase;
   color: var(--vscode-descriptionForeground);
@@ -1758,7 +1762,7 @@ body {
 
 /* Keyboard shortcut hints */
 .kbd-hint {
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   color: var(--vscode-descriptionForeground);
   margin-left: auto;
 }
@@ -1770,7 +1774,7 @@ kbd {
   border-radius: 3px;
   padding: 1px 4px;
   font-family: var(--vscode-font-family);
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
 }
 
 /* Focus visible for accessibility */
@@ -1851,7 +1855,7 @@ kbd {
 
 .plan-title {
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--vscode-foreground);
@@ -1863,7 +1867,7 @@ kbd {
 
 .plan-counter {
   margin-left: auto;
-  font-size: 0.85em;
+  font-size: var(--acp-font-size-xs);
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
   padding: 2px 6px;
@@ -1899,7 +1903,7 @@ kbd {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  font-size: 13px;
+  font-size: var(--acp-font-size-base);
   line-height: 1.4;
   padding: 6px 14px;
   transition: background 0.1s ease;
@@ -1953,7 +1957,7 @@ kbd {
   margin: 4px 0 4px 6px;
   padding: 0;
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   overflow: hidden;
   width: 100%;
   opacity: 0.85;
@@ -2013,7 +2017,7 @@ kbd {
 .thought-title {
   font-weight: 500;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2053,7 +2057,7 @@ kbd {
   align-items: center;
   gap: 8px;
   font-family: var(--vscode-editor-font-family), monospace;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   transition: background 0.1s ease;
   border-radius: 0 var(--acp-flat-radius, var(--border-radius-small)) var(--acp-flat-radius, var(--border-radius-small)) 0;
   min-width: 0;
@@ -2150,6 +2154,7 @@ kbd {
 }
 
 .block-text {
+  font-size: var(--acp-font-size-prose);
   line-height: 1.6;
   padding: 4px 8px;
 }
@@ -2171,7 +2176,7 @@ kbd {
   background: var(--vscode-editor-lineHighlightBackground);
   border-bottom: 1px solid var(--vscode-panel-border);
   font-family: var(--vscode-font-family);
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
   user-select: none;
@@ -2192,7 +2197,7 @@ kbd {
 
 .diff-content {
   font-family: var(--vscode-editor-font-family), monospace;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   margin: 0;
   padding: 8px 0;
   overflow-x: auto;
@@ -2248,7 +2253,7 @@ kbd {
   text-align: center;
   color: var(--vscode-descriptionForeground);
   font-style: italic;
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   background: var(--vscode-editorWidget-background);
   border-top: 1px solid var(--vscode-widget-border);
   border-bottom: 1px solid var(--vscode-widget-border);
@@ -2261,7 +2266,7 @@ kbd {
   color: var(--vscode-descriptionForeground);
   font-style: italic;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
 }
 
 .permission-dialog-overlay {
@@ -2275,6 +2280,8 @@ kbd {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 12px;
+  overflow-y: auto;
 }
 
 .permission-dialog {
@@ -2283,6 +2290,7 @@ kbd {
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   width: 90%;
   max-width: 400px;
+  max-height: calc(100vh - 24px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2296,7 +2304,7 @@ kbd {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--acp-font-size-base);
 }
 
 .permission-icon {
@@ -2308,6 +2316,8 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .permission-tool-info {
@@ -2317,20 +2327,20 @@ kbd {
 }
 
 .permission-tool-kind {
-  font-size: 10px;
+  font-size: var(--acp-font-size-xxs);
   text-transform: uppercase;
   color: var(--vscode-descriptionForeground);
   letter-spacing: 0.5px;
 }
 
 .permission-tool-title {
-  font-size: 14px;
+  font-size: var(--acp-font-size-md);
   font-weight: 500;
   color: var(--vscode-foreground);
 }
 
 .permission-tool-desc {
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   color: var(--vscode-descriptionForeground);
   line-height: 1.4;
   margin-top: 4px;
@@ -2350,7 +2360,7 @@ kbd {
   color: var(--vscode-button-foreground);
   cursor: pointer;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
 }
 
 .permission-option-btn:hover {
@@ -2390,7 +2400,7 @@ kbd {
   padding: 8px 12px;
   background: var(--vscode-editor-lineHighlightBackground);
   border-bottom: 1px solid var(--vscode-panel-border);
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -2414,7 +2424,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   transition: background 0.1s;
   background: transparent;
   border: 1px solid transparent;
@@ -2487,7 +2497,7 @@ kbd {
   font-weight: 600;
   color: var(--vscode-descriptionForeground);
   margin-right: 8px;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   font-family: var(--vscode-editor-font-family);
   opacity: 0.9;
 }
@@ -2496,7 +2506,7 @@ kbd {
   font-family: var(--vscode-editor-font-family);
   color: var(--vscode-textLink-foreground);
   margin-left: 16px;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   word-break: break-all;
 }
 
@@ -2507,7 +2517,7 @@ kbd {
   margin: 4px 0;
   overflow-x: auto;
   font-family: var(--vscode-editor-font-family), monospace;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   border: 1px solid var(--vscode-widget-border);
 }
 
@@ -2521,12 +2531,12 @@ kbd {
   max-height: 300px;
   overflow-y: auto;
   font-family: var(--vscode-editor-font-family), monospace;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
   border: 1px solid var(--vscode-widget-border);
 }
 
 .tool-output.terminal {
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
 }
 
 /* Unified IO Block */
@@ -2590,13 +2600,19 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   font-weight: 600;
   color: var(--vscode-descriptionForeground);
 }
 
 .diff-summary-title {
   color: var(--vscode-foreground);
+}
+
+.diff-item-directory {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--acp-font-size-sm);
+  margin-left: 4px;
 }
 
 .diff-stat-added {
@@ -2651,7 +2667,7 @@ kbd {
   justify-content: space-between;
   align-items: center;
   padding: 6px 8px;
-  font-size: 11px;
+  font-size: var(--acp-font-size-xs);
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
 }
 
@@ -2797,6 +2813,8 @@ kbd {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 12px;
+  overflow-y: auto;
 }
 
 .confirm-dialog {
@@ -2805,6 +2823,7 @@ kbd {
   border-radius: var(--acp-flat-radius, var(--border-radius-small));
   width: 90%;
   max-width: 400px;
+  max-height: calc(100vh - 24px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2818,7 +2837,7 @@ kbd {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--acp-font-size-base);
 }
 
 .confirm-dialog-header .codicon {
@@ -2831,10 +2850,12 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .confirm-dialog-message {
-  font-size: 13px;
+  font-size: var(--acp-font-size-base);
   line-height: 1.5;
   color: var(--vscode-foreground);
 }
@@ -2853,7 +2874,7 @@ kbd {
   color: var(--vscode-button-foreground);
   cursor: pointer;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--acp-font-size-sm);
 }
 
 .confirm-dialog-btn:hover {

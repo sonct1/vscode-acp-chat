@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { searchWorkspaceFiles } from "../utils/file-search";
 import { getWorkspaceRoot } from "../utils/workspace";
@@ -11,6 +12,7 @@ import { DiffManager } from "../acp/diff-manager";
 import { FileHandler } from "../acp/file-handler";
 import { recordStructuredDiffsFromContent } from "../acp/structured-diff-recorder";
 import { TerminalHandler } from "../acp/terminal-handler";
+import { getPiContextUsageUnavailableMeta } from "../acp/pi-context-usage-meta";
 import {
   AgentSessionManager,
   globalStateSessionStore,
@@ -24,7 +26,13 @@ import {
   registerHostFeatures,
   type HostFeatureRegistry,
 } from "../features/register-host";
-import { MultiSessionManagerPanelController } from "../features/multi-session/manager-panel";
+import type {
+  MessageQueueController,
+  ComposerPayload,
+  MessageQueueHostMessage,
+} from "../features/message-queue";
+import { expandHomeResourcePath } from "../features/clickable-resource-links/host";
+import { MultiSessionManagerViewProvider } from "../features/multi-session/manager-view";
 import { showMultiSessionQuickSwitch } from "../features/multi-session/quick-switch";
 import {
   type SessionNotification,
@@ -52,6 +60,9 @@ interface WebviewMessage {
     | "sendMessage"
     | "ready"
     | "feature.multi-session.new"
+    | "feature.message-queue.submit"
+    | "feature.message-queue.abortAndRestore"
+    | "feature.message-queue.restoreQueued"
     | "feature.clickable-resource-links.openExternal"
     | "selectMode"
     | "selectModel"
@@ -93,6 +104,9 @@ interface WebviewMessage {
   requestId?: string;
   outcome?: { outcome: "selected" | "cancelled"; optionId?: string };
   confirmed?: boolean;
+  intent?: "steer" | "followUp";
+  payload?: ComposerPayload;
+  currentDraft?: ComposerPayload;
   action?: string;
   actionLabel?: string;
   checkExists?: boolean;
@@ -184,7 +198,7 @@ export class ChatViewProvider
   private terminalHandler: TerminalHandler;
   private documentSyncManager: DocumentSyncManager;
   private features: HostFeatureRegistry;
-  private multiSessionManagerPanel?: MultiSessionManagerPanelController;
+  private multiSessionManagerView?: MultiSessionManagerViewProvider;
   private permissionQueue: Array<{
     id: string;
     params: RequestPermissionRequest;
@@ -205,6 +219,7 @@ export class ChatViewProvider
 
   // Flag to track if the agent is currently generating a response
   private isGenerating = false;
+  private legacyMessageQueue?: MessageQueueController;
 
   // Pending confirmation requests from isGenerating guard
   private pendingConfirmations = new Map<
@@ -222,13 +237,13 @@ export class ChatViewProvider
       globalState,
       postMessage: (message) => this.postMessage(message),
       onStatusChanged: (summary) => this.onMultiSessionStatus(summary),
-      onOpenManager: () => this.openMultiSessionManagerPanel(),
+      onOpenManager: () => this.revealMultiSessionManager(),
       onFocusChat: () =>
         vscode.commands.executeCommand("vscode-acp-chat.chatView.focus"),
       onQuickSwitch: () => this.switchSession(),
     });
     if (this.features.multiSession) {
-      this.multiSessionManagerPanel = new MultiSessionManagerPanelController(
+      this.multiSessionManagerView = new MultiSessionManagerViewProvider(
         this.extensionUri,
         this.features.multiSession
       );
@@ -393,6 +408,12 @@ export class ChatViewProvider
       if (await this.features.clickableResourceLinks?.handleMessage(message)) {
         return;
       }
+      if (message.type.startsWith("feature.message-queue.")) {
+        await this.handleMessageQueueMessage(
+          message as MessageQueueHostMessage & WebviewMessage
+        );
+        return;
+      }
       switch (message.type) {
         case "feature.multi-session.new":
           // Backward-compatible fallback for webviews restored while the
@@ -411,11 +432,16 @@ export class ChatViewProvider
                 message.mentions
               );
             } else {
-              await this.handleUserMessage(
-                message.text || "",
-                message.images,
-                message.mentions
-              );
+              await this.getLegacyMessageQueue().submit({
+                id: `legacy-${Date.now()}`,
+                intent: "steer",
+                payload: {
+                  text: message.text || "",
+                  images: message.images ?? [],
+                  mentions: message.mentions ?? [],
+                  composerHtml: message.text || "",
+                },
+              });
             }
           }
           break;
@@ -534,9 +560,11 @@ export class ChatViewProvider
                     range = parsedDecodedPath.range;
                   }
 
-                  const filePath = parsedDecodedPath.path;
+                  const filePath = expandHomeResourcePath(
+                    parsedDecodedPath.path
+                  );
                   if (
-                    filePath.startsWith("/") ||
+                    path.isAbsolute(filePath) ||
                     /^[a-zA-Z]:[/\\]/.test(filePath)
                   ) {
                     uri = vscode.Uri.file(filePath);
@@ -762,8 +790,13 @@ export class ChatViewProvider
     await this.handleConnect();
   }
 
-  public manageSessions(): void {
-    this.openMultiSessionManagerPanel();
+  public manageSessions(): Thenable<void> | void {
+    return this.multiSessionManagerView?.toggle();
+  }
+
+  public getMultiSessionManagerViewProvider():
+    MultiSessionManagerViewProvider | undefined {
+    return this.multiSessionManagerView;
   }
 
   public async switchSession(): Promise<void> {
@@ -771,8 +804,8 @@ export class ChatViewProvider
     await showMultiSessionQuickSwitch(this.features.multiSession);
   }
 
-  private openMultiSessionManagerPanel(): void {
-    this.multiSessionManagerPanel?.open();
+  private revealMultiSessionManager(): void {
+    void this.multiSessionManagerView?.reveal();
   }
 
   public isMultiSessionEnabled(): boolean {
@@ -1342,7 +1375,7 @@ export class ChatViewProvider
 
   public dispose(): void {
     this.features.chatFontSize?.dispose();
-    this.multiSessionManagerPanel?.dispose();
+    this.multiSessionManagerView?.dispose();
     this.features.multiSession?.dispose();
     this.sessionUpdateNotifier.dispose();
     this.webviewPostNotifier.dispose();
@@ -1475,6 +1508,11 @@ export class ChatViewProvider
         update.configOptions
       );
       this.sendSessionMetadata();
+    } else if (update.sessionUpdate === "session_info_update") {
+      if (getPiContextUsageUnavailableMeta(update)) {
+        this.acpClient.clearLastUsageUpdate();
+        this.sendContextUsage();
+      }
     } else if (update.sessionUpdate === "usage_update") {
       const u = update as Partial<ContextUsageUpdate>;
       if (
@@ -1589,6 +1627,73 @@ export class ChatViewProvider
     return undefined;
   }
 
+  private getLegacyMessageQueue(): MessageQueueController {
+    if (!this.legacyMessageQueue) {
+      const messageQueueFeature = this.features.messageQueue;
+      if (!messageQueueFeature) {
+        throw new Error("Message queue host feature is not registered");
+      }
+      this.legacyMessageQueue = messageQueueFeature.createController({
+        isBusy: () => this.isGenerating,
+        dispatch: (payload) =>
+          this.handleUserMessage(
+            payload.text,
+            payload.images,
+            payload.mentions
+          ),
+        cancel: () => this.acpClient.cancel(),
+        onState: (snapshot) =>
+          this.postMessage(snapshot as unknown as Record<string, unknown>),
+      });
+    }
+    return this.legacyMessageQueue;
+  }
+
+  private async handleMessageQueueMessage(
+    message: MessageQueueHostMessage & WebviewMessage
+  ): Promise<void> {
+    if (this.features.multiSession) {
+      await this.features.multiSession.handleCoreMessage(message as never);
+      return;
+    }
+    const queue = this.getLegacyMessageQueue();
+    if (message.type === "feature.message-queue.submit") {
+      if (!message.requestId || !message.payload) return;
+      try {
+        const disposition = await queue.submit({
+          id: message.requestId,
+          intent: message.intent ?? "steer",
+          payload: message.payload,
+        });
+        this.postMessage({
+          type: "feature.message-queue.submitResult",
+          requestId: message.requestId,
+          disposition,
+          acceptedHtml: message.payload.composerHtml,
+        });
+      } catch (error) {
+        this.postMessage({
+          type: "feature.message-queue.submitResult",
+          requestId: message.requestId,
+          disposition: "rejected",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    if (!message.requestId) return;
+    const payloads =
+      message.type === "feature.message-queue.abortAndRestore"
+        ? await queue.abortAndRestore(message.currentDraft)
+        : queue.restoreQueuedWithoutAbort(message.currentDraft);
+    this.postMessage({
+      type: "feature.message-queue.restoreResult",
+      requestId: message.requestId,
+      payloads,
+      aborted: message.type === "feature.message-queue.abortAndRestore",
+    });
+  }
+
   private async handleUserMessage(
     text: string,
     images: string[] = [],
@@ -1642,8 +1747,10 @@ export class ChatViewProvider
       await this.finalizePendingToolCalls("error");
       this.postMessage({ type: "streamEnd", stopReason: "error" });
       this.stderrBuffer = "";
+      throw error;
     } finally {
       this.isGenerating = false;
+      this.legacyMessageQueue?.notifyStateChanged();
     }
   }
 

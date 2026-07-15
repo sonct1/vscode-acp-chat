@@ -13,10 +13,10 @@ export const TABLE_COPY_STYLES = `
 .table-copy-button.copied{color:var(--vscode-testing-iconPassed);opacity:1}
 .table-copy-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:168px;padding:4px;border:1px solid var(--vscode-panel-border);border-radius:4px;background:var(--vscode-dropdown-background,var(--vscode-editor-background));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));box-shadow:0 4px 12px rgba(0,0,0,.25)}
 .table-copy-menu[hidden]{display:none!important}
-.table-copy-menu-item{appearance:none;width:100%;display:flex;align-items:center;gap:8px;border:0;border-radius:3px;padding:5px 8px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;font-size:12px;line-height:1.35}
+.table-copy-menu-item{appearance:none;width:100%;display:flex;align-items:center;gap:8px;border:0;border-radius:3px;padding:5px 8px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;font-size:var(--acp-font-size-sm);line-height:1.35}
 .table-copy-menu-item:hover,.table-copy-menu-item:focus-visible{background:var(--vscode-list-hoverBackground,var(--vscode-toolbar-hoverBackground,rgba(255,255,255,.12)))!important;outline:none}
 .table-copy-menu-item:focus-visible{box-shadow:0 0 0 1px var(--vscode-focusBorder) inset}
-.table-copy-wrapper table{width:max-content;min-width:100%;border-collapse:collapse;border-spacing:0;margin:0;background:transparent;font-size:13px;line-height:1.5;word-break:normal;overflow-wrap:normal}
+.table-copy-wrapper table{width:max-content;min-width:100%;border-collapse:collapse;border-spacing:0;margin:0;background:transparent;font-size:var(--acp-font-size-base);line-height:1.5;word-break:normal;overflow-wrap:normal}
 .table-copy-wrapper th,.table-copy-wrapper td{border:1px solid rgba(127,127,127,.24);border-color:var(--table-copy-border);padding:6px 10px;vertical-align:top;text-align:start}
 .table-copy-wrapper th[align="center"],.table-copy-wrapper td[align="center"]{text-align:center}
 .table-copy-wrapper th[align="right"],.table-copy-wrapper td[align="right"]{text-align:right}
@@ -24,7 +24,7 @@ export const TABLE_COPY_STYLES = `
 .table-copy-wrapper thead th{font-weight:600;background:rgba(127,127,127,.08);background:var(--table-copy-header-bg)}
 .table-copy-wrapper tbody tr:nth-child(2n){background:rgba(127,127,127,.035);background:var(--table-copy-zebra-bg)}
 .table-copy-wrapper tbody tr:hover{background:rgba(127,127,127,.06);background:var(--table-copy-hover-bg)}
-.table-copy-wrapper th code,.table-copy-wrapper td code{font-family:var(--vscode-editor-font-family,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:.92em;padding:.1em .35em;border-radius:3px;background:var(--vscode-textCodeBlock-background,color-mix(in srgb,var(--vscode-editor-foreground,#cccccc) 10%,transparent));color:var(--vscode-editor-foreground,var(--vscode-foreground));white-space:break-spaces}
+.table-copy-wrapper th code,.table-copy-wrapper td code{font-family:var(--vscode-editor-font-family,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:var(--acp-font-size-code);padding:.1em .35em;border-radius:3px;background:var(--vscode-textCodeBlock-background,color-mix(in srgb,var(--vscode-editor-foreground,#cccccc) 10%,transparent));color:var(--vscode-editor-foreground,var(--vscode-foreground));white-space:break-spaces}
 .table-copy-source{display:none!important}
 @media(hover:none){.table-copy-toolbar{opacity:1;pointer-events:auto}}
 `;

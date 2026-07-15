@@ -113,8 +113,7 @@ export class InputPanelComponent implements MessageHandler {
       this.elements.inputEl.innerHTML = "";
     }
 
-    this.elements.sendBtn.disabled =
-      (!text && !hasMentions) || this.isGenerating;
+    this.elements.sendBtn.disabled = !text && !hasMentions;
   }
 
   setPlaceholder(agentName: string): void {
@@ -183,7 +182,7 @@ export class InputPanelComponent implements MessageHandler {
 
   setGenerating(isGenerating: boolean): void {
     this.isGenerating = isGenerating;
-    this.elements.sendBtn.style.display = isGenerating ? "none" : "flex";
+    this.elements.sendBtn.style.display = "flex";
     this.elements.stopBtn.style.display = isGenerating ? "flex" : "none";
   }
 
@@ -210,8 +209,6 @@ export class InputPanelComponent implements MessageHandler {
   }
 
   send(): void {
-    if (this.isGenerating) return;
-
     const msg = this.collectMessage();
     if (!msg) return;
 
@@ -393,6 +390,7 @@ export class InputPanelComponent implements MessageHandler {
       this.insertMentionChip(result);
     }
     this.saveState();
+    this.emitDraftChanged();
     this.updateInputState();
   }
 
@@ -435,6 +433,7 @@ export class InputPanelComponent implements MessageHandler {
       this.adjustHeight();
       this.autocomplete.update();
       this.saveState();
+      this.emitDraftChanged();
       this.updateInputState();
     });
 
@@ -449,10 +448,17 @@ export class InputPanelComponent implements MessageHandler {
       if (!insertedText) return;
       this.autocomplete.update();
       this.saveState();
+      this.emitDraftChanged();
       this.updateInputState();
     });
 
     this.setupAttachImageButton();
+  }
+
+  private emitDraftChanged(): void {
+    this.ctx.eventBus.emit("draftChanged", {
+      html: this.elements.inputEl.innerHTML || "",
+    });
   }
 
   private setupAttachImageButton(): void {

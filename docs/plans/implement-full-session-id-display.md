@@ -14,9 +14,21 @@ Các điểm liên quan hiện tại:
 - Metadata hiện chỉ gồm `formatStatus(session.status)` và `session.agentName`.
 - New ACP session hiện bị đặt title hard-code là `"New chat"` sau khi nhận `response.sessionId`.
 - History session hiện có placeholder title `History ${sessionId.slice(0, 8)}` trước khi load xong.
-- Extension đã có logic cập nhật title thật từ `session_info_update.title`; Pi hiện chỉ gửi title khi user đặt tên bằng `/name`.
+- Extension đã có logic cập nhật title thật từ `session_info_update.title`.
+- Bundled `pi-acp` hiện chủ động gửi update này cho lệnh ACP `/name`, nhưng chưa forward event Pi RPC `session_info_changed` phát ra khi Pi hoặc Pi extension gọi `setSessionName()`.
 
-Root cause: UI không thiếu session id; id đã có trong state nhưng không được hiển thị, và một số fallback title còn chủ động rút gọn id.
+Root cause: UI không thiếu session id; id đã có trong state nhưng không được hiển thị, một số fallback title còn chủ động rút gọn id, và title tự động từ Pi có thể đã được lưu nhưng chưa được đồng bộ live về ACP client.
+
+## Kết quả kiểm tra Pi khi gửi message đầu tiên
+
+- Pi core `0.80.3` không tự sinh `session_info.name` chỉ vì có user message đầu tiên. Nếu không có `--name`, `/name`, hoặc extension gọi `setSessionName()`, session vẫn chưa có tên thật; màn `/resume` dùng first user message làm display fallback.
+- Môi trường Pi hiện tại đang load package `pi-toolkit`, trong đó module `auto-session-name` mặc định bật. Module này chạy ở hook `before_agent_start` và gọi `pi.setSessionName()` từ prompt đầu tiên nếu prompt đủ tín hiệu, mặc định tối thiểu 12 ký tự.
+- Vì hook chạy trước khi Pi append user message, JSONL của session hiện tại có thứ tự thực tế: `session_info` → custom entry `auto-session-name` → first user `message`. Nghĩa là tại thời điểm vừa gọi `session/new` session chưa có tên; trong lúc xử lý lần Send đầu tiên, session có thể được đặt tên ngay trước khi user message được lưu.
+- Prompt ngắn hoặc low-signal như `hello`, `ok`, `continue` có thể không được auto-name; session đó vẫn không có `session_info.name`.
+- Pi RPC phát event `session_info_changed` khi tên được đặt tự động, nhưng bundled `pi-acp` hiện bỏ qua event này. Do đó Pi JSONL có thể đã có tên sau lần Send đầu tiên trong khi multi-session UI vẫn giữ fallback `Pi <full-session-id>`.
+- Khi gọi `session/list` về sau, adapter ưu tiên `session_info.name`; nếu không có name thì dùng first user message, tối đa 80 ký tự, làm `SessionInfo.title`.
+
+Kết luận: không thể giả định mọi Pi session đều có tên sau user message đầu tiên. Với cấu hình Pi hiện tại, prompt đầu tiên đủ tín hiệu thường tạo tên; tuy nhiên cần bridge `session_info_changed` sang ACP `session_info_update` nếu muốn title live trong UI đổi ngay.
 
 ## Quyết định UX
 
@@ -129,7 +141,7 @@ Draft · Pi
 
 #### Task 4: Dùng title thật cho Pi session mới, fallback bằng full id
 
-**Mô tả:** Với Pi session mới, ban đầu thường chưa có `name`, nên dùng fallback `Pi <full-session-id>` thay cho `New chat`. Khi user chạy `/name <name>` và Pi gửi `session_info_update.title`, title phải đổi sang `<name>`.
+**Mô tả:** Với Pi session mới, tại thời điểm `session/new` thường chưa có `name`, nên dùng fallback `Pi <full-session-id>` thay cho `New chat`. Khi Pi gửi title thật qua `session_info_update` — từ `/name` hoặc từ bridge auto-name ở Task 4a — title phải đổi sang tên thật.
 
 **Recommended implementation:**
 
@@ -153,6 +165,30 @@ session.title =
 
 - `src/features/multi-session/host.ts`
 - `src/test/features/multi-session.test.ts`
+
+**Estimated scope:** Small: 2 files
+
+#### Task 4a: Forward Pi auto-session-name sang ACP title update
+
+**Mô tả:** Trong bundled `pi-acp`, xử lý Pi RPC event `session_info_changed` và phát ACP `session_info_update.title` để tên do Pi extension như `pi-toolkit/auto-session-name` đặt trong lần prompt đầu tiên được đồng bộ live về multi-session UI.
+
+**Acceptance criteria:**
+
+- [x] Event Pi RPC `session_info_changed` với `name` non-empty được chuyển thành ACP `session_info_update` có đúng `title`.
+- [x] Prompt đầu tiên đủ tín hiệu có thể đổi title từ `Pi <full-session-id>` sang tên tự động mà không cần reload history hoặc gọi lại `session/list`.
+- [x] Pi không có auto-name hoặc prompt bị bỏ qua vẫn giữ fallback full id.
+- [x] Flow `/name <name>` hiện tại tiếp tục hoạt động.
+
+**Verification:**
+
+- [x] Component test emit `session_info_changed` và assert ACP update chứa title.
+- [ ] Manual check với `pi-toolkit/auto-session-name`: gửi prompt đầu tiên đủ dài và xác nhận manager title đổi trong lúc prompt chạy.
+- [ ] Manual check prompt `hello`: title vẫn là fallback id.
+
+**Files likely touched:**
+
+- `src/features/pi-agent/vendor/pi-acp/src/acp/session.ts`
+- `src/features/pi-agent/vendor/pi-acp/test/component/session-events.test.ts`
 
 **Estimated scope:** Small: 2 files
 
@@ -221,6 +257,8 @@ Nếu test runner không hỗ trợ `--grep`, chạy targeted test command phù 
 - Removed short-id history fallback; history fallback titles now use `History <full-session-id>` and catalog titles are preferred when available.
 - Pi new-session fallback titles now use `Pi <full-session-id>` until `session_info_update.title` supplies a real title.
 - Updated feature catalog with the full-id display behavior.
+- Post-implementation Pi inspection found that `pi-toolkit/auto-session-name` sets `session_info.name` during the first qualifying prompt, before the user message is persisted.
+- Forwarded Pi RPC `session_info_changed` through bundled `pi-acp` as ACP `session_info_update`, so stored Pi names are reflected live in the multi-session title.
 
 ## Definition of Done
 

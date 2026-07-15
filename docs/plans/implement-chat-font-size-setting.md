@@ -359,6 +359,19 @@ Implemented on 2026-07-14:
 - Updated webview CSS variable fallback for `body` and prompt input.
 - Added automated tests for normalization, host messaging/config changes, independent registration, and CSS variable application.
 
+Follow-up completed on 2026-07-15:
+
+- The MVP was inconsistent because `html` still anchored the root at `13px`, prose used nested `em` sizing, global code bypassed chat sizing through `--vscode-editor-font-size`, streamed `.block-text` inherited a different size than finalized `.message-content-text`, and many text regions remained hardcoded at `10`-`13px`.
+- `html` now resolves the effective root size from `--acp-chat-font-size`, then `--vscode-font-size`, then `13px`.
+- The first follow-up preserved the old 10/11/12/13/14/16 px ratios, but user validation showed that proportional scaling still felt inconsistent because a configured value such as `20px` produced normal text ranging from roughly `15px` to `22px`.
+- The final contract makes the configured value authoritative: all normal textual roles resolve to exactly the configured size, including prose, input, code, tool/thought/diff text, metadata, controls, permissions, tables, the in-chat session header, latest-prompt tip, message-queue preview, and other dynamically injected feature styles.
+- Only semantic Markdown headings retain bounded size increases; fixed icon/codicon geometry remains excluded.
+- Diff summary directory metadata moved from inline `font-size` styling to a token-owned CSS class.
+- Fixed icon/codicon sizes, spinners, chevrons, and shape geometry intentionally remain pixel-based so icon artwork does not scale as text.
+- Permission and confirmation dialogs now have viewport-bounded heights with scrollable bodies so actions remain reachable at large configured sizes.
+- The separate ACP Sessions manager webview (`src/features/multi-session/manager-styles.ts`) remains excluded from this setting by design.
+- Added focused CSS tests for the root fallback, uniform normal-text aliases, bounded heading tokens, absence of fixed small text sizes in primary-chat CSS/dynamic feature styles, large-font dialog reachability rules, and preservation of representative fixed icon declarations.
+
 ## Definition of Done
 
 - User có thể cấu hình `vscode-acp-chat.fontSize` trong Settings UI/JSON.

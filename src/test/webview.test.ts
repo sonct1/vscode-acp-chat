@@ -993,9 +993,9 @@ suite("Webview", () => {
           const expected = `${0.1 * CIRCUMFERENCE} ${CIRCUMFERENCE}`;
           assert.strictEqual(fg.style.strokeDasharray, expected);
           const tooltip = getTooltip();
-          assert.ok(tooltip.includes("100"));
-          assert.ok(tooltip.includes("1000"));
-          assert.ok(tooltip.includes("10.0%"));
+          assert.ok(tooltip.includes("Context window: 1,000"));
+          assert.ok(tooltip.includes("Used: 100 (10.0%)"));
+          assert.ok(!tooltip.includes("Total:"));
         });
 
         test("applies correct tier at each threshold", () => {
@@ -1047,6 +1047,10 @@ suite("Webview", () => {
           );
           assert.strictEqual(
             elements.contextUsageRing.hasAttribute("acp-title"),
+            false
+          );
+          assert.strictEqual(
+            elements.contextUsageRing.hasAttribute("aria-label"),
             false
           );
         });
@@ -3427,7 +3431,10 @@ suite("Webview", () => {
       ) as HTMLElement;
 
       assert.strictEqual(header.hidden, true);
-      assert.strictEqual(document.querySelector(".multi-session-overlay"), null);
+      assert.strictEqual(
+        document.querySelector(".multi-session-overlay"),
+        null
+      );
       assert.match(
         MULTI_SESSION_STYLES,
         /\.multi-session-header\[hidden\],\.multi-session-loading\[hidden\]\{display:none!important\}/
@@ -3474,19 +3481,28 @@ suite("Webview", () => {
         switchButton.getAttribute("aria-label"),
         "Switch chat session"
       );
-      assert.strictEqual(document.querySelector(".multi-session-manager"), null);
-      assert.strictEqual(document.querySelector(".multi-session-aggregate"), null);
+      assert.strictEqual(
+        document.querySelector(".multi-session-manager"),
+        null
+      );
+      assert.strictEqual(
+        document.querySelector(".multi-session-aggregate"),
+        null
+      );
       assert.ok(status.textContent?.includes("Idle · Test Agent"));
     });
 
     test("header switch button posts quick switch action", () => {
-      (document.querySelector(".multi-session-open") as HTMLButtonElement).click();
+      (
+        document.querySelector(".multi-session-open") as HTMLButtonElement
+      ).click();
 
       assert.ok(
         mockVsCode
           ._getMessages()
           .some(
-            (message: any) => message.type === "feature.multi-session.quickSwitch"
+            (message: any) =>
+              message.type === "feature.multi-session.quickSwitch"
           )
       );
       assert.strictEqual(
@@ -3552,9 +3568,12 @@ suite("Webview", () => {
     });
 
     test("clears optimistic loading when snapshot replay fails", async () => {
-      const localDom = new JSDOM("<!DOCTYPE html><html><head></head><body></body></html>", {
-        url: "https://localhost",
-      });
+      const localDom = new JSDOM(
+        "<!DOCTYPE html><html><head></head><body></body></html>",
+        {
+          url: "https://localhost",
+        }
+      );
       const localDoc = localDom.window.document;
       const feature = new MultiSessionWebviewController(
         {
@@ -3712,7 +3731,7 @@ suite("Webview", () => {
             status: "running",
             createdAt: 1,
             updatedAt: 1,
-              pendingPermissionCount: 0,
+            pendingPermissionCount: 0,
           },
         ],
         aggregate: { running: 1, awaitingPermission: 0 },
@@ -3861,7 +3880,7 @@ suite("Webview", () => {
             status: "starting",
             createdAt: 1,
             updatedAt: 1,
-              pendingPermissionCount: 0,
+            pendingPermissionCount: 0,
           },
         ],
         aggregate: { running: 1, awaitingPermission: 0 },
@@ -3892,7 +3911,7 @@ suite("Webview", () => {
             status: "idle",
             createdAt: 1,
             updatedAt: 2,
-              pendingPermissionCount: 0,
+            pendingPermissionCount: 0,
           },
         ],
         aggregate: { running: 0, awaitingPermission: 0 },

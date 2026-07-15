@@ -6,7 +6,7 @@ Tài liệu này mô tả bố cục runtime của ACP Chat trong VS Code workbe
 
 | Lớp | Code | Vai trò |
 | --- | --- | --- |
-| VS Code contribution | [`package.json`](../../package.json) | Khai báo secondary sidebar container `vscode-acp-chat-secondary`, webview view `vscode-acp-chat.chatView`, commands và configuration. |
+| VS Code contribution | [`package.json`](../../package.json) | Khai báo secondary sidebar container `vscode-acp-chat-secondary`, Activity Bar container `vscode-acp-chat-session-manager`, webview views `vscode-acp-chat.chatView` / `vscode-acp-chat.sessionManagerView`, commands và configuration. |
 | Extension host | [`src/extension.ts`](../../src/extension.ts) `activate()` | Tạo `ACPClient`, `ChatViewProvider`, status bar, command handlers, rồi đăng ký `registerWebviewViewProvider()`. |
 | Webview host provider | [`src/views/chat.ts`](../../src/views/chat.ts) `ChatViewProvider` | Tạo HTML qua `getHtmlContent()`, nhận message từ webview, quản lý ACP lifecycle, diff/file/terminal/permission/session metadata. |
 | Webview runtime | [`src/views/webview/main.ts`](../../src/views/webview/main.ts) `WebviewController` | Orchestrator trong iframe: tạo context, component tree, message router, event bus và top-level message handlers. |
@@ -37,7 +37,7 @@ VS Code secondary sidebar title area
 | Webview view `vscode-acp-chat.chatView` | [`package.json`](../../package.json) `contributes.views` | View chứa iframe ACP Chat; `contextualTitle` là `ACP Chat`. |
 | `[robot]` | `vscode-acp-chat.selectAgent`, icon `$(robot)` | Chọn agent ACP và tạo chat/session mới với agent đó. |
 | `[+]` | `vscode-acp-chat.newChat`, icon `$(add)` | Tạo chat mới. |
-| `[≡]` | `vscode-acp-chat.manageSessions`, icon `$(list-tree)` | Mở quản lý chat sessions. |
+| `[≡]` | `vscode-acp-chat.manageSessions`, icon `$(list-tree)` | Toggle ACP Sessions manager: focus Primary Sidebar view khi đang ẩn/chưa resolve, đóng Primary Sidebar khi manager đang visible. |
 | `[⇄]` | `vscode-acp-chat.switchSession`, icon `$(list-selection)` | Chuyển nhanh active multi-session qua QuickPick. |
 | `[≡×]` | `vscode-acp-chat.clearChat`, icon `$(clear-all)` | Xoá transcript/chat hiện tại. |
 | `[↺]` | `vscode-acp-chat.loadHistory`, icon `$(history)` | Tải lịch sử chat. |
@@ -45,7 +45,7 @@ VS Code secondary sidebar title area
 
 ## Wireframe tổng thể
 
-Bố cục dưới đây bắt đầu từ phần bên trong webview iframe, nằm dưới vùng VS Code chrome `[0]`. Bố cục gốc được sinh trong `ChatViewProvider.getHtmlContent()` ở [`src/views/chat.ts`](../../src/views/chat.ts). Multi-session chat chỉ inject header/loading strip bằng `document.body.prepend()` trong [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts); màn quản lý danh sách session nằm trong `WebviewPanel` riêng.
+Bố cục dưới đây bắt đầu từ phần bên trong webview iframe, nằm dưới vùng VS Code chrome `[0]`. Bố cục gốc được sinh trong `ChatViewProvider.getHtmlContent()` ở [`src/views/chat.ts`](../../src/views/chat.ts). Multi-session chat chỉ inject header/loading strip bằng `document.body.prepend()` trong [`src/features/multi-session/webview.ts`](../../src/features/multi-session/webview.ts); màn quản lý danh sách session nằm trong Activity Bar/Primary Sidebar `WebviewView` riêng.
 
 ```text
 ACP Chat webview in VS Code secondary sidebar
@@ -82,28 +82,37 @@ ACP Chat webview in VS Code secondary sidebar
 ├────────────────────────────────────────────────────────────────────────────┤
 │ [G] Chat input area, fixed bottom                                          │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
+│ │ [G0] Tip: latest user prompt, only while transcript is away from bottom│ │
+│ ├────────────────────────────────────────────────────────────────────────┤ │
 │ │ [G1] Autocomplete popover: slash commands or workspace file search     │ │
 │ │ [G2] Rich contenteditable input: text, chips, guided placeholder       │ │
 │ │ [G3] Screen-reader-only input hint for keyboard guidance               │ │
+│ │ [G4] Message queue preview/status, when queued messages exist          │ │
 │ ├────────────────────────────────────────────────────────────────────────┤ │
-│ │ [G4] Options toolbar                                                   │ │
+│ │ [G5] Options toolbar                                                   │ │
 │ │      [attach] [mode] [model] [dynamic config] [context]       [send]   │ │
 │ │                                                              or [stop] │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Message queue composer behavior
+
+`src/features/message-queue/` owns the Pi-style composer queue integration. The webview side intercepts composer shortcuts after autocomplete/modal precedence and before the legacy input handler: idle `Enter`/`Alt+Enter` submit normally, processing `Enter` queues a steering message, processing `Alt+Enter` queues a follow-up message, `Shift+Enter` remains newline, processing `Escape` aborts and restores queued drafts plus the current draft, and `Alt+Up` restores queued drafts without aborting. The host side owns one queue per runtime session: a legacy single-session controller in `ChatViewProvider` and one controller per `ManagedSession` in multi-session mode.
+
+The portable ACP transport remains serialized: queued messages are held by the extension host and dispatched as standard `session/prompt` turns one at a time, with steering FIFO drained before follow-up FIFO. A queued user prompt is not added to the transcript until its actual dispatch. The composer receives `feature.message-queue.state` so it stays visually busy while either the current turn or a queued drain is active, avoiding idle flicker between turns. The bundled Pi path deliberately uses the same host-owned fallback until a complete native atomic queue drain and abort-and-drain contract is advertised.
+
 ## Panel, modal và overlay
 
 ```text
 Runtime surfaces above or beside the chat surface
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ [H] ACP Sessions WebviewPanel / tab riêng                                  │
+│ [H] ACP Sessions Activity Bar / Primary Sidebar WebviewView                │
 │ ┌────────────────────────────────────────────────────────────────────────┐ │
 │ │ ACP Sessions                                      [+] [↻]              │ │
 │ ├────────────────────────────────────────────────────────────────────────┤ │
 │ │ Filters + search                                                        │ │
-│ │ Session rows: status + title + badges + icon actions                    │ │
+│ │ Session rows: newest created first; status + title + badges + actions   │ │
 │ │ Actions: [eye] [chat/open spinner] [stop] [close]                       │ │
 │ └────────────────────────────────────────────────────────────────────────┘ │
 ├────────────────────────────────────────────────────────────────────────────┤
@@ -121,10 +130,11 @@ Runtime surfaces above or beside the chat surface
 ```text
 Quick switch surface
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ VS Code QuickPick: Switch ACP Session                                      │
-│   ! Needs permission session · 2 unread · Agent                            │
-│   ● Running session · Active · Agent                                       │
-│   ○ Idle session · Agent                                                   │
+│ VS Code QuickPick: Switch ACP Session (newest created first)               │
+│   ○ Newest idle session                                                     │
+│      Idle · Agent · ACP session id                                          │
+│   ● Older running session                                                   │
+│      Active · Running · Agent · ACP session id                              │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -148,13 +158,14 @@ Quick switch surface
 | E3 | Typing indicator | `#typing-indicator`, `.typing-indicator`, `.zed-loader` | HTML ở [`src/views/chat.ts`](../../src/views/chat.ts); [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts) `setGenerating()`, `showTypingIndicator()`, `hideTypingIndicator()`. |
 | F | Diff summary panel | `#diff-summary-container`, `.diff-summary-container` | [`src/views/webview/component/auxiliary-panels.ts`](../../src/views/webview/component/auxiliary-panels.ts) nhận `diffSummary`; [`src/views/webview/widget/diff-summary.ts`](../../src/views/webview/widget/diff-summary.ts) render; host pending-change state từ [`src/acp/diff-manager.ts`](../../src/acp/diff-manager.ts) qua [`src/views/chat.ts`](../../src/views/chat.ts) và [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts). Pending changes được ghi từ ACP `client.fs.writeTextFile` qua [`src/acp/file-handler.ts`](../../src/acp/file-handler.ts) và từ completed tool-call structured diff content qua [`src/acp/structured-diff-recorder.ts`](../../src/acp/structured-diff-recorder.ts) chỉ khi nội dung file hiện tại khớp `newText`. Structured diff không khớp disk vẫn render inline trong tool block nhưng không trở thành actionable summary item. |
 | G | Chat input area | `#chat-input-area`, `#input-container` | HTML ở [`src/views/chat.ts`](../../src/views/chat.ts); layout/style ở [`media/main.css`](../../media/main.css); logic ở [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts). |
+| G0 | Scroll-contextual user prompt tip | `.latest-user-prompt-tip`, `.latest-user-prompt-tip-label`, `.latest-user-prompt-tip-preview` | [`src/features/latest-user-prompt-tip/webview.ts`](../../src/features/latest-user-prompt-tip/webview.ts) index các `.message.user` theo DOM order và chọn prompt sở hữu vùng đọc tại anchor `top + max(24px, 25% viewport height)`. [`MessageListComponent`](../../src/views/webview/component/message-list.ts) phát continuous scroll position; tip đổi theo turn khi scroll lên/xuống, ẩn trong 100 px cuối, và không đổi do assistant streaming đơn thuần. CSS được inject từ [`src/features/latest-user-prompt-tip/styles.ts`](../../src/features/latest-user-prompt-tip/styles.ts). |
 | G1 | Autocomplete popover | `#command-autocomplete` | [`src/views/webview/component/autocomplete.ts`](../../src/views/webview/component/autocomplete.ts); file search request/response đi qua [`src/views/chat.ts`](../../src/views/chat.ts) và [`src/utils/file-search.ts`](../../src/utils/file-search.ts). |
 | G2 | Rich input | `#input.input-rich`, `.mention-chip`, `.command-chip` | [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts) handles keydown/input/paste/collectMessage và cập nhật placeholder theo agent. Placeholder hiển thị hướng dẫn Enter / Shift+Enter / `/` commands / `@` files trong ngoặc; chip rendering ở [`src/views/webview/component/chip-renderer.ts`](../../src/views/webview/component/chip-renderer.ts). |
 | G3 | Accessibility input hint | `#input-hint` | Static HTML trong [`src/views/chat.ts`](../../src/views/chat.ts), visually hidden by [`media/main.css`](../../media/main.css) để giữ `aria-describedby` mà không hiển thị tip riêng bên dưới input. |
 | G4 | Options toolbar | `#options-bar`, `#left-options`, `#right-options` | `#send`, `#stop`, `#attach-image` thuộc [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts); mode/model/config/context thuộc [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts). |
 | G4a | Mode/model/config dropdowns | `#mode-dropdown`, `#model-dropdown`, `#config-options-container`, `.custom-dropdown`, `.dropdown-popover` | [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts); reusable dropdown ở [`src/views/webview/widget/dropdown.ts`](../../src/views/webview/widget/dropdown.ts). |
-| G4b | Context usage ring | `#context-usage-ring`, `.context-usage__bg`, `.context-usage__fg` | [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts) nhận `contextUsage`; renderer ở [`src/views/webview/widget/context-usage.ts`](../../src/views/webview/widget/context-usage.ts). |
-| H | ACP Sessions manager panel | `.manager-shell`, `.manager-header`, `.manager-filters`, `.manager-list`, `.session-row`, `.row-actions`, `.manager-button-icon` | Panel lifecycle ở [`src/features/multi-session/manager-panel.ts`](../../src/features/multi-session/manager-panel.ts); browser DOM ở [`src/features/multi-session/manager-webview.ts`](../../src/features/multi-session/manager-webview.ts); styles ở [`src/features/multi-session/manager-styles.ts`](../../src/features/multi-session/manager-styles.ts); host summary/event source ở [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts). Header and row actions are icon-only buttons with `aria-label`/tooltip; open/review activation can show an inline spinner while the chat surface switches. |
+| G4b | Context usage ring | `#context-usage-ring`, `.context-usage__bg`, `.context-usage__fg` | [`src/views/webview/component/session-toolbar.ts`](../../src/views/webview/component/session-toolbar.ts) nhận `contextUsage`; renderer ở [`src/views/webview/widget/context-usage.ts`](../../src/views/webview/widget/context-usage.ts). Tooltip labels capacity as `Context window`; null usage hides the ring and clears stale tooltip/ARIA text. |
+| H | ACP Sessions manager view | `.manager-shell`, `.manager-header`, `.manager-filters`, `.manager-list`, `.session-row`, `.row-actions`, `.manager-button-icon` | Activity Bar container/view ở [`package.json`](../../package.json); `WebviewView` lifecycle/toggle ở [`src/features/multi-session/manager-view.ts`](../../src/features/multi-session/manager-view.ts); browser DOM ở [`src/features/multi-session/manager-webview.ts`](../../src/features/multi-session/manager-webview.ts); responsive styles ở [`src/features/multi-session/manager-styles.ts`](../../src/features/multi-session/manager-styles.ts); host summary/event source ở [`src/features/multi-session/host.ts`](../../src/features/multi-session/host.ts). Danh sách luôn sắp xếp theo `createdAt` giảm dần, không ưu tiên trạng thái, quyền chờ hoặc active session. Header and row actions are icon-only buttons with `aria-label`/tooltip; open/review activation can show an inline spinner while the chat surface switches. |
 | I | Permission dialog | Tool-block embedded dialog or modal overlay | [`src/views/webview/widget/permission-dialog.ts`](../../src/views/webview/widget/permission-dialog.ts); host request queue in [`src/views/chat.ts`](../../src/views/chat.ts) `handlePermissionRequest()`. |
 | J | Confirm dialog | Modal confirm overlay | [`src/views/webview/widget/confirm-dialog.ts`](../../src/views/webview/widget/confirm-dialog.ts); requested by `confirmAction` messages from [`src/views/chat.ts`](../../src/views/chat.ts). |
 | K | Image preview popover | `#image-preview-popover` | HTML in [`src/views/chat.ts`](../../src/views/chat.ts); image attach/paste in [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts); hover preview in [`src/views/webview/component/chip-renderer.ts`](../../src/views/webview/component/chip-renderer.ts). |
@@ -191,6 +202,7 @@ WebviewController
 │                                                                             │
 │ registerWebviewFeatures()                                                   │
 │ ├─ MultiSessionWebviewController injects header and loading strip          │
+│ ├─ LatestUserPromptTipWebviewFeature injects conditional composer tip      │
 │ └─ AssistantTurnNavigationWebviewFeature attaches header prev/next icons    │
 │    and observes MessageList DOM for completed assistant responses           │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -223,7 +235,7 @@ Các message layout quan trọng:
 | host → webview | `plan`, `planComplete`, `diffSummary` | plan panel, diff summary panel | [`AuxiliaryPanelsComponent`](../../src/views/webview/component/auxiliary-panels.ts) |
 | host → webview | `permissionRequest`, `confirmAction` | permission / confirm dialogs | [`PermissionDialog`](../../src/views/webview/widget/permission-dialog.ts), [`showConfirmDialog()`](../../src/views/webview/widget/confirm-dialog.ts) |
 | host → chat webview | `feature.multi-session.chatState`, `snapshot`, `delta` | multi-session active header, active transcript switch | [`MultiSessionWebviewController`](../../src/features/multi-session/webview.ts) |
-| host → manager panel | `feature.multi-session.managerState` | ACP Sessions panel list, aggregate, active marker | [`MultiSessionManagerPanelController`](../../src/features/multi-session/manager-panel.ts), [`manager-webview.ts`](../../src/features/multi-session/manager-webview.ts) |
+| host → manager view | `feature.multi-session.managerState` | ACP Sessions Primary Sidebar list, aggregate, active marker; subscription exists only while visible and resyncs on ready/reveal | [`MultiSessionManagerViewProvider`](../../src/features/multi-session/manager-view.ts), [`manager-webview.ts`](../../src/features/multi-session/manager-webview.ts) |
 | webview → host | `ready`, `sendMessage`, `stop`, `searchFiles`, `openFile`, `permissionResponse`, `selectMode`, `selectModel`, `selectConfigOption`, `toggleModelStar` | host actions and ACP client calls | [`ChatViewProvider.resolveWebviewView()` message switch](../../src/views/chat.ts) |
 | webview → host | `feature.multi-session.*` | multi-session lifecycle and active surface | [`MultiSessionHostController`](../../src/features/multi-session/host.ts) via [`register-host.ts`](../../src/features/register-host.ts) |
 
@@ -235,7 +247,8 @@ Các message layout quan trọng:
 | Message surface owns remaining vertical space through `#messages-container { flex: 1; min-height: 0; }`. | [`media/main.css`](../../media/main.css) `#messages-container` |
 | Actual transcript scroll happens in `#messages { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }`. | [`media/main.css`](../../media/main.css) `#messages` |
 | Bottom input is non-scrolling and pinned as an inset composer through `#chat-input-area { flex-shrink: 0; margin: 0 12px 10px; border: 1px solid ...; border-radius: 12px; }`. | [`media/main.css`](../../media/main.css) `#chat-input-area` |
+| Conditional prompt tip is a single-line row at the top of `#chat-input-area`; away from bottom it shows the user prompt for the turn crossing the transcript reading anchor, changes in both scroll directions, uses ellipsis normally, expands when keyboard-focused, and hides within 100 px of the bottom. | [`src/features/latest-user-prompt-tip/webview.ts`](../../src/features/latest-user-prompt-tip/webview.ts), [`src/features/latest-user-prompt-tip/styles.ts`](../../src/features/latest-user-prompt-tip/styles.ts), [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts) |
 | Visible keyboard/file guidance lives in `#input[data-placeholder]`; `#input-hint` is kept screen-reader-only for `aria-describedby`. | [`src/views/chat.ts`](../../src/views/chat.ts), [`media/main.css`](../../media/main.css) `#input:empty::before`, `.input-hint` |
 | Toolbar splits left controls and right send/stop controls using `#options-bar`, `#left-options`, `#right-options`. | [`media/main.css`](../../media/main.css) `#options-bar` |
-| Multi-session header is sticky at top; the full session list is rendered only in the separate ACP Sessions panel. | [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts) `.multi-session-header`; [`src/features/multi-session/manager-styles.ts`](../../src/features/multi-session/manager-styles.ts) `.manager-shell` |
+| Multi-session header is sticky at top; the full session list is rendered only in the separate ACP Sessions panel. The manager list and `Switch ACP Session` QuickPick both sort only by `createdAt` descending, so the newest-created session appears first regardless of status, pending permission, activity, or active state. QuickPick reserves its first row for the session title and puts status, agent, active marker, and ACP session id on the detail row to reduce title truncation. | [`src/features/multi-session/styles.ts`](../../src/features/multi-session/styles.ts) `.multi-session-header`; [`src/features/multi-session/manager-webview.ts`](../../src/features/multi-session/manager-webview.ts); [`src/features/multi-session/quick-switch-items.ts`](../../src/features/multi-session/quick-switch-items.ts) |
 | Assistant response navigator is attached inside the multi-session header, uses `margin-left: auto` and sticky right alignment, and is hidden until at least two completed assistant responses exist. Navigation aligns the first `.block-text` of the target assistant turn to the top of the transcript viewport, so preceding tool/image/action blocks do not become the top anchor. | [`src/features/assistant-turn-navigation/webview.ts`](../../src/features/assistant-turn-navigation/webview.ts), [`media/main.css`](../../media/main.css) `.assistant-turn-navigator-header`, `.assistant-turn-nav-btn` |

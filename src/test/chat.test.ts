@@ -1529,6 +1529,48 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(usageMsgs.length, 0);
     });
 
+    test("clears usage when Pi context usage is explicitly unavailable", async () => {
+      const provider = new ChatViewProvider(
+        mockExtensionUri,
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (msg: any) => messages.push(msg);
+      let cleared = false;
+      (acpClient as any).clearLastUsageUpdate = () => {
+        cleared = true;
+      };
+      (acpClient as any).getSessionMetadata = () => ({
+        modes: null,
+        models: null,
+        commands: null,
+        lastUsageUpdate: null,
+      });
+
+      await (provider as any).handleSessionUpdate({
+        sessionId: "test",
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: {
+            piAcp: {
+              contextUsage: {
+                state: "unavailable",
+                size: 1050000,
+                reason: "post_compaction",
+              },
+            },
+          },
+        },
+      });
+
+      assert.strictEqual(cleared, true);
+      const usageMsg = messages.find((m) => m.type === "contextUsage");
+      assert.ok(usageMsg);
+      assert.strictEqual(usageMsg.used, null);
+      assert.strictEqual(usageMsg.size, null);
+    });
+
     test("sendContextUsage emits clear message when no usage data", () => {
       const provider = new ChatViewProvider(
         mockExtensionUri,
@@ -2277,6 +2319,32 @@ suite("ChatViewProvider", () => {
       assert.ok(call.options.selection);
       assert.strictEqual(call.options.selection.start.line, 9);
       assert.strictEqual(call.options.selection.end.line, 19);
+    });
+
+    test("should expand home-relative href before opening it", async () => {
+      const homeRelativePath = path.relative(os.homedir(), __filename);
+      assert.ok(homeRelativePath && !homeRelativePath.startsWith(".."));
+
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        new TestACPClient() as any,
+        new TestMemento() as any
+      );
+      const { messageHandler } = resolveView(provider);
+
+      await messageHandler({
+        type: "openFile",
+        href: `~/${homeRelativePath}:10`,
+        checkExists: true,
+      });
+
+      assert.strictEqual(showErrorMessageCalls.length, 0);
+      assert.strictEqual(showTextDocumentCalls.length, 1);
+      const call = showTextDocumentCalls[0];
+      assert.strictEqual(call.uri.fsPath, vscode.Uri.file(__filename).fsPath);
+      assert.ok(call.options?.selection);
+      assert.strictEqual(call.options.selection.start.line, 9);
+      assert.strictEqual(call.options.selection.end.line, 9);
     });
 
     test("should fallback to showTextDocument when file stat fails", async () => {

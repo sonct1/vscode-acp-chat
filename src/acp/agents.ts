@@ -1,4 +1,8 @@
 import * as vscode from "vscode";
+import {
+  createAntigravityAgentConfig,
+  isAntigravityAgentEnabled,
+} from "../features/antigravity-agent";
 import { createPiAgentConfig } from "../features/pi-agent";
 import { validateAgents, showValidationWarnings } from "./agent-validator";
 import { isCommandAvailable } from "../utils/bin-paths";
@@ -115,11 +119,20 @@ function getBuiltinAgents(): AgentConfig[] {
       command: "codebuddy",
       args: ["--acp"],
     },
+    ...(isAntigravityAgentEnabled() ? [createAntigravityAgentConfig()] : []),
     createPiAgentConfig(),
   ];
 }
 
 export const AGENTS: AgentConfig[] = getBuiltinAgents();
+
+export function getBuiltinAgentConfigsForTest(): AgentConfig[] {
+  return getBuiltinAgents();
+}
+
+export function clearAgentsCacheForTest(): void {
+  cachedAgentsWithStatus = null;
+}
 
 /**
  * Retrieves custom agents from VS Code workspace configuration.

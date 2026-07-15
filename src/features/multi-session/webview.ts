@@ -18,6 +18,7 @@ interface ChatSurfaceBridge {
   setInputHtml(value: string): void;
   getScrollTop(): number;
   setScrollTop(value: number): void;
+  onDraftChanged?(handler: (html: string) => void): { dispose(): void };
   getWebviewState(): MultiSessionWebviewState | undefined;
   saveWebviewState(state: MultiSessionWebviewState): void;
 }
@@ -72,6 +73,7 @@ export class MultiSessionWebviewController {
     this.loading.hidden = true;
     this.doc.body.prepend(this.header, this.loading);
     this.injectStyles();
+    this.bridge.onDraftChanged?.((html) => this.updateActiveDraft(html));
   }
 
   handleMessage(
@@ -92,7 +94,9 @@ export class MultiSessionWebviewController {
       return this.applyDelta(msg as MultiSessionDeltaMessage).then(() => true);
     }
     if (msg.type === "feature.multi-session.openManager") {
-      this.vscode.postMessage({ type: "feature.multi-session.openManagerPanel" });
+      this.vscode.postMessage({
+        type: "feature.multi-session.openManagerPanel",
+      });
       return true;
     }
     return;
@@ -102,9 +106,29 @@ export class MultiSessionWebviewController {
     const sessionId = this.activeLocalSessionId;
     if (!sessionId) return;
 
+    this.acknowledgeSubmittedDraft(sessionId);
+  }
+
+  acknowledgeSubmittedDraft(sessionId: string | undefined): void {
+    if (!sessionId) return;
     delete this.drafts[sessionId];
-    this.scrollTop[sessionId] = this.bridge.getScrollTop();
-    this.persistState({ inputValue: "" });
+    if (sessionId === this.activeLocalSessionId) {
+      this.scrollTop[sessionId] = this.bridge.getScrollTop();
+      this.persistState({ inputValue: "" });
+    } else {
+      this.persistState();
+    }
+  }
+
+  restoreDraftPayloads(sessionId: string | undefined, html: string): void {
+    if (!sessionId) return;
+    if (sessionId === this.activeLocalSessionId) {
+      this.bridge.setInputHtml(html);
+      this.persistState({ inputValue: html });
+    } else {
+      this.drafts[sessionId] = html;
+      this.persistState();
+    }
   }
 
   private applyLegacyState(msg: MultiSessionStateMessage): void {
@@ -193,7 +217,10 @@ export class MultiSessionWebviewController {
         });
       }
       if (msg.contextUsage) {
-        await this.bridge.dispatch({ type: "contextUsage", ...msg.contextUsage });
+        await this.bridge.dispatch({
+          type: "contextUsage",
+          ...msg.contextUsage,
+        });
       } else {
         await this.bridge.dispatch({
           type: "contextUsage",
@@ -261,6 +288,12 @@ export class MultiSessionWebviewController {
     }
     this.lastSeqBySession[msg.localSessionId] = msg.event.seq;
     await this.bridge.dispatch(msg.event.message as ExtensionMessage);
+  }
+
+  private updateActiveDraft(html: string): void {
+    if (!this.activeLocalSessionId) return;
+    this.drafts[this.activeLocalSessionId] = html;
+    this.persistState({ inputValue: html });
   }
 
   private saveActiveSurfaceState(): void {
@@ -437,11 +470,18 @@ export function registerMultiSessionWebviewFeature(
       dispatch: async (message) => {
         await controller.handleMessage(message);
       },
-      setGenerating: (value) => controller.inputPanel.setGenerating(value),
+      setGenerating: (value) => controller.setTurnGenerating(value),
       getInputHtml: () => controller.inputPanel.getInputHtml(),
       setInputHtml: (value) => controller.inputPanel.setInputHtml(value),
       getScrollTop: () => controller.messageList.getScrollTop(),
       setScrollTop: (value) => controller.messageList.setScrollTop(value),
+      onDraftChanged: (handler) => {
+        const listener = (event: { html: string }) => handler(event.html);
+        controller.getEventBus().on("draftChanged", listener);
+        return {
+          dispose: () => controller.getEventBus().off("draftChanged", listener),
+        };
+      },
       getWebviewState: () => controller.getWebviewState(),
       saveWebviewState: (state) => controller.saveWebviewState(state),
     }

@@ -541,6 +541,7 @@ export class PiAcpAgent implements ACPAgent {
             content: { type: 'text', text }
           }
         })
+        await session.refreshUsage()
 
         return { stopReason: 'end_turn' }
       }
@@ -611,14 +612,7 @@ export class PiAcpAgent implements ACPAgent {
           return { stopReason: 'end_turn' }
         }
 
-        await this.conn.sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: 'session_info_update',
-            title: name,
-            updatedAt: new Date().toISOString()
-          }
-        })
+        await session.publishSessionTitle(name)
 
         await this.conn.sessionUpdate({
           sessionId: session.sessionId,
@@ -1110,6 +1104,7 @@ export class PiAcpAgent implements ACPAgent {
     const session = await this.restoreSession(params.sessionId)
     await setSessionModel(session.proc, params.modelId)
     await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await session.refreshUsage?.()
   }
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
@@ -1144,7 +1139,9 @@ export class PiAcpAgent implements ACPAgent {
       throw RequestError.invalidParams(`Expected string value for config option: ${configId}`)
     }
 
-    if (configId === MODEL_CONFIG_ID) {
+    const changedModel = configId === MODEL_CONFIG_ID
+
+    if (changedModel) {
       await setSessionModel(session.proc, params.value)
     } else if (configId === THOUGHT_LEVEL_CONFIG_ID) {
       if (!isThinkingLevel(params.value)) {
@@ -1165,6 +1162,9 @@ export class PiAcpAgent implements ACPAgent {
     }
 
     const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    if (changedModel) {
+      await session.refreshUsage?.()
+    }
     return { configOptions }
   }
 }

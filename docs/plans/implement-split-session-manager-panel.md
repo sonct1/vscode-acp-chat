@@ -2,11 +2,11 @@
 
 | Attribute  | Value                                                                                                                                                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Implemented                                                                                                                                                                                                                                 |
+| Status     | Implemented; superseded by Activity Bar manager view follow-up                                                                                                                                                                                                                                 |
 | Owner      | TBD                                                                                                                                                                                                                                         |
 | Phase      | Completed implementation                                                                                                                                                                                                                    |
 | Scope      | Extension Host multi-session controller, chat webview integration, dedicated session-manager webview panel, message contracts, performance throttling, tests                                                                                |
-| References | `docs/plans/implement-concurrent-multi-session-chat.md`, `src/features/multi-session/host.ts`, `src/features/multi-session/webview.ts`, `src/features/multi-session/contracts.ts`, `src/views/chat.ts`, `src/views/webview/main.ts` |
+| References | `docs/plans/implement-concurrent-multi-session-chat.md`, `docs/plans/implement-session-manager-activity-bar-toggle.md`, `src/features/multi-session/host.ts`, `src/features/multi-session/webview.ts`, `src/features/multi-session/contracts.ts`, `src/views/chat.ts`, `src/views/webview/main.ts` |
 
 ## Objective
 
@@ -760,6 +760,10 @@ npm test -- --grep "multi-session"
 ```
 
 Full quality gates and local VSIX installation are tracked in the implementation report for this change.
+
+## Follow-up note
+
+The original split moved full session management out of the chat webview into a dedicated `WebviewPanel`. The follow-up plan [`implement-session-manager-activity-bar-toggle.md`](./implement-session-manager-activity-bar-toggle.md) replaces that editor panel surface with a contributed Activity Bar container and Primary Sidebar `WebviewView`, while preserving the same `MultiSessionHostController`, manager browser bundle, and summary-only manager message contract.
 
 ## Revision history
 

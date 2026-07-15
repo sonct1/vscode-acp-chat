@@ -2,6 +2,74 @@ import * as assert from "assert";
 import { SessionOutputPipeline } from "../acp/session-output-pipeline";
 
 suite("SessionOutputPipeline", () => {
+  test("clears cached context usage on Pi unavailable metadata", async () => {
+    let cleared = false;
+    const contextUsage: unknown[] = [];
+    const pipeline = new SessionOutputPipeline({
+      client: {
+        clearLastUsageUpdate: () => {
+          cleared = true;
+        },
+      } as any,
+      fileHandler: {
+        clearLastFileContents: () => {},
+        getLastFileContent: () => undefined,
+      } as any,
+      emit: () => {},
+      onContextUsageChanged: (usage) => contextUsage.push(usage),
+    });
+
+    await pipeline.handleSessionUpdate({
+      sessionId: "s1",
+      update: {
+        sessionUpdate: "session_info_update",
+        _meta: {
+          piAcp: {
+            contextUsage: {
+              state: "unavailable",
+              size: 1050000,
+              reason: "post_compaction",
+            },
+          },
+        },
+      },
+    } as any);
+
+    assert.strictEqual(cleared, true);
+    assert.deepStrictEqual(contextUsage, [null]);
+    pipeline.dispose();
+  });
+
+  test("ignores non-Pi unavailable-like metadata for context usage", async () => {
+    let cleared = false;
+    const contextUsage: unknown[] = [];
+    const pipeline = new SessionOutputPipeline({
+      client: {
+        clearLastUsageUpdate: () => {
+          cleared = true;
+        },
+      } as any,
+      fileHandler: {
+        clearLastFileContents: () => {},
+        getLastFileContent: () => undefined,
+      } as any,
+      emit: () => {},
+      onContextUsageChanged: (usage) => contextUsage.push(usage),
+    });
+
+    await pipeline.handleSessionUpdate({
+      sessionId: "s1",
+      update: {
+        sessionUpdate: "session_info_update",
+        _meta: { other: { contextUsage: { state: "unavailable" } } },
+      },
+    } as any);
+
+    assert.strictEqual(cleared, false);
+    assert.deepStrictEqual(contextUsage, []);
+    pipeline.dispose();
+  });
+
   test("calls structured diff callback with final content before emitting completion", async () => {
     const callbackContents: unknown[] = [];
     const events: string[] = [];

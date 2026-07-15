@@ -3,6 +3,7 @@ import type {
   ExtensionMessage,
   Mention,
   MessageListElements,
+  MessageScrollPosition,
   PromptHistoryEntry,
   UserScrollDirection,
 } from "../types";
@@ -44,6 +45,9 @@ export class MessageListComponent implements MessageHandler {
   private pointerScrollActive = false;
   private touchScrollActive = false;
   private userScrollDirection: UserScrollDirection = "none";
+  private readonly scrollPositionListeners = new Set<
+    (position: MessageScrollPosition) => void
+  >();
 
   private availableCommands: AvailableCommand[] = [];
   private isGenerating = false;
@@ -296,7 +300,21 @@ export class MessageListComponent implements MessageHandler {
   }
 
   setScrollTop(value: number): void {
+    this.cancelPendingBottomScroll();
     this.elements.messagesEl.scrollTop = value;
+    this.isAutoScrollEnabled = this.isNearMessagesBottom();
+    this.notifyScrollPositionChange();
+    this.scheduleMessagesPaintInvalidation();
+  }
+
+  onScrollPositionChange(handler: (position: MessageScrollPosition) => void): {
+    dispose(): void;
+  } {
+    this.scrollPositionListeners.add(handler);
+    handler(this.getScrollPosition());
+    return {
+      dispose: () => this.scrollPositionListeners.delete(handler),
+    };
   }
 
   getUserMessageDrafts(): PromptHistoryEntry[] {
@@ -807,7 +825,22 @@ export class MessageListComponent implements MessageHandler {
       this.clearDiscreteScrollIntent();
     }
 
+    this.notifyScrollPositionChange();
     this.scheduleMessagesPaintInvalidation();
+  }
+
+  getScrollPosition(): MessageScrollPosition {
+    return {
+      isNearBottom: this.isNearMessagesBottom(),
+      scrollTop: this.elements.messagesEl.scrollTop,
+    };
+  }
+
+  private notifyScrollPositionChange(): void {
+    const position = this.getScrollPosition();
+    for (const listener of this.scrollPositionListeners) {
+      listener(position);
+    }
   }
 
   private scheduleBottomScrollFrame(): void {
@@ -844,6 +877,7 @@ export class MessageListComponent implements MessageHandler {
     void messagesEl.offsetHeight;
     messagesEl.style.scrollBehavior = previousScrollBehavior;
     this.isAutoScrollEnabled = true;
+    this.notifyScrollPositionChange();
     this.scheduleMessagesPaintInvalidation();
   }
 

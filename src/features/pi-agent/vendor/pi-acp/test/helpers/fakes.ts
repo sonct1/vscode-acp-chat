@@ -29,8 +29,15 @@ export class FakePiRpcProcess {
   readonly prompts: Array<{ message: string; attachments: unknown[] }> = []
   readonly extensionUiResponses: unknown[] = []
   abortCount = 0
+  getSessionStatsCount = 0
   state: unknown = {}
+  stateSequence: unknown[] = []
+  stateErrorSequence: unknown[] = []
+  statePromiseSequence: Array<Promise<unknown>> = []
+  getStateCount = 0
   sessionStats: unknown = null
+  sessionStatsDelayMs = 0
+  sessionStatsPromiseSequence: Array<Promise<unknown>> = []
 
   onEvent(handler: (ev: PiRpcEvent) => void): () => void {
     this.handlers.push(handler)
@@ -55,7 +62,14 @@ export class FakePiRpcProcess {
     this.extensionUiResponses.push(response)
   }
 
-  async getState(): Promise<any> {
+  async getState(): Promise<unknown> {
+    this.getStateCount += 1
+    if (this.statePromiseSequence.length) return await this.statePromiseSequence.shift()
+    if (this.stateErrorSequence.length) {
+      const err = this.stateErrorSequence.shift()
+      if (err) throw err
+    }
+    if (this.stateSequence.length) return this.stateSequence.shift()
     return this.state
   }
 
@@ -68,6 +82,11 @@ export class FakePiRpcProcess {
   }
 
   async getSessionStats(): Promise<any> {
+    this.getSessionStatsCount += 1
+    if (this.sessionStatsPromiseSequence.length) return await this.sessionStatsPromiseSequence.shift()
+    if (this.sessionStatsDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, this.sessionStatsDelayMs))
+    }
     return this.sessionStats
   }
 }

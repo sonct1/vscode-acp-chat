@@ -32,6 +32,12 @@ import {
 import { getWorkspaceRoot } from "../../utils/workspace";
 import { AsyncSerialProcessor } from "../../utils/async-queue";
 import type { Mention } from "../../utils/mention-serializer";
+import {
+  registerMessageQueueHostFeature,
+  MessageQueueController,
+  type ComposerPayload,
+  type MessageQueueHostMessage,
+} from "../message-queue";
 import { TranscriptStore } from "./transcript-store";
 import { WorkspaceMutationCoordinator } from "./workspace-mutation-coordinator";
 import {
@@ -95,6 +101,7 @@ export interface MultiSessionHostOptions {
   clientFactory?: (
     agent: AgentConfig
   ) => ACPClient | MultiSessionClientFactoryResult;
+  messageQueueFactory?: ReturnType<typeof registerMessageQueueHostFeature>;
 }
 
 interface AgentPreference {
@@ -146,6 +153,7 @@ interface ManagedSession {
   isGenerating: boolean;
   isLoadingHistory: boolean;
   sendInFlight: boolean;
+  recoveryPayloads: ComposerPayload[];
   eagerRuntimeAttempted?: boolean;
   runtimeStartPromise?: Promise<void>;
   resources?: SessionResources;
@@ -153,6 +161,7 @@ interface ManagedSession {
   sessionManager?: AgentSessionManager;
   queue?: AsyncSerialProcessor<SessionNotification>;
   output?: SessionOutputPipeline;
+  messageQueue?: MessageQueueController;
 }
 
 export class MultiSessionHostController implements vscode.Disposable {
@@ -184,6 +193,9 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly clientFactory: (
     agent: AgentConfig
   ) => ACPClient | MultiSessionClientFactoryResult;
+  private readonly messageQueueFactory: ReturnType<
+    typeof registerMessageQueueHostFeature
+  >;
 
   constructor(
     globalStateOrOptions: vscode.Memento | MultiSessionHostOptions,
@@ -200,6 +212,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.clientFactory =
         globalStateOrOptions.clientFactory ??
         ((agent) => new ACPClient({ agentConfig: agent }));
+      this.messageQueueFactory =
+        globalStateOrOptions.messageQueueFactory ??
+        registerMessageQueueHostFeature();
     } else {
       this.globalState = globalStateOrOptions;
       this.post = postMessage ?? (() => {});
@@ -208,6 +223,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.focusChat = () => {};
       this.quickSwitch = () => {};
       this.clientFactory = (agent) => new ACPClient({ agentConfig: agent });
+      this.messageQueueFactory = registerMessageQueueHostFeature();
     }
 
     const savedAgentId = this.globalState.get<string>(SELECTED_AGENT_KEY);
@@ -239,7 +255,10 @@ export class MultiSessionHostController implements vscode.Disposable {
     const subscription = this.managerStateEmitter.event(listener);
     return new vscode.Disposable(() => {
       subscription.dispose();
-      this.managerSubscriberCount = Math.max(0, this.managerSubscriberCount - 1);
+      this.managerSubscriberCount = Math.max(
+        0,
+        this.managerSubscriberCount - 1
+      );
     });
   }
 
@@ -303,10 +322,19 @@ export class MultiSessionHostController implements vscode.Disposable {
   }): Promise<boolean> {
     switch (message.type) {
       case "sendMessage":
-        await this.sendActiveMessage(
+        await this.submitActiveMessage(
           typeof message.text === "string" ? message.text : "",
           Array.isArray(message.images) ? (message.images as string[]) : [],
           Array.isArray(message.mentions) ? (message.mentions as Mention[]) : []
+        );
+        return true;
+      case "feature.message-queue.submit":
+      case "feature.message-queue.abortAndRestore":
+      case "feature.message-queue.restoreQueued":
+        await this.handleMessageQueueMessage(
+          message as unknown as MessageQueueHostMessage & {
+            currentDraft?: ComposerPayload;
+          }
         );
         return true;
       case "connect":
@@ -453,7 +481,27 @@ export class MultiSessionHostController implements vscode.Disposable {
     images: string[] = [],
     mentions: Mention[] = []
   ): Promise<void> {
+    await this.submitActiveMessage(text, images, mentions);
+  }
+
+  async submitActiveMessage(
+    text: string,
+    images: string[] = [],
+    mentions: Mention[] = []
+  ): Promise<void> {
     const session = this.getActive() ?? this.createDraft();
+    await session.messageQueue!.submit({
+      id: `multi-${Date.now()}`,
+      intent: "steer",
+      payload: { text, images, mentions, composerHtml: text },
+    });
+    await session.messageQueue!.waitForIdle();
+  }
+
+  private async dispatchSessionMessage(
+    session: ManagedSession,
+    payload: ComposerPayload
+  ): Promise<void> {
     if (session.isGenerating || session.sendInFlight) return;
     session.sendInFlight = true;
 
@@ -466,22 +514,27 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.append(session, { type: "error", text: message });
       this.sendState();
       session.sendInFlight = false;
-      return;
+      throw error;
     }
 
     session.isGenerating = true;
     session.status = "running";
     session.lastError = undefined;
     session.output?.reset();
-    this.append(session, { type: "userMessage", text, images, mentions });
+    this.append(session, {
+      type: "userMessage",
+      text: payload.text,
+      images: payload.images,
+      mentions: payload.mentions,
+    });
     this.append(session, { type: "streamStart" });
     this.sendState();
 
     try {
       const response = await session.client!.sendMessage(
-        text,
-        images,
-        mentions
+        payload.text,
+        payload.images,
+        payload.mentions
       );
       await session.queue!.waitForIdle();
       await session.output!.finalizePendingToolCalls(response.stopReason);
@@ -497,6 +550,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.append(session, { type: "error", text: `Error: ${message}` });
       await session.output!.finalizePendingToolCalls("error");
       this.append(session, { type: "streamEnd", stopReason: "error" });
+      throw error;
     } finally {
       session.isGenerating = false;
       session.sendInFlight = false;
@@ -505,14 +559,68 @@ export class MultiSessionHostController implements vscode.Disposable {
       if (session.localSessionId === this.activeLocalSessionId) {
         this.sendSnapshot();
       }
+      session.messageQueue!.notifyStateChanged();
     }
+  }
+
+  private async handleMessageQueueMessage(
+    message: MessageQueueHostMessage & { currentDraft?: ComposerPayload }
+  ): Promise<void> {
+    const session = this.resolveMessageQueueSession(message);
+    if (!session) {
+      this.postRejectedQueueResult(message, "Unknown or stale session");
+      return;
+    }
+    if (message.type === "feature.message-queue.submit") {
+      try {
+        const status = await session.messageQueue!.submit({
+          id: message.requestId,
+          intent: message.intent,
+          payload: message.payload,
+        });
+        this.post({
+          type: "feature.message-queue.submitResult",
+          requestId: message.requestId,
+          sessionId: session.localSessionId,
+          disposition: status,
+          acceptedHtml: message.payload.composerHtml,
+        });
+      } catch (error) {
+        this.post({
+          type: "feature.message-queue.submitResult",
+          requestId: message.requestId,
+          sessionId: session.localSessionId,
+          disposition: "rejected",
+          acceptedHtml: message.payload.composerHtml,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    const payloads =
+      message.type === "feature.message-queue.abortAndRestore"
+        ? await session.messageQueue!.abortAndRestore(message.currentDraft)
+        : session.messageQueue!.restoreQueuedWithoutAbort(message.currentDraft);
+    this.post({
+      type: "feature.message-queue.restoreResult",
+      requestId: message.requestId,
+      sessionId: session.localSessionId,
+      payloads,
+      aborted: message.type === "feature.message-queue.abortAndRestore",
+    });
   }
 
   async stop(localSessionId?: string): Promise<void> {
     const session = localSessionId
       ? this.sessions.get(localSessionId)
       : this.getActive();
-    if (!session?.client || !session.isGenerating) return;
+    if (!session) return;
+    if (localSessionId) {
+      session.recoveryPayloads.push(
+        ...session.messageQueue!.restoreQueuedWithoutAbort()
+      );
+    }
+    if (!session.client || !session.isGenerating) return;
     session.status = "cancelling";
     this.sendState();
     await session.client.cancel();
@@ -752,7 +860,20 @@ export class MultiSessionHostController implements vscode.Disposable {
       isGenerating: false,
       isLoadingHistory: false,
       sendInFlight: false,
+      recoveryPayloads: [],
     };
+    session.messageQueue = this.messageQueueFactory.createController({
+      sessionId: session.localSessionId,
+      isBusy: () => session.isGenerating || session.sendInFlight,
+      dispatch: (payload) => this.dispatchSessionMessage(session, payload),
+      cancel: () =>
+        session.client ? session.client.cancel() : Promise.resolve(),
+      onState: (snapshot) => {
+        if (session.localSessionId === this.activeLocalSessionId)
+          this.post(snapshot as unknown as Record<string, unknown>);
+        this.sendState();
+      },
+    });
     this.sessions.set(session.localSessionId, session);
     if (!this.activeLocalSessionId) {
       this.activeLocalSessionId = session.localSessionId;
@@ -1132,6 +1253,9 @@ export class MultiSessionHostController implements vscode.Disposable {
     const session = this.getActive();
     if (!session) return;
 
+    this.post(
+      session.messageQueue!.getSnapshot() as unknown as Record<string, unknown>
+    );
     this.post({
       type: "feature.multi-session.snapshot",
       activeLocalSessionId: session.localSessionId,
@@ -1145,8 +1269,9 @@ export class MultiSessionHostController implements vscode.Disposable {
       pendingPermissions: session.permissionQueue.map((pending) =>
         this.permissionMessage(pending.id, pending.params)
       ),
-      isGenerating: session.isGenerating,
+      isGenerating: session.messageQueue!.getSnapshot().processing,
     });
+    this.flushRecoveryPayloads(session);
   }
 
   private sendState(): void {
@@ -1260,7 +1385,9 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private effectiveStatus(session: ManagedSession): MultiSessionStatus {
+    if (session.status === "error") return "error";
     if (session.permissionQueue.length > 0) return "awaiting_permission";
+    if (session.messageQueue!.isDrainActive()) return "running";
     if (session.isGenerating) return "running";
     if (session.isLoadingHistory) return "loading_history";
     if (session.sendInFlight) return "running";
@@ -1302,7 +1429,10 @@ export class MultiSessionHostController implements vscode.Disposable {
     );
   }
 
-  private hasConflictedDiffPath(session: ManagedSession, path: string): boolean {
+  private hasConflictedDiffPath(
+    session: ManagedSession,
+    path: string
+  ): boolean {
     return session.conflictedDiffPaths?.has(path) ?? false;
   }
 
@@ -1723,11 +1853,55 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private async waitForIdle(session: ManagedSession): Promise<boolean> {
-    const deadline = Date.now() + 10_000;
-    while (session.isGenerating && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await session.messageQueue!.waitForIdle();
     return !session.isGenerating;
+  }
+
+  private resolveMessageQueueSession(
+    message: MessageQueueHostMessage
+  ): ManagedSession | undefined {
+    if (message.sessionId) return this.sessions.get(message.sessionId);
+    return this.getActive() ?? this.createDraft();
+  }
+
+  private postRejectedQueueResult(
+    message: MessageQueueHostMessage,
+    reason: string
+  ): void {
+    if (message.type === "feature.message-queue.submit") {
+      this.post({
+        type: "feature.message-queue.submitResult",
+        requestId: message.requestId,
+        sessionId: message.sessionId,
+        disposition: "rejected",
+        acceptedHtml: message.payload.composerHtml,
+        reason,
+      });
+      return;
+    }
+    this.post({
+      type: "feature.message-queue.restoreResult",
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      payloads: [],
+      aborted: message.type === "feature.message-queue.abortAndRestore",
+    });
+  }
+
+  private flushRecoveryPayloads(session: ManagedSession): void {
+    if (
+      session.localSessionId !== this.activeLocalSessionId ||
+      session.recoveryPayloads.length === 0
+    )
+      return;
+    const payloads = session.recoveryPayloads.splice(0);
+    this.post({
+      type: "feature.message-queue.restoreResult",
+      requestId: `recovery-${Date.now()}`,
+      sessionId: session.localSessionId,
+      payloads,
+      aborted: true,
+    });
   }
 
   private disposeRuntime(session: ManagedSession): void {

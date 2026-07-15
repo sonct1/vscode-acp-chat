@@ -4,6 +4,11 @@ export type AcpUsageUpdate = {
   cost?: { amount: number; currency: string } | null
 }
 
+export type NormalizedPiContextUsage =
+  | ({ state: 'available' } & AcpUsageUpdate)
+  | { state: 'unavailable'; size?: number; reason: 'post_compaction' | 'pending_provider_usage' }
+  | { state: 'unsupported' }
+
 type UsageInputs = {
   stats?: unknown
   state?: unknown
@@ -67,21 +72,15 @@ function normalizeCost(stats: Record<string, unknown>): { amount: number; curren
   return amount !== null && currency !== null ? { amount, currency } : null
 }
 
-export function normalizePiUsageUpdate(input: UsageInputs): AcpUsageUpdate | null {
+export function normalizePiContextUsage(input: UsageInputs): NormalizedPiContextUsage {
   const stats = asRecord(input.stats)
-  if (!stats) return null
+  if (!stats) return { state: 'unsupported' }
 
+  const hasContextUsage = Object.prototype.hasOwnProperty.call(stats, 'contextUsage')
   const contextUsage = asRecord(stats.contextUsage)
   const tokens = asRecord(stats.tokens)
   const state = asRecord(input.state)
   const stateModel = asRecord(state?.model)
-
-  // Pi RPC fields verified from get_session_stats/get_state:
-  // - preferred used tokens: get_session_stats.contextUsage.tokens
-  // - fallback used tokens: get_session_stats.tokens.total, then token part sum
-  // - preferred reliable size: get_session_stats.contextUsage.contextWindow
-  // - fallback reliable size: get_state.model.contextWindow for the active model
-  const used = firstNonNegative(contextUsage?.tokens, tokens?.total, sumTokenParts(tokens))
   const size = firstPositive(
     contextUsage?.contextWindow,
     contextUsage?.contextLimit,
@@ -91,11 +90,39 @@ export function normalizePiUsageUpdate(input: UsageInputs): AcpUsageUpdate | nul
     stateModel?.maxContextTokens
   )
 
-  if (used === null || size === null) return null
+  if (hasContextUsage) {
+    if (contextUsage?.tokens === null) {
+      return {
+        state: 'unavailable',
+        ...(size === null ? {} : { size }),
+        reason: 'post_compaction'
+      }
+    }
+
+    const used = firstNonNegative(contextUsage?.tokens)
+    if (used === null || size === null) return { state: 'unsupported' }
+
+    return {
+      state: 'available',
+      used,
+      size,
+      cost: normalizeCost(stats)
+    }
+  }
+
+  const used = firstNonNegative(tokens?.total, sumTokenParts(tokens))
+  if (used === null || size === null) return { state: 'unsupported' }
 
   return {
+    state: 'available',
     used,
     size,
     cost: normalizeCost(stats)
   }
+}
+
+export function normalizePiUsageUpdate(input: UsageInputs): AcpUsageUpdate | null {
+  const usage = normalizePiContextUsage(input)
+  if (usage.state !== 'available') return null
+  return { used: usage.used, size: usage.size, cost: usage.cost }
 }

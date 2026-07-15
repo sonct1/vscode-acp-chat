@@ -3,6 +3,7 @@ import { ACPClient } from "./acp/client";
 import { ChatViewProvider } from "./views/chat";
 import { getAgentsWithStatus } from "./acp/agents";
 import { registerExtensionHostFeatures } from "./features/register-host";
+import { MultiSessionManagerViewProvider } from "./features/multi-session/manager-view";
 
 /** VSCode ACP extension client instance. */
 let acpClient: ACPClient | undefined;
@@ -91,7 +92,8 @@ export function activate(context: vscode.ExtensionContext) {
 
       if (
         e.affectsConfiguration("vscode-acp-chat.customAgents") ||
-        e.affectsConfiguration("vscode-acp-chat.pi.historyLoadMode")
+        e.affectsConfiguration("vscode-acp-chat.pi.historyLoadMode") ||
+        e.affectsConfiguration("vscode-acp-chat.antigravity.enabled")
       ) {
         getAgentsWithStatus(true); // Force refresh agents cache and re-validate
       }
@@ -99,7 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(mcpConfigWatcher);
 
-  // Register webview view provider for the chat panel
+  // Register webview view providers for the chat and session manager surfaces
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       ChatViewProvider.viewType,
@@ -111,6 +113,27 @@ export function activate(context: vscode.ExtensionContext) {
       }
     )
   );
+  const managerViewProvider = chatProvider.getMultiSessionManagerViewProvider();
+  void vscode.commands
+    .executeCommand(
+      "setContext",
+      "vscode-acp-chat.multiSessionUnavailable",
+      !managerViewProvider
+    )
+    .then(undefined, (error) => {
+      console.debug(
+        "[Extension] Failed to update multi-session availability context:",
+        error
+      );
+    });
+  if (managerViewProvider) {
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        MultiSessionManagerViewProvider.viewType,
+        managerViewProvider
+      )
+    );
+  }
 
   registerExtensionHostFeatures({
     context,
@@ -309,15 +332,21 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("vscode-acp-chat.manageSessions", () => {
-      chatProvider?.manageSessions();
-    })
+    vscode.commands.registerCommand(
+      "vscode-acp-chat.manageSessions",
+      async () => {
+        await chatProvider?.manageSessions();
+      }
+    )
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("vscode-acp-chat.switchSession", async () => {
-      await chatProvider?.switchSession();
-    })
+    vscode.commands.registerCommand(
+      "vscode-acp-chat.switchSession",
+      async () => {
+        await chatProvider?.switchSession();
+      }
+    )
   );
 
   context.subscriptions.push({

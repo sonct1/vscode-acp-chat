@@ -1,7 +1,30 @@
+const fs = require("fs/promises");
 const esbuild = require("esbuild");
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
+
+async function finalizeAntigravityArtifact() {
+  await fs.mkdir("dist/antigravity-acp", { recursive: true });
+  await fs.copyFile(
+    "src/features/antigravity-agent/vendor/antigravity-acp/LICENSE",
+    "dist/antigravity-acp/LICENSE"
+  );
+  if (production) {
+    await fs.rm("dist/antigravity-acp/index.mjs.map", { force: true });
+  }
+}
+
+const antigravityLicensePlugin = {
+  name: "antigravity-license-copy",
+  setup(build) {
+    build.onEnd(async (result) => {
+      if (result.errors.length === 0) {
+        await finalizeAntigravityArtifact();
+      }
+    });
+  },
+};
 
 const esbuildProblemMatcherPlugin = {
   name: "esbuild-problem-matcher",
@@ -80,12 +103,28 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin],
   });
 
+  const antigravityAcpCtx = await esbuild.context({
+    entryPoints: ["src/features/antigravity-agent/vendor/antigravity-acp/index.ts"],
+    bundle: true,
+    format: "esm",
+    target: "node22",
+    minify: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "node",
+    outfile: "dist/antigravity-acp/index.mjs",
+    external: ["vscode", "node:*"],
+    logLevel: "warning",
+    plugins: [esbuildProblemMatcherPlugin, antigravityLicensePlugin],
+  });
+
   if (watch) {
     await Promise.all([
       extensionCtx.watch(),
       webviewCtx.watch(),
       sessionManagerWebviewCtx.watch(),
       piAcpCtx.watch(),
+      antigravityAcpCtx.watch(),
     ]);
   } else {
     await Promise.all([
@@ -93,12 +132,14 @@ async function main() {
       webviewCtx.rebuild(),
       sessionManagerWebviewCtx.rebuild(),
       piAcpCtx.rebuild(),
+      antigravityAcpCtx.rebuild(),
     ]);
     await Promise.all([
       extensionCtx.dispose(),
       webviewCtx.dispose(),
       sessionManagerWebviewCtx.dispose(),
       piAcpCtx.dispose(),
+      antigravityAcpCtx.dispose(),
     ]);
   }
 }

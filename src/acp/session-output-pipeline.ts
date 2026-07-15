@@ -7,6 +7,7 @@ import type {
 import type { ACPClient, ContextUsageUpdate, SessionMetadata } from "./client";
 import type { FileHandler } from "./file-handler";
 import { extractMentions } from "../utils/mention-serializer";
+import { getPiContextUsageUnavailableMeta } from "./pi-context-usage-meta";
 
 export interface SessionRenderMessage {
   type: string;
@@ -276,6 +277,10 @@ export class SessionOutputPipeline implements vscode.Disposable {
     }
 
     if (update.sessionUpdate === "session_info_update") {
+      if (getPiContextUsageUnavailableMeta(update)) {
+        this.options.client.clearLastUsageUpdate();
+        this.options.onContextUsageChanged?.(null);
+      }
       this.options.onSessionInfoChanged?.(
         update as unknown as Record<string, unknown>
       );

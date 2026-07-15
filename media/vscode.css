@@ -6,6 +6,34 @@
 :root,
 body.vscode-light {
   --container-padding: 12px;
+  --acp-chat-font-size-effective: var(
+    --acp-chat-font-size,
+    var(--vscode-font-size, 13px)
+  );
+  /* The configured value is authoritative for every normal text role. */
+  --acp-font-size-normal: 1rem;
+  --acp-font-size-xxs: var(--acp-font-size-normal);
+  --acp-font-size-xs: var(--acp-font-size-normal);
+  --acp-font-size-sm: var(--acp-font-size-normal);
+  --acp-font-size-base: var(--acp-font-size-normal);
+  --acp-font-size-md: var(--acp-font-size-normal);
+  --acp-font-size-lg: var(--acp-font-size-normal);
+  --acp-font-size-prose: var(--acp-font-size-normal);
+  --acp-font-size-code: var(--acp-font-size-normal);
+  --acp-font-size-code-block: var(--acp-font-size-normal);
+  --acp-font-size-caption: var(--acp-font-size-normal);
+  /* Only semantic Markdown headings may be larger, with bounded growth. */
+  --acp-font-size-heading-1: clamp(
+    calc(1rem + 2px),
+    1.2rem,
+    calc(1rem + 4px)
+  );
+  --acp-font-size-heading-2: clamp(
+    calc(1rem + 1px),
+    1.1rem,
+    calc(1rem + 2px)
+  );
+  --acp-font-size-heading-3: clamp(1rem, 1.05rem, calc(1rem + 1px));
   --input-padding-vertical: 8px;
   --input-padding-horizontal: 12px;
   --input-margin-vertical: 4px;
@@ -133,10 +161,14 @@ body.vscode-high-contrast-light {
   --acp-hljs-deletion-background: transparent;
 }
 
+html {
+  font-size: var(--acp-chat-font-size-effective);
+}
+
 body {
   padding: 0;
   color: var(--vscode-foreground);
-  font-size: var(--acp-chat-font-size, var(--vscode-font-size));
+  font-size: var(--acp-font-size-base);
   font-weight: var(--vscode-font-weight);
   font-family: var(--vscode-font-family);
   background-color: var(--vscode-sideBar-background);
@@ -200,7 +232,7 @@ a:active {
 
 /* Code */
 code {
-  font-size: var(--vscode-editor-font-size);
+  font-size: var(--acp-font-size-code);
   font-family: var(--vscode-editor-font-family), monospace;
   background: var(--vscode-textCodeBlock-background);
   padding: 1px 4px;
@@ -219,7 +251,7 @@ pre {
 pre code {
   background: none;
   padding: 0;
-  font-size: 0.85em;
+  font-size: var(--acp-font-size-code-block);
   line-height: 1.4;
 }
 

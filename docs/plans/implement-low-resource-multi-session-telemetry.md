@@ -72,7 +72,7 @@ Reduce CPU/RAM overhead in multi-session mode by removing live `Unread`, `diff`,
 - [ ] `ACP Sessions` summary no longer contains `Unread N`.
 - [ ] Session rows no longer render `N unread` badges.
 - [ ] `Switch ACP Session` QuickPick descriptions no longer include unread text.
-- [ ] Session filtering/sorting remains based on status, permission, draft/running state, and recency.
+- [ ] Session filtering remains status-aware; both manager and QuickPick sorting use `createdAt` descending only.
 
 **Verification:**
 
@@ -281,7 +281,7 @@ Reduce CPU/RAM overhead in multi-session mode by removing live `Unread`, `diff`,
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Removing diff tracking removes accept/rollback safety in multi-session low-resource mode. | Medium | Keep setting documented; allow users to disable low-resource mode when they need actionable diff review. |
-| Users may miss background activity without unread badges. | Low | Preserve running/waiting/status indicators and session recency sorting. |
+| Users may miss background activity without unread badges. | Low | Preserve running/waiting/status indicators while keeping session order deterministic by newest `createdAt`. |
 | Contract removal touches many tests and fixtures. | Medium | Land Phase 1 and Phase 2 separately; keep temporary zero-valued fields only if needed for incremental migration. |
 | Hidden manager panel reload may reset filters/search. | Low | Treat host state as source of truth; accept filter reset as low-resource trade-off. |
 | Removing raw transcript storage could break assumptions about event count. | Medium | Preserve `lastSeq` semantics and add focused tests for chunk compaction and snapshot switching. |

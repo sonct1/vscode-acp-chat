@@ -22,7 +22,7 @@
   },
   "homepage": "https://github.com/pengjiantao/vscode-acp-chat#readme",
   "engines": {
-    "vscode": "^1.74.0",
+    "vscode": "^1.101.0",
     "node": "^22"
   },
   "categories": [
@@ -76,7 +76,8 @@
         "command": "vscode-acp-chat.manageSessions",
         "title": "Manage Chat Sessions",
         "category": "ACP",
-        "icon": "$(list-tree)"
+        "icon": "$(list-tree)",
+        "enablement": "config.vscode-acp-chat.multiSession.enabled && !vscode-acp-chat.multiSessionUnavailable"
       },
       {
         "command": "vscode-acp-chat.switchSession",
@@ -136,6 +137,13 @@
           "title": "ACP CHAT",
           "icon": "assets/icon.svg"
         }
+      ],
+      "activitybar": [
+        {
+          "id": "vscode-acp-chat-session-manager",
+          "title": "ACP Sessions",
+          "icon": "assets/session-manager.svg"
+        }
       ]
     },
     "views": {
@@ -146,6 +154,15 @@
           "name": "Chat",
           "icon": "$(comment-discussion)",
           "contextualTitle": "ACP Chat"
+        }
+      ],
+      "vscode-acp-chat-session-manager": [
+        {
+          "type": "webview",
+          "id": "vscode-acp-chat.sessionManagerView",
+          "name": "Sessions",
+          "contextualTitle": "ACP Sessions",
+          "when": "config.vscode-acp-chat.multiSession.enabled && !vscode-acp-chat.multiSessionUnavailable"
         }
       ]
     },
@@ -162,7 +179,7 @@
           "default": 0,
           "minimum": 0,
           "maximum": 40,
-          "description": "Chat webview font size in pixels. Set to 0 to follow the VS Code font size. Positive values are clamped to 8-40 px."
+          "description": "Uniform normal-text size for the primary chat webview in pixels. Set to 0 to follow the VS Code font size. Positive values are clamped to 8-40 px; Markdown headings may be slightly larger, while fixed icons and the ACP Sessions manager are excluded."
         },
         "vscode-acp-chat.multiSession.enabled": {
           "type": "boolean",
@@ -176,7 +193,7 @@
         },
         "vscode-acp-chat.multiSession.maxConcurrentSessions": {
           "type": "number",
-          "default": 4,
+          "default": 20,
           "minimum": 1,
           "description": "Maximum number of started local ACP sessions/processes allowed concurrently. Draft sessions do not count toward this limit."
         },
@@ -202,7 +219,7 @@
         },
         "vscode-acp-chat.sessionRetentionDays": {
           "type": "number",
-          "default": 30,
+          "default": 60,
           "minimum": 1,
           "description": "Automatically remove persisted sessions older than this many days."
         },
@@ -211,6 +228,11 @@
           "default": 300,
           "minimum": 1,
           "description": "Maximum number of persisted sessions to keep per agent. Oldest sessions are removed first."
+        },
+        "vscode-acp-chat.antigravity.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the bundled experimental Antigravity ACP adapter. Google states that third-party access using Antigravity OAuth may violate the Antigravity Terms of Service and may result in account suspension or termination. See https://antigravity.google/terms and https://antigravity.google/docs/faq before enabling."
         },
         "vscode-acp-chat.pi.historyLoadMode": {
           "type": "string",
@@ -323,7 +345,7 @@
         },
         {
           "command": "vscode-acp-chat.manageSessions",
-          "when": "view == vscode-acp-chat.chatView",
+          "when": "view == vscode-acp-chat.chatView && config.vscode-acp-chat.multiSession.enabled && !vscode-acp-chat.multiSessionUnavailable",
           "group": "navigation@2"
         },
         {
@@ -358,7 +380,7 @@
         },
         {
           "command": "vscode-acp-chat.manageSessions",
-          "when": "true"
+          "when": "config.vscode-acp-chat.multiSession.enabled && !vscode-acp-chat.multiSessionUnavailable"
         },
         {
           "command": "vscode-acp-chat.switchSession",
@@ -382,18 +404,20 @@
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && node esbuild.js",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && npm run typecheck:antigravity-adapter",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "npm run check-types && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
-    "pretest": "npm run compile-tests && npm run compile",
+    "pretest": "npm run test:antigravity-adapter && npm run compile-tests && npm run compile",
     "test": "vscode-test",
+    "typecheck:antigravity-adapter": "tsc -p src/features/antigravity-agent/vendor/antigravity-acp/tsconfig.json --noEmit",
+    "test:antigravity-adapter": "npm run typecheck:antigravity-adapter && tsc -p src/features/antigravity-agent/vendor/antigravity-acp/tsconfig.test.json && node --experimental-specifier-resolution=node --test src/features/antigravity-agent/vendor/antigravity-acp/.tmp-tests/tests/*.test.js && node scripts/smoke-antigravity-adapter.mjs",
     "precoverage": "npm run compile-tests && npm run compile",
     "coverage": "vscode-test --coverage --coverage-output coverage --coverage-reporter lcov --coverage-reporter text",
     "coverage:html": "vscode-test --coverage --coverage-reporter html",
-    "lint": "eslint src --fix",
+    "lint": "eslint src --fix --ignore-pattern 'src/features/pi-agent/vendor/**' --ignore-pattern 'src/features/antigravity-agent/vendor/**'",
     "format": "prettier --write \"src/**/*.ts\" \"*.{json,md}\"",
     "prepare": "husky",
     "release": "standard-version",
@@ -407,8 +431,8 @@
     "@types/highlight.js": "^9.12.4",
     "@types/jsdom": "^28.0.3",
     "@types/mocha": "^10.0.10",
-    "@types/node": "18.x",
-    "@types/vscode": "^1.74.0",
+    "@types/node": "^22.17.0",
+    "@types/vscode": "^1.101.0",
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
     "@vscode/test-cli": "^0.0.15",
@@ -426,7 +450,8 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^1.2.0",
+    "@agentclientprotocol/sdk": "1.2.1",
+    "@bufbuild/protobuf": "2.12.1",
     "@baybreezy/file-extension-icon": "^0.0.5",
     "@vscode/codicons": "^0.0.45",
     "highlight.js": "^11.11.1",

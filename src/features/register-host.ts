@@ -11,6 +11,7 @@ import {
   registerAgentSelectionHostFeature,
   type AgentSelectionTarget,
 } from "./agent-selection/host";
+import { registerMessageQueueHostFeature } from "./message-queue/host";
 
 export interface HostFeatureRegistry {
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
@@ -19,6 +20,7 @@ export interface HostFeatureRegistry {
   clickableResourceLinks?: ReturnType<
     typeof registerClickableResourceLinksHostFeature
   >;
+  messageQueue?: ReturnType<typeof registerMessageQueueHostFeature>;
   multiSession?: MultiSessionHostController;
   openSettings?: ReturnType<typeof registerOpenSettingsHostFeature>;
 }
@@ -36,6 +38,7 @@ export function registerHostFeatures(options: {
       postMessage: options.postMessage,
     }),
     clickableResourceLinks: registerClickableResourceLinksHostFeature(),
+    messageQueue: registerMessageQueueHostFeature(),
   };
 
   if (MultiSessionHostController.isEnabled()) {
@@ -46,6 +49,7 @@ export function registerHostFeatures(options: {
       onOpenManager: options.onOpenManager,
       onFocusChat: options.onFocusChat,
       onQuickSwitch: options.onQuickSwitch,
+      messageQueueFactory: features.messageQueue,
     });
   }
 

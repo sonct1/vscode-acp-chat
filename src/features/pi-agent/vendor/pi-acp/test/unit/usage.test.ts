@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizePiUsageUpdate } from '../../src/acp/usage.js'
+import { normalizePiContextUsage, normalizePiUsageUpdate } from '../../src/acp/usage.js'
 
 test('normalizePiUsageUpdate: uses Pi contextUsage tokens and contextWindow', () => {
   assert.deepEqual(
@@ -20,7 +20,40 @@ test('normalizePiUsageUpdate: uses Pi contextUsage tokens and contextWindow', ()
   )
 })
 
-test('normalizePiUsageUpdate: falls back to tokens.total and get_state model contextWindow', () => {
+test('normalizePiContextUsage: explicit null contextUsage tokens is unavailable and does not use cumulative total', () => {
+  assert.deepEqual(
+    normalizePiContextUsage({
+      stats: {
+        tokens: { total: 900000 },
+        contextUsage: { tokens: null, contextWindow: 1050000, percent: null }
+      }
+    }),
+    { state: 'unavailable', size: 1050000, reason: 'post_compaction' }
+  )
+  assert.equal(
+    normalizePiUsageUpdate({
+      stats: {
+        tokens: { total: 900000 },
+        contextUsage: { tokens: null, contextWindow: 1050000, percent: null }
+      }
+    }),
+    null
+  )
+})
+
+test('normalizePiContextUsage: explicit null tokens remains unavailable when context size is unknown', () => {
+  assert.deepEqual(
+    normalizePiContextUsage({
+      stats: {
+        tokens: { total: 900000 },
+        contextUsage: { tokens: null, percent: null }
+      }
+    }),
+    { state: 'unavailable', reason: 'post_compaction' }
+  )
+})
+
+test('normalizePiUsageUpdate: falls back to tokens.total and get_state model contextWindow only without contextUsage', () => {
   assert.deepEqual(
     normalizePiUsageUpdate({
       stats: { tokens: { input: 10, output: 5, total: 15 } },
@@ -30,12 +63,12 @@ test('normalizePiUsageUpdate: falls back to tokens.total and get_state model con
   )
 })
 
-test('normalizePiUsageUpdate: falls back to summing token parts', () => {
-  assert.deepEqual(
+test('normalizePiUsageUpdate: does not use token part fallback when contextUsage field exists without numeric tokens', () => {
+  assert.equal(
     normalizePiUsageUpdate({
       stats: { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 }, contextUsage: { contextWindow: 1000 } }
     }),
-    { used: 18, size: 1000, cost: null }
+    null
   )
 })
 

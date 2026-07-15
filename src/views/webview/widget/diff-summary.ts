@@ -127,7 +127,7 @@ export class DiffSummary {
       ${getFileIconHtml(filename, 14)}
               <span class="diff-item-path">
                 <span style="font-weight: bold;">${escapeHtml(filename)}</span>
-                ${dirpath ? `<span style="color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-left: 4px;">${escapeHtml(dirpath)}</span>` : ""}
+                ${dirpath ? `<span class="diff-item-directory">${escapeHtml(dirpath)}</span>` : ""}
               </span>
               <span class="diff-stat-added">+${added}</span>
               <span class="diff-stat-removed">-${removed}</span>

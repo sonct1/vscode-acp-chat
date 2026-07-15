@@ -16,7 +16,7 @@ import { maybeAuthRequiredError } from './auth-required.js'
 import { SessionStore } from './session-store.js'
 import { expandSlashCommand, type FileSlashCommand } from './slash-commands.js'
 import { toolResultToText } from './translate/pi-tools.js'
-import { normalizePiUsageUpdate } from './usage.js'
+import { normalizePiContextUsage } from './usage.js'
 
 type SessionCreateParams = {
   cwd: string
@@ -29,6 +29,7 @@ type SessionCreateParams = {
 export type StopReason = 'end_turn' | 'cancelled' | 'error'
 
 type PendingTurn = {
+  id: number
   resolve: (reason: StopReason) => void
   reject: (err: unknown) => void
 }
@@ -48,6 +49,26 @@ const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
 ]
 const EXTENSION_UI_RAW_INPUT_KEYS = ['title', 'message', 'options', 'placeholder', 'prefill'] as const
 const CHOICE_OPTION_PREFIX = 'choice-'
+const FINAL_USAGE_REFRESH_TIMEOUT_MS = 1000
+// Pi emits post-run lifecycle (retry/compaction/continuation) asynchronously after
+// agent_end. Keep a real non-zero settle grace before accepting idle so those
+// events can invalidate or replace the terminal candidate in production.
+const PROMPT_COMPLETION_SETTLE_GRACE_MS = 150
+const PROMPT_COMPLETION_STATE_POLL_INTERVAL_MS = 25
+const PROMPT_COMPLETION_GET_STATE_TIMEOUT_MS = 100
+
+type PromptCompletionTiming = {
+  settleGraceMs: number
+  pollIntervalMs: number
+  getStateTimeoutMs: number
+  sleep?: (ms: number) => Promise<void>
+}
+
+const DEFAULT_PROMPT_COMPLETION_TIMING: PromptCompletionTiming = {
+  settleGraceMs: PROMPT_COMPLETION_SETTLE_GRACE_MS,
+  pollIntervalMs: PROMPT_COMPLETION_STATE_POLL_INTERVAL_MS,
+  getStateTimeoutMs: PROMPT_COMPLETION_GET_STATE_TIMEOUT_MS
+}
 
 function findUniqueLineNumber(text: string, needle: string): number | undefined {
   if (!needle) return undefined
@@ -256,6 +277,7 @@ export class PiAcpSession {
   readonly proc: PiRpcProcess
   private readonly conn: AgentSideConnection
   private readonly fileCommands: FileSlashCommand[]
+  private readonly promptCompletionTiming: PromptCompletionTiming
 
   // Used to map abort semantics to ACP stopReason.
   // Applies to the currently running turn.
@@ -282,6 +304,14 @@ export class PiAcpSession {
   // Ensure `session/update` notifications are sent in order and can be awaited
   // before completing a `session/prompt` request.
   private lastEmit: Promise<void> = Promise.resolve()
+  private lastPublishedTitle: string | null = null
+  private usageRefreshInFlight: Promise<void> | null = null
+  private usageRefreshRequested = false
+  private lifecycleRevision = 0
+  private nextTurnId = 1
+  private completionValidationGeneration = 0
+  private completionValidationRunning = false
+  private compactionNoticeActive = false
 
   constructor(opts: {
     sessionId: string
@@ -290,6 +320,7 @@ export class PiAcpSession {
     proc: PiRpcProcess
     conn: AgentSideConnection
     fileCommands?: FileSlashCommand[]
+    promptCompletionTiming?: Partial<PromptCompletionTiming>
   }) {
     this.sessionId = opts.sessionId
     this.cwd = opts.cwd
@@ -297,6 +328,10 @@ export class PiAcpSession {
     this.proc = opts.proc
     this.conn = opts.conn
     this.fileCommands = opts.fileCommands ?? []
+    this.promptCompletionTiming = {
+      ...DEFAULT_PROMPT_COMPLETION_TIMING,
+      ...opts.promptCompletionTiming
+    }
 
     this.proc.onEvent(ev => this.handlePiEvent(ev))
   }
@@ -359,6 +394,22 @@ export class PiAcpSession {
     return turnPromise
   }
 
+  async publishSessionTitle(name: string): Promise<void> {
+    const title = name.trim()
+    if (!title) return
+
+    if (title !== this.lastPublishedTitle) {
+      this.lastPublishedTitle = title
+      this.emit({
+        sessionUpdate: 'session_info_update',
+        title,
+        updatedAt: new Date().toISOString()
+      })
+    }
+
+    await this.flushEmits()
+  }
+
   async cancel(): Promise<void> {
     // Cancel current and clear any queued prompts.
     this.cancelRequested = true
@@ -404,23 +455,92 @@ export class PiAcpSession {
     await this.lastEmit
   }
 
-  private async emitUsageUpdate(): Promise<void> {
-    const [stats, state] = await Promise.all([this.proc.getSessionStats(), this.proc.getState().catch(() => null)])
-    const usage = normalizePiUsageUpdate({ stats, state })
-    if (!usage) return
+  private emitContextUsageUnavailable(
+    size: number | undefined,
+    reason: 'post_compaction' | 'pending_provider_usage'
+  ): void {
     this.emit({
-      sessionUpdate: 'usage_update',
-      used: usage.used,
-      size: usage.size,
-      cost: usage.cost ?? null
+      sessionUpdate: 'session_info_update',
+      _meta: {
+        piAcp: {
+          contextUsage: {
+            state: 'unavailable',
+            ...(size === undefined ? {} : { size }),
+            reason
+          }
+        }
+      }
     } as SessionUpdate)
+  }
+
+  private async sampleUsage(): Promise<void> {
+    const [stats, state] = await Promise.all([this.proc.getSessionStats(), this.proc.getState().catch(() => null)])
+    const usage = normalizePiContextUsage({ stats, state })
+    if (usage.state === 'available') {
+      this.emit({
+        sessionUpdate: 'usage_update',
+        used: usage.used,
+        size: usage.size,
+        cost: usage.cost ?? null
+      } as SessionUpdate)
+      return
+    }
+
+    if (usage.state === 'unavailable') {
+      this.emitContextUsageUnavailable(usage.size, usage.reason)
+    }
+  }
+
+  private requestUsageRefresh(): Promise<void> {
+    this.usageRefreshRequested = true
+
+    if (!this.usageRefreshInFlight) {
+      this.usageRefreshInFlight = this.runUsageRefreshes().finally(() => {
+        this.usageRefreshInFlight = null
+      })
+    }
+
+    return this.usageRefreshInFlight
+  }
+
+  private async runUsageRefreshes(): Promise<void> {
+    while (this.usageRefreshRequested) {
+      this.usageRefreshRequested = false
+      try {
+        await this.sampleUsage()
+      } catch {
+        // Usage is best-effort; stats failures must not affect prompt completion.
+      }
+    }
+  }
+
+  refreshUsage(): Promise<void> {
+    return this.requestUsageRefresh()
+  }
+
+  private async refreshUsageBeforePromptCompletion(): Promise<void> {
+    const refresh = this.requestUsageRefresh()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+
+    try {
+      await Promise.race([
+        refresh,
+        new Promise<void>(resolve => {
+          timeout = setTimeout(resolve, FINAL_USAGE_REFRESH_TIMEOUT_MS)
+        })
+      ])
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
   }
 
   private startTurn(t: QueuedTurn): void {
     this.cancelRequested = false
     this.inAgentLoop = false
+    this.lifecycleRevision += 1
 
-    this.pendingTurn = { resolve: t.resolve, reject: t.reject }
+    this.pendingTurn = { id: this.nextTurnId, resolve: t.resolve, reject: t.reject }
+    this.nextTurnId += 1
 
     // Publish queue depth (0 because we're starting the turn now).
     this.emit({
@@ -430,31 +550,256 @@ export class PiAcpSession {
 
     // Kick off pi, but completion is determined by pi events, not the RPC response.
     // Important: pi may emit multiple `turn_end` events (e.g. when the model requests tools).
-    // The full prompt is finished when we see `agent_end`.
+    // The full prompt is finished when we see the owning top-level pi run become idle.
     this.proc.prompt(t.message, t.images).catch(err => {
-      // If the subprocess errors before we get an `agent_end`, treat as error unless cancelled.
-      // Also ensure we flush any already-enqueued updates first.
+      // If the subprocess errors before completion, settle the active turn and clear
+      // queued work without starting it: pi may be unhealthy or require re-auth.
       void this.flushEmits().finally(() => {
-        // If this looks like an auth/config issue, surface AUTH_REQUIRED so clients can offer terminal login.
-        const authErr = maybeAuthRequiredError(err)
-        if (authErr) {
-          this.pendingTurn?.reject(authErr)
-        } else {
-          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
-          this.pendingTurn?.resolve(reason)
+        this.failCurrentTurn(err)
+      })
+    })
+  }
+
+  private isRootBusyState(state: unknown): boolean {
+    const record = state as { isStreaming?: unknown; isCompacting?: unknown; pendingMessageCount?: unknown } | null
+    return (
+      record?.isStreaming === true ||
+      record?.isCompacting === true ||
+      (typeof record?.pendingMessageCount === 'number' && record.pendingMessageCount > 0)
+    )
+  }
+
+  private isCompletionCandidateCurrent(turnId: number, revision: number): boolean {
+    return this.pendingTurn?.id === turnId && this.lifecycleRevision === revision
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    const sleep = this.promptCompletionTiming.sleep
+    if (sleep) {
+      await sleep(ms)
+      return
+    }
+
+    await new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  private async getStateWithTimeout(timeoutMs: number): Promise<unknown> {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        this.proc.getState(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('timed out waiting for pi state')), timeoutMs)
+        })
+      ])
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
+  }
+
+  private async rootStateIsStablyIdle(turnId: number, revision: number): Promise<boolean> {
+    let observedBusy = false
+    const { settleGraceMs, pollIntervalMs, getStateTimeoutMs } = this.promptCompletionTiming
+
+    const confirmIdleAfterSettleGrace = async (): Promise<'idle' | 'busy' | 'retry'> => {
+      await this.sleep(settleGraceMs)
+      if (!this.isCompletionCandidateCurrent(turnId, revision)) return 'retry'
+
+      try {
+        const finalState = await this.getStateWithTimeout(getStateTimeoutMs)
+        if (!this.isCompletionCandidateCurrent(turnId, revision)) return 'retry'
+        return this.isRootBusyState(finalState) ? 'busy' : 'idle'
+      } catch {
+        if (observedBusy) return 'retry'
+        return this.isCompletionCandidateCurrent(turnId, revision) ? 'idle' : 'retry'
+      }
+    }
+
+    while (this.isCompletionCandidateCurrent(turnId, revision)) {
+      let firstState: unknown
+      try {
+        firstState = await this.getStateWithTimeout(getStateTimeoutMs)
+      } catch {
+        if (observedBusy) {
+          await this.sleep(pollIntervalMs)
+          continue
         }
 
-        this.pendingTurn = null
-        this.inAgentLoop = false
+        const settled = await confirmIdleAfterSettleGrace()
+        if (settled === 'idle') return true
+        if (settled === 'busy') observedBusy = true
+        await this.sleep(pollIntervalMs)
+        continue
+      }
 
-        // If the prompt failed, do not automatically proceed—pi may be unhealthy.
-        // But we still clear the queueDepth metadata.
-        this.emit({
-          sessionUpdate: 'session_info_update',
-          _meta: { piAcp: { queueDepth: this.turnQueue.length, running: false } }
-        })
+      if (!this.isCompletionCandidateCurrent(turnId, revision)) return false
+
+      if (this.isRootBusyState(firstState)) {
+        observedBusy = true
+        await this.sleep(pollIntervalMs)
+        continue
+      }
+
+      await this.sleep(pollIntervalMs)
+      if (!this.isCompletionCandidateCurrent(turnId, revision)) return false
+
+      let secondState: unknown
+      try {
+        secondState = await this.getStateWithTimeout(getStateTimeoutMs)
+      } catch {
+        if (observedBusy) {
+          await this.sleep(pollIntervalMs)
+          continue
+        }
+
+        const settled = await confirmIdleAfterSettleGrace()
+        if (settled === 'idle') return true
+        if (settled === 'busy') observedBusy = true
+        await this.sleep(pollIntervalMs)
+        continue
+      }
+
+      if (!this.isCompletionCandidateCurrent(turnId, revision)) return false
+
+      if (this.isRootBusyState(secondState)) {
+        observedBusy = true
+        await this.sleep(pollIntervalMs)
+        continue
+      }
+
+      const settled = await confirmIdleAfterSettleGrace()
+      if (settled === 'idle') return true
+      if (settled === 'busy') observedBusy = true
+      await this.sleep(pollIntervalMs)
+    }
+
+    return false
+  }
+
+  private resetCompletionValidation(): void {
+    this.completionValidationGeneration += 1
+    this.completionValidationRunning = false
+  }
+
+  private failCurrentTurn(err: unknown): void {
+    const pending = this.pendingTurn
+    if (!pending) return
+
+    const queued = this.turnQueue.splice(0, this.turnQueue.length)
+    for (const t of queued) t.resolve('cancelled')
+
+    this.pendingTurn = null
+    this.inAgentLoop = false
+    this.lifecycleRevision += 1
+    this.resetCompletionValidation()
+
+    const authErr = maybeAuthRequiredError(err)
+    if (authErr) {
+      pending.reject(authErr)
+    } else {
+      const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
+      pending.resolve(reason)
+    }
+
+    this.emit({
+      sessionUpdate: 'session_info_update',
+      _meta: { piAcp: { queueDepth: 0, running: false } }
+    })
+  }
+
+  private completePendingTurn(pending: PendingTurn, reason: StopReason): void {
+    if (this.pendingTurn !== pending) return
+
+    pending.resolve(reason)
+    this.pendingTurn = null
+    this.inAgentLoop = false
+    this.lifecycleRevision += 1
+    this.resetCompletionValidation()
+
+    const next = this.turnQueue.shift()
+    if (next) {
+      this.emit({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: `Starting queued message. (${this.turnQueue.length} remaining)` }
       })
-      void err
+      this.startTurn(next)
+    } else {
+      this.emit({
+        sessionUpdate: 'session_info_update',
+        _meta: { piAcp: { queueDepth: 0, running: false } }
+      })
+    }
+  }
+
+  private schedulePendingTurnCompletion(ev: PiRpcEvent): void {
+    const pending = this.pendingTurn
+    if (!pending) return
+
+    const willRetry = (ev as { willRetry?: unknown }).willRetry
+    if (willRetry === true) return
+
+    const generation = (this.completionValidationGeneration += 1)
+    if (this.completionValidationRunning) return
+
+    this.completionValidationRunning = true
+    this.runCompletionValidation(generation)
+  }
+
+  private runCompletionValidation(generation: number): void {
+    let validatingTurnId: number | undefined
+
+    void (async () => {
+      const pending = this.pendingTurn
+      if (!pending) return
+
+      const turnId = pending.id
+      validatingTurnId = turnId
+      const revision = this.lifecycleRevision
+
+      try {
+        const isIdle = await this.rootStateIsStablyIdle(turnId, revision)
+        if (!isIdle) return
+      } catch {
+        // A terminal agent_end is the best available completion signal if state is
+        // unavailable. willRetry=true candidates are filtered before validation.
+      }
+
+      if (
+        this.pendingTurn !== pending ||
+        this.lifecycleRevision !== revision ||
+        this.completionValidationGeneration !== generation
+      ) {
+        return
+      }
+
+      await this.refreshUsageBeforePromptCompletion()
+      if (
+        this.pendingTurn !== pending ||
+        this.lifecycleRevision !== revision ||
+        this.completionValidationGeneration !== generation
+      ) {
+        return
+      }
+
+      await this.flushEmits()
+      if (
+        this.pendingTurn !== pending ||
+        this.lifecycleRevision !== revision ||
+        this.completionValidationGeneration !== generation
+      ) {
+        return
+      }
+
+      const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
+      this.completePendingTurn(pending, reason)
+    })().finally(() => {
+      this.completionValidationRunning = false
+      if (
+        this.pendingTurn?.id === validatingTurnId &&
+        this.completionValidationGeneration !== generation
+      ) {
+        this.runCompletionValidation(this.completionValidationGeneration)
+      }
     })
   }
 
@@ -685,6 +1030,7 @@ export class PiAcpSession {
       }
 
       case 'auto_retry_start': {
+        this.lifecycleRevision += 1
         this.emit({
           sessionUpdate: 'agent_message_chunk',
           content: { type: 'text', text: formatAutoRetryMessage(ev) } satisfies ContentBlock
@@ -693,6 +1039,7 @@ export class PiAcpSession {
       }
 
       case 'auto_retry_end': {
+        this.lifecycleRevision += 1
         this.emit({
           sessionUpdate: 'agent_message_chunk',
           content: { type: 'text', text: 'Retry finished, resuming.' } satisfies ContentBlock
@@ -700,18 +1047,29 @@ export class PiAcpSession {
         break
       }
 
-      case 'auto_compaction_start': {
-        this.emit({
-          sessionUpdate: 'agent_message_chunk',
-          content: {
-            type: 'text',
-            text: 'Context nearing limit, running automatic compaction...'
-          } satisfies ContentBlock
-        })
+      case 'auto_compaction_start':
+      case 'compaction_start': {
+        this.lifecycleRevision += 1
+        if (!this.compactionNoticeActive) {
+          this.compactionNoticeActive = true
+          const reason = stringProp(ev, 'reason')
+          const isAutomatic = type === 'auto_compaction_start' || reason === 'threshold' || reason === 'overflow'
+          this.emit({
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: isAutomatic
+                ? 'Context nearing limit, running automatic compaction...'
+                : 'Context compaction started; summarizing context to continue the session...'
+            } satisfies ContentBlock
+          })
+        }
         break
       }
 
       case 'auto_compaction_end': {
+        this.lifecycleRevision += 1
+        this.compactionNoticeActive = false
         this.emit({
           sessionUpdate: 'agent_message_chunk',
           content: {
@@ -719,11 +1077,33 @@ export class PiAcpSession {
             text: 'Automatic compaction finished; context was summarized to continue the session.'
           } satisfies ContentBlock
         })
+        void this.requestUsageRefresh()
+        this.schedulePendingTurnCompletion(ev)
+        break
+      }
+
+      case 'compaction_end': {
+        this.lifecycleRevision += 1
+        this.compactionNoticeActive = false
+        void this.requestUsageRefresh()
+        this.schedulePendingTurnCompletion(ev)
+        break
+      }
+
+      case 'session_info_changed': {
+        const name = stringProp(ev, 'name')
+        if (name) void this.publishSessionTitle(name)
         break
       }
 
       case 'agent_start': {
+        this.lifecycleRevision += 1
         this.inAgentLoop = true
+        break
+      }
+
+      case 'message_end': {
+        void this.requestUsageRefresh()
         break
       }
 
@@ -734,31 +1114,7 @@ export class PiAcpSession {
       }
 
       case 'agent_end': {
-        // Ensure all updates derived from pi events are delivered before we resolve
-        // the ACP `session/prompt` request.
-        void this.flushEmits().finally(() => {
-          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
-          this.pendingTurn?.resolve(reason)
-          this.pendingTurn = null
-          this.inAgentLoop = false
-
-          void this.emitUsageUpdate().catch(() => {})
-
-          // Start next queued prompt, if any.
-          const next = this.turnQueue.shift()
-          if (next) {
-            this.emit({
-              sessionUpdate: 'agent_message_chunk',
-              content: { type: 'text', text: `Starting queued message. (${this.turnQueue.length} remaining)` }
-            })
-            this.startTurn(next)
-          } else {
-            this.emit({
-              sessionUpdate: 'session_info_update',
-              _meta: { piAcp: { queueDepth: 0, running: false } }
-            })
-          }
-        })
+        this.schedulePendingTurnCompletion(ev)
         break
       }
 

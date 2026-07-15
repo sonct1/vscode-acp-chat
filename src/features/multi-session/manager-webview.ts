@@ -4,6 +4,7 @@ import type {
   MultiSessionStatus,
 } from "./contracts";
 import { MANAGER_STYLES } from "./manager-styles";
+import { compareSessionsByCreatedAt } from "./session-order";
 
 type VsCodeApi = { postMessage(message: unknown): void };
 type PendingActivation = { localSessionId: string; action: "open" | "review" };
@@ -96,7 +97,7 @@ export class MultiSessionManagerWebview {
   private renderList(): void {
     const sessions = [...this.sessions.values()]
       .filter((session) => this.matchesFilter(session))
-      .sort(compareSessions);
+      .sort(compareSessionsByCreatedAt);
     this.listEl.querySelector(".manager-empty")?.remove();
     if (sessions.length === 0) {
       this.listEl.replaceChildren();
@@ -379,21 +380,6 @@ function cssEscape(value: string): string {
   const escapeFn = globalThis.CSS?.escape;
   if (escapeFn) return escapeFn(value);
   return value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
-}
-
-function compareSessions(
-  a: MultiSessionListItem,
-  b: MultiSessionListItem
-): number {
-  const rank = (s: MultiSessionListItem) =>
-    s.pendingPermissionCount > 0
-      ? 0
-      : isRunningStatus(s.status)
-        ? 1
-        : s.status === "draft"
-          ? 2
-          : 3;
-  return rank(a) - rank(b) || b.createdAt - a.createdAt;
 }
 
 function isRunningStatus(status: string): boolean {

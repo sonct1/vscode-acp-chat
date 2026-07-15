@@ -65,7 +65,7 @@ const COMMON_FILE_EXTENSIONS = new Set([
 ]);
 
 const CANDIDATE_PATTERN =
-  /(?:file:\/\/[^\s<>'"]+|https?:\/\/[^\s<>'"]+|www\.[^\s<>'"]+|[A-Za-z]:[\\/][^\s<>'"]+|\.\.?[\\/][^\s<>'"]+|\/[A-Za-z0-9._~+@%=-][^\s<>'"]*|[A-Za-z0-9._~+@%=-]+(?:[\\/][A-Za-z0-9._~+@%=-]+)+(?:[:#][A-Za-z0-9._~+@%=-]+)?|(?:README\.md|CHANGELOG\.md|package\.json|tsconfig\.json|jsconfig\.json|Dockerfile|Makefile|\.gitignore|\.env)(?:[:#][A-Za-z0-9._~+@%=-]+)?)/g;
+  /(?:file:\/\/[^\s<>'"]+|https?:\/\/[^\s<>'"]+|www\.[^\s<>'"]+|[A-Za-z]:[\\/][^\s<>'"]+|~[\\/][^\s<>'"]+|\.\.?[\\/][^\s<>'"]+|\/[A-Za-z0-9._~+@%=-][^\s<>'"]*|[A-Za-z0-9._~+@%=-]+(?:[\\/][A-Za-z0-9._~+@%=-]+)+(?:[:#][A-Za-z0-9._~+@%=-]+)?|(?:README\.md|CHANGELOG\.md|package\.json|tsconfig\.json|jsconfig\.json|Dockerfile|Makefile|\.gitignore|\.env)(?:[:#][A-Za-z0-9._~+@%=-]+)?)/g;
 
 const OPENING_PUNCTUATION = new Set(["(", "[", "{", "<", "\"", "'"]);
 const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "\"", "'"]);
@@ -179,6 +179,7 @@ function isFilePathCandidate(text: string): boolean {
     return true;
   }
   if (/^[A-Za-z]:[\\/]/.test(withoutRange)) return true;
+  if (/^~[\\/]/.test(withoutRange)) return true;
   if (withoutRange.startsWith("/") && withoutRange.length > 1) return true;
   if (/^\.\.?[\\/]/.test(withoutRange)) return true;
 

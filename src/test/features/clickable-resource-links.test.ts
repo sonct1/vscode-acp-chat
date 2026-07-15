@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as assert from "assert";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 import { JSDOM } from "jsdom";
 import {
@@ -7,7 +9,10 @@ import {
   detectResourceLinks,
 } from "../../features/clickable-resource-links/detector";
 import { ClickableResourceLinksWebviewController } from "../../features/clickable-resource-links/webview";
-import { ClickableResourceLinksHostController } from "../../features/clickable-resource-links/host";
+import {
+  ClickableResourceLinksHostController,
+  expandHomeResourcePath,
+} from "../../features/clickable-resource-links/host";
 import { OPEN_EXTERNAL_RESOURCE_LINK_MESSAGE_TYPE } from "../../features/clickable-resource-links/types";
 import { EventBus } from "../../views/webview/event-bus";
 import type { WebviewEventMap } from "../../views/webview/types";
@@ -43,7 +48,7 @@ suite("clickable-resource-links feature", () => {
 
     test("detects file path candidates and preserves line suffixes", () => {
       const links = detectResourceLinks(
-        "Open docs/plans/README.md, src/views/chat.ts:471, /tmp/output.log, file:///home/user/project/src/a.ts#L10-L20, ./README.md and package.json"
+        "Open docs/plans/README.md, src/views/chat.ts:471, /tmp/output.log, ~/.pi/agent/settings.json:246, file:///home/user/project/src/a.ts#L10-L20, ./README.md and package.json"
       );
 
       assert.deepStrictEqual(
@@ -71,6 +76,12 @@ suite("clickable-resource-links feature", () => {
             text: "/tmp/output.log",
             href: "/tmp/output.log",
             lineRangeText: undefined,
+          },
+          {
+            kind: "file",
+            text: "~/.pi/agent/settings.json:246",
+            href: "~/.pi/agent/settings.json:246",
+            lineRangeText: ":246",
           },
           {
             kind: "file",
@@ -112,6 +123,10 @@ suite("clickable-resource-links feature", () => {
         "https://example.com/docs"
       );
       assert.strictEqual(
+        detectExactResourceLink("~/.pi/agent/settings.json:246")?.href,
+        "~/.pi/agent/settings.json:246"
+      );
+      assert.strictEqual(
         detectExactResourceLink("open docs/plans/README.md now"),
         undefined
       );
@@ -123,6 +138,17 @@ suite("clickable-resource-links feature", () => {
   });
 
   suite("host", () => {
+    test("expands home-relative resource paths", () => {
+      assert.strictEqual(
+        expandHomeResourcePath("~/.pi/agent/settings.json"),
+        path.join(os.homedir(), ".pi", "agent", "settings.json")
+      );
+      assert.strictEqual(
+        expandHomeResourcePath("docs/plans/README.md"),
+        "docs/plans/README.md"
+      );
+    });
+
     let originalOpenExternal: typeof vscode.env.openExternal;
     let opened: string[];
 

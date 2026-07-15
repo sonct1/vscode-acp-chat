@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PiAcpAgent } from '../../src/acp/agent.js'
+import { PiAcpSession } from '../../src/acp/session.js'
 import { FakeAgentSideConnection, FakePiRpcProcess, asAgentConn } from '../helpers/fakes.js'
 
 class FakeSessions {
@@ -41,8 +42,16 @@ test('PiAcpAgent: /name sets session display name adapter-side', async () => {
     setTo = name
   }
 
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
   const agent = new PiAcpAgent(asAgentConn(conn))
-  ;(agent as any).sessions = new FakeSessions({ sessionId: 's1', proc, fileCommands: [] }) as any
+  ;(agent as any).sessions = new FakeSessions(session) as any
 
   const res = await agent.prompt({
     sessionId: 's1',

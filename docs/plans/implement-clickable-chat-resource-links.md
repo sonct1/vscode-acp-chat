@@ -5,7 +5,7 @@ Status: Implemented 2026-07-14.
 Completion notes:
 
 - Added `src/features/clickable-resource-links/` with pure detection, webview DOM decoration, external URL host handling, and tests.
-- Auto-detected file links post `openFile` with `checkExists: true`; web links post `feature.clickable-resource-links.openExternal` and are opened through the host with `http:`/`https:` validation.
+- Auto-detected file links post `openFile` with `checkExists: true`; `~/...` links are expanded against the Extension Host home directory; web links post `feature.clickable-resource-links.openExternal` and are opened through the host with `http:`/`https:` validation.
 - Updated feature catalog and kept core integration limited to feature registration, host message dispatch, and existing file-link click handling.
 
 ## Mục tiêu
@@ -192,6 +192,7 @@ MVP nhận diện path có ít nhất một trong các tín hiệu mạnh:
 
 - Bắt đầu bằng `file://`.
 - Absolute POSIX: `/home/user/project/src/a.ts`, `/tmp/output.log`.
+- Home-relative: `~/.pi/agent/settings.json`.
 - Windows absolute: `C:\Users\me\project\src\a.ts`, `C:/Users/me/project/src/a.ts`.
 - Relative explicit: `./src/a.ts`, `../docs/a.md`.
 - Relative workspace path có slash và segment file-like: `src/views/chat.ts`, `docs/plans/README.md`.

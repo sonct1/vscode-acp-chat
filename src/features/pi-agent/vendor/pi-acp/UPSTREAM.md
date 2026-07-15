@@ -12,6 +12,7 @@
 - No vendored `node_modules` or generated upstream `dist/` files are committed.
 - The adapter is launched by the extension with VS Code/Electron in Node mode and still requires the `pi` CLI on `PATH`.
 - `session/load` locally supports `VSCODE_ACP_CHAT_PI_HISTORY_LOAD_MODE=full|compacted`; `full` is the default and replays the active-path transcript from Pi JSONL session files, falling back to `get_messages` only when JSONL replay fails or yields no replayable messages.
+- `session/prompt` completion is locally gated on the top-level Pi lifecycle and stable `get_state` idleness so intermediate retry, compaction, or continuation `agent_end` events do not make the extension report Idle or start queued prompts early.
 
 ## Sync procedure
 

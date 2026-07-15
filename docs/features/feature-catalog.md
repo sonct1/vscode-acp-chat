@@ -8,7 +8,7 @@ This document records the current user-visible feature set of VSCode ACP Chat as
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ACP Chat workbench surface                             | Opens an ACP-backed chat view inside VS Code without leaving the editor.                                                                       | Secondary sidebar view `vscode-acp-chat.chatView`, status bar item, `vscode-acp-chat.startChat`.      | [`package.json`](../../package.json), [`src/extension.ts`](../../src/extension.ts), [`src/views/chat.ts`](../../src/views/chat.ts)                                                                                                                                                                                                       |
 | Agent selection and custom agents                      | Lets users choose installed ACP agents or define their own CLI-backed agents; choosing an agent starts a fresh chat/session with that agent.    | `vscode-acp-chat.selectAgent`, `vscode-acp-chat.customAgents`.                                        | [`src/acp/agents.ts`](../../src/acp/agents.ts), [`src/features/agent-selection/`](../../src/features/agent-selection/), [`src/views/chat.ts`](../../src/views/chat.ts)                                                                                                                                                                  |
-| Rich chat composer and transcript                      | Supports streamed Markdown conversations, code blocks, thought/tool blocks, images, chips, copy/reuse actions, and stop controls.              | Webview input, message list, `sendMessage`, `stop`, `vscode-acp-chat.fontSize`.                       | [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts), [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts), [`src/views/webview/block/`](../../src/views/webview/block/), [`src/features/chat-font-size/`](../../src/features/chat-font-size/) |
+| Rich chat composer and transcript                      | Supports streamed Markdown conversations, code blocks, thought/tool blocks, images, chips, copy/reuse actions, stop controls, queued busy-time prompts, and a turn-context prompt reminder while reading above the bottom. | Webview input, message list, `sendMessage`, `stop`, `vscode-acp-chat.fontSize`.                       | [`src/views/webview/component/input-panel.ts`](../../src/views/webview/component/input-panel.ts), [`src/views/webview/component/message-list.ts`](../../src/views/webview/component/message-list.ts), [`src/views/webview/block/`](../../src/views/webview/block/), [`src/features/message-queue/`](../../src/features/message-queue/), [`src/features/chat-font-size/`](../../src/features/chat-font-size/), [`src/features/latest-user-prompt-tip/`](../../src/features/latest-user-prompt-tip/) |
 | Context ingestion                                      | Adds editor selections, terminal selections, Explorer files/folders, workspace `@` mentions, slash commands, and image attachments to prompts. | Context-menu commands and input autocomplete.                                                         | [`src/features/add-to-chat/host.ts`](../../src/features/add-to-chat/host.ts), [`src/utils/file-search.ts`](../../src/utils/file-search.ts), [`src/utils/mention-serializer.ts`](../../src/utils/mention-serializer.ts)                                                                                                                   |
 | Tool visibility, terminal integration, and permissions | Shows agent tool activity, terminal output, permission prompts, and command results in the transcript.                                         | ACP client fs/terminal/permission callbacks and webview tool blocks.                                  | [`src/acp/client.ts`](../../src/acp/client.ts), [`src/acp/terminal-handler.ts`](../../src/acp/terminal-handler.ts), [`src/views/webview/block/tool-block.ts`](../../src/views/webview/block/tool-block.ts), [`src/views/webview/widget/permission-dialog.ts`](../../src/views/webview/widget/permission-dialog.ts)                       |
 | File-change review and diff summary                    | Tracks agent edits and lets users review, accept, or discard file changes individually or in batch.                                            | Diff summary panel, `reviewDiff`, `acceptDiff`, `rollbackDiff`, `acceptAllDiffs`, `rollbackAllDiffs`. | [`src/acp/diff-manager.ts`](../../src/acp/diff-manager.ts), [`src/acp/file-handler.ts`](../../src/acp/file-handler.ts), [`src/views/webview/widget/diff-summary.ts`](../../src/views/webview/widget/diff-summary.ts)                                                                                                                     |
@@ -33,21 +33,23 @@ Relevant commands:
 - `vscode-acp-chat.startChat` — focus chat view and connect.
 - `vscode-acp-chat.newChat` — create a new chat/session.
 - `vscode-acp-chat.clearChat` — clear the current transcript/session surface.
-- `vscode-acp-chat.manageSessions` — open the multi-session manager.
+- `vscode-acp-chat.manageSessions` — toggle the multi-session manager in the ACP Sessions Activity Bar/Primary Sidebar view.
 - `vscode-acp-chat.loadHistory` — load a previous session.
 - `vscode-acp-chat.openSettings` — open extension settings.
 
 ### Agent selection and custom agents
 
-Agents are local CLI processes launched through ACP over stdio. Built-in agents are defined in source and merged with `vscode-acp-chat.customAgents`; custom agents with the same `id` replace built-ins, while new ids extend the list. Availability is checked by command lookup before agents appear in the selector. Built-in Pi ships a bundled `pi-acp` adapter and checks for the `pi` CLI instead of requiring a global `pi-acp` command.
+Agents are local CLI processes launched through ACP over stdio. Built-in agents are defined in source and merged with `vscode-acp-chat.customAgents`; custom agents with the same `id` replace built-ins, while new ids extend the list. Availability is checked by command lookup before agents appear in the selector. Built-in Pi ships a bundled `pi-acp` adapter and checks for the `pi` CLI instead of requiring a global `pi-acp` command. Built-in Antigravity is experimental, disabled by default behind `vscode-acp-chat.antigravity.enabled`, ships a bundled Node adapter, and checks for the official `agy` CLI.
 
 Built-in agent ids currently include:
 
-`opencode`, `claude-code`, `codex`, `gemini`, `goose`, `amp`, `aider`, `augment`, `kimi`, `mistral-vibe`, `openhands`, `qwen-code`, `kiro`, `cursor`, `codebuddy`, and `pi`.
+`opencode`, `claude-code`, `codex`, `gemini`, `goose`, `amp`, `aider`, `augment`, `kimi`, `mistral-vibe`, `openhands`, `qwen-code`, `kiro`, `cursor`, `codebuddy`, `pi`, and opt-in `antigravity`.
 
 The selected agent id is stored in VS Code global state and restored on activation. The selector marks the selected/default agent with `Currently selected`; choosing any listed agent, including the currently selected one, persists that id and immediately starts a fresh chat/session for that agent. In multi-session mode this creates an independent active session without changing or cancelling existing sessions. In legacy single-session mode the current transcript surface is reset before one new ACP session is created. Agent-specific preferences store selected mode/model/config values and starred models.
 
 Implementation note: source uses `cursor-agent acp` for the Cursor agent.
+
+Antigravity behavior: when `vscode-acp-chat.antigravity.enabled` is `false`, the bundled Antigravity entry is omitted from the built-in catalog, but a custom agent with `id: "antigravity"` remains valid and is not filtered out. When enabled, the bundled entry launches `process.execPath --no-warnings dist/antigravity-acp/index.mjs` with `ELECTRON_RUN_AS_NODE=1` and `availabilityCommand: "agy"`; a custom `id: "antigravity"` still overrides it. Users must install and authenticate the official `agy` CLI first (`agy`, then `agy models`). The adapter is unofficial/unsupported by Google, uses Antigravity's native modes, does not add dangerous permission-bypass flags, supports adapter-provided history/list/load behavior, and documents that Antigravity MCP and permission handling remain native to `agy` rather than VS Code ACP-forwarded.
 
 ### Rich chat composer and transcript
 
@@ -58,9 +60,11 @@ The webview is composed from reusable components:
 - `BlockManager` delegates assistant blocks to text, thought, and tool block renderers.
 - `ActionButtonsComponent` adds post-response controls such as copy and reuse-in-input.
 
-Messages can contain plain text, `@` mentions, slash-command chips, and image data URLs. Assistant output streams in real time and ends with a `streamEnd` event that enables final response actions. The chat surface uses a VS Code-native visual treatment: border-separated panels, an inset rounded composer, no decorative transcript fades, and no heavy popover/modal shadows.
+Messages can contain plain text, `@` mentions, slash-command chips, and image data URLs. Assistant output streams in real time and ends with a `streamEnd` event that enables final response actions. While a turn is processing, `Enter` queues a steering prompt for the next ACP turn and `Alt+Enter` queues a follow-up prompt; queued steering prompts drain before queued follow-ups and are not rendered as user transcript messages until actually dispatched. `Shift+Enter` remains newline, `Escape` aborts the current turn and restores queued drafts plus the unsent composer draft, and `Alt+Up` restores queued drafts without aborting. The implementation is host-owned for all ACP agents, including Pi, because the current portable ACP/Pi boundary does not advertise an atomic native drain/abort-and-drain queue contract. The chat surface uses a VS Code-native visual treatment: border-separated panels, an inset rounded composer, no decorative transcript fades, and no heavy popover/modal shadows.
 
-`vscode-acp-chat.fontSize` controls the chat webview base font size. `0` follows VS Code's `--vscode-font-size`; positive values are normalized to `8`-`40` px and apply live to transcript content and the prompt input through `--acp-chat-font-size`.
+When the active transcript is more than 100 px away from the bottom, the composer shows a single-line `Tip:` preview of the user prompt associated with the conversation turn currently being read. The feature uses a reading anchor in the upper quarter of the message viewport: scrolling upward across turn boundaries changes to older prompts, and scrolling downward changes to newer prompts. Assistant text, thought, or tool streaming alone does not change the selected prompt while the user's reading position is unchanged. The tip hides near the bottom, after chat clear, or when the active turn has no textual prompt. Live turns, loaded history, resized viewports, and multi-session snapshot replay all derive the prompt from the active transcript DOM and restored scroll position. The truncated row is keyboard-focusable and expands to expose the full prompt.
+
+`vscode-acp-chat.fontSize` controls the primary chat webview text size. `0` follows VS Code's `--vscode-font-size`; positive values are normalized to `8`-`40` px and apply live through `--acp-chat-font-size`. Every normal textual region resolves to that configured size, including prose, code, metadata, controls, tables, permissions, and the in-chat session header. Only semantic Markdown headings use bounded enlargement. Fixed icons/codicons and the separate ACP Sessions manager webview are excluded.
 
 ### Context ingestion
 
@@ -118,6 +122,8 @@ Supported controls:
 - context usage ring with optional cost information;
 - send/stop state tied to active generation.
 
+Bundled Pi context usage is sampled from Pi RPC `getContextUsage()` semantics during assistant message lifecycle events and after model changes. If Pi explicitly reports context tokens as unavailable after compaction, the cached usage is cleared so the ring hides until valid usage is available again; the tooltip labels capacity as `Context window`. Bundled Pi prompt liveness follows the top-level Pi lifecycle and confirmed idle state, so automatic retry, compaction, and main-agent continuation keep the session status Running until the owning Pi run actually finishes.
+
 Mode/model/config selections are sent back to the ACP agent and persisted as agent preferences where applicable.
 
 ### Concurrent multi-session chat
@@ -126,22 +132,25 @@ Multi-session is enabled by default through `vscode-acp-chat.multiSession.enable
 
 User-visible behavior:
 
-- multiple local sessions can be created from commands, agent selection, the chat header, QuickPick, or the dedicated **ACP Sessions** manager panel;
+- multiple local sessions can be created from commands, agent selection, the chat header, QuickPick, or the dedicated **ACP Sessions** Activity Bar manager view;
 - the initial restored/opened draft session eagerly starts its ACP runtime when the chat webview is ready, but does not create an ACP session/history entry until a prompt or explicit session action needs one;
 - each session has independent transcript, draft, scroll state, ACP runtime, metadata, permissions, and status;
 - low-resource mode is on by default and removes unread, diff, and conflicted counts from multi-session manager surfaces while disabling the underlying multi-session diff bookkeeping;
-- the chat webview shows only the active session switch affordance and active title/status; the separate manager panel shows aggregate running, waiting, and open counts plus running, idle, draft, permission-waiting, error, and closed sessions;
+- the chat webview shows only the active session switch affordance and active title/status; the separate Primary Sidebar manager view shows aggregate running, waiting, and open counts plus running, idle, draft, permission-waiting, error, and closed sessions;
+- the **ACP Sessions** manager list and `vscode-acp-chat.switchSession` QuickPick both sort sessions only by `createdAt` descending, with newest-created first; status, pending permissions, recent activity, and active state do not change the order;
 - started and loaded sessions show the full ACP session id in manager metadata and its hover tooltip for debugging/resume traceability;
+- bundled Pi session-name changes, including names generated by Pi extensions during the first prompt, are forwarded live through ACP and replace the full-id fallback title without requiring history reload;
 - `vscode-acp-chat.selectAgent` opens a native QuickPick that updates the selected/default agent and creates a new active session for it without cancelling existing sessions;
-- `vscode-acp-chat.switchSession` opens a native QuickPick to activate an existing session and focus the existing chat view;
+- `vscode-acp-chat.switchSession` opens a native QuickPick to activate an existing session and focus the existing chat view; the title owns the first row while active/status/agent/ACP id metadata is placed on the detail row to avoid squeezing long titles;
 - `vscode-acp-chat.multiSession.maxConcurrentSessions` limits concurrently started local ACP processes; draft sessions without an eager-started runtime do not count.
+- changing `vscode-acp-chat.multiSession.enabled` requires `Developer: Reload Window` so the controller, manager provider, commands, and contributed Activity Bar view stay lifecycle-consistent.
 
 Main host/webview protocol messages:
 
 - chat webview → host: `feature.multi-session.ready`, `new`, `activate`, `stop`, `close`, `openManagerPanel`, `quickSwitch`, `resync`, `reviewPermission`, `permission.respond`;
 - host → chat webview: `feature.multi-session.chatState`, `feature.multi-session.snapshot`, `feature.multi-session.delta`;
-- manager panel → host: `feature.multi-session.managerReady`, `managerResync`, `new`, `activate`, `stop`, `close`, `reviewPermission`;
-- host → manager panel: `feature.multi-session.managerState` summary messages.
+- manager view → host: `feature.multi-session.managerReady`, `managerResync`, `new`, `activate`, `stop`, `close`, `reviewPermission`;
+- host → manager view: `feature.multi-session.managerState` summary messages; the manager host subscription exists only while the view is visible, with full resync on ready/resync/visibility.
 
 The webview requests resync if it detects a delta sequence gap and ignores stale deltas after activation revision changes.
 
@@ -205,9 +214,9 @@ This is webview-only and has no commands or settings.
 
 ### Clickable chat resource links
 
-Assistant Markdown text is decorated after render so high-confidence resources are clickable without changing Markdown parsing. Detected resources include `http://`, `https://`, `www.` URLs, `file://` URLs, absolute paths, explicit relative paths, workspace-style paths with file-like final segments, and common root config filenames. Inline code is linked only when the whole code span is exactly one resource candidate.
+Assistant Markdown text is decorated after render so high-confidence resources are clickable without changing Markdown parsing. Detected resources include `http://`, `https://`, `www.` URLs, `file://` URLs, absolute paths, home-relative paths such as `~/.pi/agent/settings.json`, explicit relative paths, workspace-style paths with file-like final segments, and common root config filenames. Inline code is linked only when the whole code span is exactly one resource candidate.
 
-File links reuse the existing `openFile` webview message and request existence checks for auto-detected links. Web links are intercepted in the webview and opened by the extension host through `vscode.env.openExternal` after `http:`/`https:` protocol validation. Fenced code blocks, tool output, chips, buttons, table controls, and existing Markdown links are not rewrapped.
+File links reuse the existing `openFile` webview message and request existence checks for auto-detected links. Home-relative links expand `~/` against the extension host user's home directory before opening. Web links are intercepted in the webview and opened by the extension host through `vscode.env.openExternal` after `http:`/`https:` protocol validation. Fenced code blocks, tool output, chips, buttons, table controls, and existing Markdown links are not rewrapped.
 
 ### Settings and diagnostics
 

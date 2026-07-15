@@ -144,6 +144,11 @@ export interface PromptHistoryEntry {
   text: string;
 }
 
+export interface MessageScrollPosition {
+  isNearBottom: boolean;
+  scrollTop: number;
+}
+
 // ---------------------------------------------------------------------------
 // Extension → webview message
 // ---------------------------------------------------------------------------
@@ -200,6 +205,7 @@ export interface ExtensionMessage {
   };
   rawOutput?: { output?: string; text?: string } | string;
   status?: string;
+  disposition?: string;
   terminalOutput?: string;
   results?: Array<{
     name: string;
@@ -237,6 +243,13 @@ export interface ExtensionMessage {
   cost?: { amount: number; currency: string } | null;
   action?: string;
   actionLabel?: string;
+  payloads?: unknown[];
+  aborted?: boolean;
+  revision?: number;
+  processing?: boolean;
+  steering?: unknown[];
+  followUp?: unknown[];
+  effectiveSteering?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +268,8 @@ export interface WebviewEventMap {
   beforeSend: undefined;
   /** Fired after a user message has been posted to the extension host. */
   messageSent: { text: string; images: string[]; mentions: Mention[] };
+  /** Fired when the composer draft changes from direct user input. */
+  draftChanged: { html: string };
   /** Fired after a Markdown block has been rendered into the DOM. */
   markdownRendered: { root: HTMLElement; kind: "text" | "thought" };
 }

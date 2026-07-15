@@ -85,7 +85,7 @@ export class WebviewController implements MessageHandler {
 
     // Wire cross-component dependencies
     this.messageList.onGeneratingChange = (isGenerating) => {
-      this.inputPanel.setGenerating(isGenerating);
+      this.features?.messageQueue.setTurnGenerating(isGenerating);
       if (!isGenerating) {
         this.inputPanel.focus();
       }
@@ -136,6 +136,9 @@ export class WebviewController implements MessageHandler {
   ): boolean | void | Promise<boolean | void> {
     const chatFontSizeResult = this.features?.chatFontSize.handleMessage(msg);
     if (chatFontSizeResult === true) return true;
+
+    const messageQueueResult = this.features?.messageQueue.handleMessage(msg);
+    if (messageQueueResult === true) return true;
 
     const multiSessionResult = this.features?.multiSession.handleMessage(msg);
     if (multiSessionResult === true) return true;
@@ -339,6 +342,18 @@ export class WebviewController implements MessageHandler {
 
   beforeMultiSessionSend(): void {
     this.features?.multiSession.beforeSend();
+  }
+
+  acknowledgeSubmittedDraft(sessionId: string | undefined): void {
+    this.features?.multiSession.acknowledgeSubmittedDraft(sessionId);
+  }
+
+  restoreDraftPayloads(sessionId: string | undefined, html: string): void {
+    this.features?.multiSession.restoreDraftPayloads(sessionId, html);
+  }
+
+  setTurnGenerating(value: boolean): void {
+    this.features?.messageQueue.setTurnGenerating(value);
   }
 
   getTools() {

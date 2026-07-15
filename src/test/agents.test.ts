@@ -1,6 +1,20 @@
 import * as assert from "assert";
+import * as vscode from "vscode";
 import { validateAgent } from "../acp/agent-validator";
-import { AGENTS, getAgent, getFirstAvailableAgent } from "../acp/agents";
+import {
+  AGENTS,
+  clearAgentsCacheForTest,
+  getAgent,
+  getBuiltinAgentConfigsForTest,
+  getFirstAvailableAgent,
+} from "../acp/agents";
+
+async function updateConfig(key: string, value: unknown): Promise<void> {
+  await vscode.workspace
+    .getConfiguration("vscode-acp-chat")
+    .update(key, value, vscode.ConfigurationTarget.Global);
+  clearAgentsCacheForTest();
+}
 
 suite("agents", () => {
   suite("AGENTS", () => {
@@ -35,6 +49,11 @@ suite("agents", () => {
       assert.strictEqual(claude?.command, "npx");
     });
 
+    test("should not include bundled Antigravity agent by default", () => {
+      const antigravity = AGENTS.find((a) => a.id === "antigravity");
+      assert.strictEqual(antigravity, undefined);
+    });
+
     test("should include bundled Pi agent", () => {
       const pi = AGENTS.find((a) => a.id === "pi");
       assert.ok(pi, "pi agent should exist");
@@ -48,6 +67,89 @@ suite("agents", () => {
         ),
         "pi args should include bundled adapter entrypoint"
       );
+    });
+  });
+
+  suite("Antigravity built-in", () => {
+    let originalEnabled: boolean | undefined;
+    let originalCustomAgents: unknown;
+
+    setup(() => {
+      const config = vscode.workspace.getConfiguration("vscode-acp-chat");
+      originalEnabled = config.get<boolean>("antigravity.enabled");
+      originalCustomAgents = config.get("customAgents");
+    });
+
+    teardown(async () => {
+      await updateConfig("antigravity.enabled", originalEnabled);
+      await updateConfig("customAgents", originalCustomAgents);
+    });
+
+    test("should include exact bundled launch config when enabled", async () => {
+      await updateConfig("antigravity.enabled", true);
+      await updateConfig("customAgents", []);
+
+      const antigravity = getBuiltinAgentConfigsForTest().find(
+        (a) => a.id === "antigravity"
+      );
+      assert.ok(antigravity, "antigravity agent should exist when enabled");
+      assert.strictEqual(antigravity.name, "Antigravity (Experimental)");
+      assert.strictEqual(antigravity.command, process.execPath);
+      assert.deepStrictEqual(antigravity.env, { ELECTRON_RUN_AS_NODE: "1" });
+      assert.strictEqual(antigravity.availabilityCommand, "agy");
+      assert.strictEqual(antigravity.args[0], "--no-warnings");
+      assert.ok(
+        antigravity.args[1]
+          ?.replace(/\\/g, "/")
+          .endsWith("antigravity-acp/index.mjs"),
+        "antigravity args should include bundled adapter entrypoint"
+      );
+      assert.ok(
+        ![antigravity.command, ...antigravity.args].some((part) =>
+          part.toLowerCase().includes("bun")
+        ),
+        "antigravity launch config should not use Bun"
+      );
+      assert.ok(
+        !antigravity.args.some((arg) =>
+          arg.includes("--dangerously-skip-permissions")
+        ),
+        "antigravity launch config should not include dangerous permission flags"
+      );
+    });
+
+    test("should allow custom antigravity override when built-in is enabled", async () => {
+      const custom = {
+        id: "antigravity",
+        name: "Custom Antigravity",
+        command: "custom-agy-acp",
+        args: ["--stdio"],
+        availabilityCommand: "custom-agy-acp",
+      };
+      await updateConfig("antigravity.enabled", true);
+      await updateConfig("customAgents", [custom]);
+
+      const agent = getAgent("antigravity");
+      assert.ok(agent, "custom antigravity agent should be returned");
+      assert.strictEqual(agent.name, custom.name);
+      assert.strictEqual(agent.command, custom.command);
+      assert.deepStrictEqual(agent.args, custom.args);
+    });
+
+    test("should allow custom-only antigravity when built-in is disabled", async () => {
+      const custom = {
+        id: "antigravity",
+        name: "External Antigravity ACP",
+        command: "agy-acp",
+        args: [],
+      };
+      await updateConfig("antigravity.enabled", false);
+      await updateConfig("customAgents", [custom]);
+
+      const agent = getAgent("antigravity");
+      assert.ok(agent, "custom-only antigravity agent should be returned");
+      assert.strictEqual(agent.name, custom.name);
+      assert.strictEqual(agent.command, custom.command);
     });
   });
 

@@ -1,0 +1,23 @@
+{
+	"name": "@vscode-acp-chat/antigravity-acp-vendor",
+	"description": "Vendored Node 22 ACP adapter for Google Antigravity agy CLI.",
+	"version": "1.0.0-vendor.20260715",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"agy-acp": "index.ts",
+		"antigravity-acp": "index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test:node": "tsc -p tsconfig.test.json && node --experimental-specifier-resolution=node --test .tmp-tests/tests/*.test.js"
+	},
+	"dependencies": {
+		"@agentclientprotocol/sdk": "1.2.x",
+		"@bufbuild/protobuf": "2.12.x"
+	},
+	"peerDependencies": {
+		"typescript": ">=5"
+	},
+	"license": "MIT"
+}
