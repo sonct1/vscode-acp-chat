@@ -2087,6 +2087,7 @@ suite("ChatViewProvider", () => {
       );
       const messages: any[] = [];
       (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).webviewReady = true;
 
       await provider.selectAgentAndStartNewChat("opencode");
 
@@ -2103,6 +2104,63 @@ suite("ChatViewProvider", () => {
           (message) =>
             message.type === "agentChanged" && message.agentId === "opencode"
         )
+      );
+      assert.ok(messages.some((message) => message.type === "focusInput"));
+      provider.dispose();
+    });
+
+    test("legacy new chat emits focusInput before ACP session creation", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      acpClient.isConnectedValue = true;
+      const messages: any[] = [];
+      const events: string[] = [];
+      (provider as any).postMessage = (message: any) => {
+        messages.push(message);
+        events.push(message.type);
+      };
+      (provider as any).webviewReady = true;
+      const originalNewSession = (provider as any).sessionManager.newSession.bind(
+        (provider as any).sessionManager
+      );
+      (provider as any).sessionManager.newSession = async (...args: any[]) => {
+        events.push("newSession");
+        return originalNewSession(...args);
+      };
+
+      await (provider as any).handleNewChat();
+
+      assert.ok(messages.some((message) => message.type === "chatCleared"));
+      assert.ok(messages.some((message) => message.type === "focusInput"));
+      assert.ok(events.indexOf("focusInput") < events.indexOf("newSession"));
+      assert.strictEqual(acpClient.newSessionCallCount, 1);
+      provider.dispose();
+    });
+
+    test("legacy new chat retains input focus until the webview is ready", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+
+      await (provider as any).handleNewChat();
+      assert.strictEqual(
+        messages.some((message) => message.type === "focusInput"),
+        false
+      );
+
+      await messageHandler({ type: "ready" });
+
+      assert.strictEqual(
+        messages.filter((message) => message.type === "focusInput").length,
+        1
       );
       provider.dispose();
     });
@@ -2136,6 +2194,7 @@ suite("ChatViewProvider", () => {
       assert.strictEqual(acpClient.cancelCallCount, 0);
       assert.strictEqual(acpClient.newSessionCallCount, 0);
       assert.ok(!messages.some((message) => message.type === "chatCleared"));
+      assert.ok(!messages.some((message) => message.type === "focusInput"));
       provider.dispose();
     });
 

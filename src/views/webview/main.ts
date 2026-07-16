@@ -234,6 +234,10 @@ export class WebviewController implements MessageHandler {
         this.resetChatState();
         return;
 
+      case "focusInput":
+        this.inputPanel.focus();
+        return;
+
       case "confirmAction": {
         const actionLabel = msg.actionLabel || msg.action || "this action";
         return showConfirmDialog(this.ctx.doc, actionLabel).then(

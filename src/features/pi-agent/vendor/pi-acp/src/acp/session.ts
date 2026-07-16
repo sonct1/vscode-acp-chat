@@ -549,16 +549,39 @@ export class PiAcpSession {
       _meta: { piAcp: { queueDepth: this.turnQueue.length, running: true } }
     })
 
-    // Kick off pi, but completion is determined by pi events, not the RPC response.
-    // Important: pi may emit multiple `turn_end` events (e.g. when the model requests tools).
-    // The full prompt is finished when we see the owning top-level pi run become idle.
-    this.proc.prompt(t.message, t.images).catch(err => {
-      // If the subprocess errors before completion, settle the active turn and clear
-      // queued work without starting it: pi may be unhealthy or require re-auth.
-      void this.flushEmits().finally(() => {
-        this.failCurrentTurn(err)
+    // Kick off pi, but completion for normal LLM prompts is determined by pi events,
+    // not the RPC response. Important: pi may emit multiple `turn_end` events (e.g.
+    // when the model requests tools). The full prompt is finished when we see the
+    // owning top-level pi run become idle.
+    const startedTurnId = this.pendingTurn.id
+    const startedRevision = this.lifecycleRevision
+
+    this.proc
+      .prompt(t.message, t.images)
+      .then(() => {
+        // Extension RPC commands (for example /plannotator) can be fully handled by
+        // pi without entering an agent loop, so no `agent_end` event is emitted. In
+        // that case, use the same stable-idle validation used for agent_end instead
+        // of resolving immediately. If an agent loop or other lifecycle transition
+        // starts before/during validation, lifecycleRevision invalidates this safely.
+        this.scheduleNoAgentLoopPromptCompletion(startedTurnId, startedRevision)
       })
-    })
+      .catch(err => {
+        // If the subprocess errors before completion, settle the active turn and clear
+        // queued work without starting it: pi may be unhealthy or require re-auth.
+        void this.flushEmits().finally(() => {
+          this.failCurrentTurn(err)
+        })
+      })
+  }
+
+  private scheduleNoAgentLoopPromptCompletion(turnId: number | null, revision: number): void {
+    if (turnId === null) return
+    if (!this.pendingTurn || this.pendingTurn.id !== turnId) return
+    if (this.lifecycleRevision !== revision) return
+    if (this.inAgentLoop) return
+
+    this.schedulePendingTurnCompletion({ type: 'prompt_resolved_no_agent_loop' } as PiRpcEvent)
   }
 
   private isRootBusyState(state: unknown): boolean {

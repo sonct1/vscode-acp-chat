@@ -1152,6 +1152,8 @@ suite("Webview", () => {
         });
 
         controller.messageList.addMessage("Test", "user");
+        elements.messagesEl.setAttribute("tabindex", "0");
+        elements.messagesEl.focus();
         controller.handleMessage({ type: "chatCleared" });
 
         // Messages should be cleared
@@ -1162,6 +1164,16 @@ suite("Webview", () => {
         const result =
           controller.inputPanel.autocomplete.getFilteredCommands("/");
         assert.strictEqual(result.length, 1);
+        assert.strictEqual(document.activeElement, elements.messagesEl);
+      });
+
+      test("focusInput focuses the rich composer input", () => {
+        elements.messagesEl.setAttribute("tabindex", "0");
+        elements.messagesEl.focus();
+
+        controller.handleMessage({ type: "focusInput" });
+
+        assert.strictEqual(document.activeElement, elements.inputEl);
       });
 
       test("handles toolCallStart", () => {
@@ -4376,6 +4388,154 @@ suite("Webview", () => {
       assert.strictEqual(elements.inputEl.textContent, "");
     });
 
+    test("pending focus waits for matching snapshot restore and unlock", async () => {
+      const localDom = new JSDOM(
+        "<!DOCTYPE html><html><head></head><body></body></html>",
+        { url: "https://localhost" }
+      );
+      const localDoc = localDom.window.document;
+      const calls: string[] = [];
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: () => {},
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        localDoc,
+        {
+          reset: () => calls.push("reset"),
+          dispatch: () => {},
+          setSurfaceInteractionLocked: (value) => calls.push(`lock:${value}`),
+          focusInput: () => calls.push("focus"),
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: (value) => calls.push(`draft:${value}`),
+          getScrollTop: () => 0,
+          setScrollTop: () => {},
+          scrollToBottom: () => {},
+          getWebviewState: () => ({
+            isConnected: true,
+            inputValue: "",
+            multiSession: { drafts: { "local-a": "restored" } },
+          }),
+          saveWebviewState: () => {},
+        }
+      );
+
+      feature.handleMessage({
+        type: "feature.multi-session.focusInput",
+        localSessionId: "local-a",
+        activationRevision: 1,
+      } as any);
+      assert.deepStrictEqual(calls, []);
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      assert.deepStrictEqual(calls, [
+        "lock:true",
+        "reset",
+        "draft:restored",
+        "lock:false",
+        "focus",
+      ]);
+      localDom.window.close();
+    });
+
+    test("stale multi-session focus intent does not focus latest activation", async () => {
+      const calls: string[] = [];
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: () => {},
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        document,
+        {
+          reset: () => {},
+          dispatch: () => {},
+          setSurfaceInteractionLocked: () => {},
+          focusInput: () => calls.push("focus"),
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 0,
+          setScrollTop: () => {},
+          scrollToBottom: () => {},
+          getWebviewState: () => undefined,
+          saveWebviewState: () => {},
+        }
+      );
+
+      feature.handleMessage({
+        type: "feature.multi-session.focusInput",
+        localSessionId: "local-a",
+        activationRevision: 1,
+      } as any);
+      feature.handleMessage({
+        type: "feature.multi-session.chatState",
+        enabled: true,
+        activeLocalSessionId: "local-b",
+        activationRevision: 2,
+        active: {
+          localSessionId: "local-b",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "B",
+          status: "idle",
+          createdAt: 2,
+          updatedAt: 2,
+          pendingPermissionCount: 0,
+        },
+        aggregate: { open: 2, running: 0, awaitingPermission: 0 },
+      } as any);
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-b",
+        activationRevision: 2,
+        session: {
+          localSessionId: "local-b",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "B",
+          status: "idle",
+          createdAt: 2,
+          updatedAt: 2,
+          pendingPermissionCount: 0,
+        },
+        transcript: [],
+        lastSeq: 0,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      assert.deepStrictEqual(calls, []);
+    });
+
     test("shows a loading indicator while the active session is starting", () => {
       controller.handleMessage({
         type: "feature.multi-session.state",
@@ -4851,7 +5011,26 @@ suite("Webview", () => {
     });
   });
 
-  suite("tool output typography CSS", () => {
+  suite("webview rendering CSS", () => {
+    test("maps message paint bump states to distinct painted properties", () => {
+      const css = fs.readFileSync(
+        path.resolve(process.cwd(), "media", "main.css"),
+        "utf8"
+      );
+      const dom = new JSDOM(`<!DOCTYPE html><style>${css}</style>
+        <div id="messages" data-paint-bump="0"></div>`);
+      const messages = dom.window.document.getElementById("messages");
+      assert.ok(messages);
+
+      const initialBoxShadow = dom.window.getComputedStyle(messages).boxShadow;
+      messages.dataset.paintBump = "1";
+      const bumpedBoxShadow = dom.window.getComputedStyle(messages).boxShadow;
+
+      assert.ok(initialBoxShadow.includes("rgba(0, 0, 0, 0)"));
+      assert.ok(bumpedBoxShadow.includes("rgba(255, 255, 255, 0)"));
+      assert.notStrictEqual(initialBoxShadow, bumpedBoxShadow);
+    });
+
     test("keeps terminal output on the monospace command-output font stack", () => {
       const css = fs.readFileSync(
         path.resolve(process.cwd(), "media", "main.css"),

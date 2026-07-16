@@ -223,6 +223,7 @@ function createController(
   options: {
     state?: TestMemento;
     configureManager?: (manager: FakeSessionManager) => void;
+    onFocusChat?: () => Thenable<void> | void;
   } = {}
 ) {
   const messages: Record<string, unknown>[] = [];
@@ -231,6 +232,7 @@ function createController(
   const controller = new MultiSessionHostController({
     globalState: options.state ?? new TestMemento(),
     postMessage: (message) => messages.push(message),
+    onFocusChat: options.onFocusChat,
     clientFactory: (agent) => {
       const client = new FakeClient();
       client.agentId = agent.id;
@@ -1544,6 +1546,124 @@ suite("multi-session feature", () => {
     clients[0].resolvePrompt();
     await prompt;
     await ready;
+    controller.dispose();
+  });
+
+  test("newChat emits one guarded focus intent after view focus", async () => {
+    const focusCalls: string[] = [];
+    const { controller, messages } = createController(undefined, {
+      onFocusChat: async () => {
+        focusCalls.push("focusView");
+      },
+    });
+
+    await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.strictEqual(
+      messages.some(
+        (message) => message.type === "feature.multi-session.focusInput"
+      ),
+      false
+    );
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const focusMessages = messages.filter(
+      (message) => message.type === "feature.multi-session.focusInput"
+    );
+    const state = controller.getStateForTest();
+    const snapshot = messages.find(
+      (message) => message.type === "feature.multi-session.snapshot"
+    );
+    assert.strictEqual(focusCalls.length, 1);
+    assert.strictEqual(focusMessages.length, 1);
+    assert.strictEqual(
+      focusMessages[0].localSessionId,
+      state.activeLocalSessionId
+    );
+    assert.strictEqual(
+      focusMessages[0].activationRevision,
+      snapshot?.activationRevision
+    );
+    controller.dispose();
+  });
+
+  test("activating existing session only focuses the view", async () => {
+    const focusCalls: string[] = [];
+    const { controller, messages } = createController(undefined, {
+      onFocusChat: () => {
+        focusCalls.push("focusView");
+      },
+    });
+    await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    messages.length = 0;
+    focusCalls.length = 0;
+    const firstSession = controller.getStateForTest().sessions[0].localSessionId;
+
+    controller.activateSession(firstSession, { focusChat: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepStrictEqual(focusCalls, ["focusView"]);
+    assert.strictEqual(
+      messages.some(
+        (message) => message.type === "feature.multi-session.focusInput"
+      ),
+      false
+    );
+    controller.dispose();
+  });
+
+  test("deferred view focus is awaited and stale deferred input focus is dropped", async () => {
+    let releaseFocus!: () => void;
+    const focusStarted = new Promise<void>((resolve) => {
+      releaseFocus = resolve;
+    });
+    const { controller, messages } = createController(undefined, {
+      onFocusChat: () => focusStarted,
+    });
+
+    const first = controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const staleSession = controller.getStateForTest().activeLocalSessionId;
+    await controller.newChat();
+    releaseFocus();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const focusMessages = messages.filter(
+      (message) => message.type === "feature.multi-session.focusInput"
+    );
+    assert.ok(
+      focusMessages.every(
+        (message) => message.localSessionId !== staleSession
+      )
+    );
+    assert.strictEqual(focusMessages.length, 1);
+    assert.strictEqual(
+      focusMessages[0].localSessionId,
+      controller.getStateForTest().activeLocalSessionId
+    );
+    controller.dispose();
+  });
+
+  test("newChat still emits input focus when view focus fails", async () => {
+    const { controller, messages } = createController(undefined, {
+      onFocusChat: async () => {
+        throw new Error("focus failed");
+      },
+    });
+
+    await controller.newChat();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(
+      messages.filter(
+        (message) => message.type === "feature.multi-session.focusInput"
+      ).length,
+      1
+    );
     controller.dispose();
   });
 

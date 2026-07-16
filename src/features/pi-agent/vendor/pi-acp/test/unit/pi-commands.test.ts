@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { toAvailableCommandsFromPiGetCommands } from '../../src/acp/pi-commands.js'
+import { PLANNOTATOR_EXTENSION_COMMANDS, toAvailableCommandsFromPiGetCommands } from '../../src/acp/pi-commands.js'
 
 test('toAvailableCommandsFromPiGetCommands: hides extension commands by default and filters skill commands', () => {
   const data = {
@@ -29,4 +29,31 @@ test('toAvailableCommandsFromPiGetCommands: hides extension commands by default 
 
   const noSkills = toAvailableCommandsFromPiGetCommands(data, { enableSkillCommands: false }).commands
   assert.deepEqual(noSkills, [{ name: 'y', description: '(prompt:project)' }])
+})
+
+test('toAvailableCommandsFromPiGetCommands: allows only configured extension commands', () => {
+  const data = {
+    commands: [
+      { name: 'plannotator', description: 'Plan', source: 'extension' },
+      { name: 'plannotator-review', description: 'Review', source: 'extension' },
+      { name: 'plannotator-annotate', description: 'Annotate', source: 'extension' },
+      { name: 'plannotator-last', description: 'Last', source: 'extension' },
+      { name: 'unrelated-extension', description: 'Hidden', source: 'extension' },
+      { name: 'prompt-command', description: 'Prompt', source: 'prompt' }
+    ]
+  }
+
+  const commands = toAvailableCommandsFromPiGetCommands(data, {
+    enableSkillCommands: true,
+    includeExtensionCommands: false,
+    allowedExtensionCommands: PLANNOTATOR_EXTENSION_COMMANDS
+  }).commands
+
+  assert.deepEqual(commands, [
+    { name: 'plannotator', description: 'Plan' },
+    { name: 'plannotator-review', description: 'Review' },
+    { name: 'plannotator-annotate', description: 'Annotate' },
+    { name: 'plannotator-last', description: 'Last' },
+    { name: 'prompt-command', description: 'Prompt' }
+  ])
 })

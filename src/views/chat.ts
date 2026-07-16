@@ -180,6 +180,8 @@ export class ChatViewProvider
   // Flag to track if the agent is currently generating a response
   private isGenerating = false;
   private legacyMessageQueue?: MessageQueueController;
+  private webviewReady = false;
+  private legacyInputFocusPending = false;
 
   // Pending confirmation requests from isGenerating guard
   private pendingConfirmations = new Map<
@@ -361,6 +363,7 @@ export class ChatViewProvider
     _token: vscode.CancellationToken
   ): void {
     this.view = webviewView;
+    this.webviewReady = false;
     this.features.multiSession?.attachView(webviewView);
 
     webviewView.webview.options = {
@@ -687,6 +690,7 @@ export class ChatViewProvider
           }
           break;
         case "ready":
+          this.webviewReady = true;
           this.features.chatAutoScroll?.sendSettings();
           this.features.chatFontSize?.sendSettings();
           if (this.features.multiSession) {
@@ -716,6 +720,7 @@ export class ChatViewProvider
           });
           this.sendSessionMetadata();
           this.sendContextUsage();
+          this.flushLegacyInputFocus();
           break;
       }
     });
@@ -1095,6 +1100,8 @@ export class ChatViewProvider
     this.features.chatFontSize?.dispose();
     this.multiSessionManagerView?.dispose();
     this.features.multiSession?.dispose();
+    this.legacyInputFocusPending = false;
+    this.webviewReady = false;
     this.sessionUpdateNotifier.dispose();
     this.webviewPostNotifier.dispose();
     this.diffManager.dispose();
@@ -1415,6 +1422,7 @@ export class ChatViewProvider
     }
 
     this.resetLegacyChatSurface();
+    await this.requestLegacyInputFocus();
 
     try {
       if (this.acpClient.isConnected()) {
@@ -1451,6 +1459,7 @@ export class ChatViewProvider
       agentId,
       agentName: agent.name,
     });
+    await this.requestLegacyInputFocus();
 
     try {
       const workingDir = getWorkspaceRoot();
@@ -1471,6 +1480,22 @@ export class ChatViewProvider
       console.error("[Chat] Failed to select agent and create session:", error);
       this.postMessage({ type: "error", text: message });
     }
+  }
+
+  private async requestLegacyInputFocus(): Promise<void> {
+    this.legacyInputFocusPending = true;
+    try {
+      await vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
+    } catch (error) {
+      console.error("[Chat] Failed to focus chat view:", error);
+    }
+    this.flushLegacyInputFocus();
+  }
+
+  private flushLegacyInputFocus(): void {
+    if (!this.legacyInputFocusPending || !this.webviewReady) return;
+    this.legacyInputFocusPending = false;
+    this.postMessage({ type: "focusInput" });
   }
 
   private resetLegacyChatSurface(): void {

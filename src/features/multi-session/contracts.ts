@@ -124,6 +124,12 @@ export interface MultiSessionDeltaMessage {
   event: TranscriptEvent;
 }
 
+export interface MultiSessionFocusInputMessage {
+  type: "feature.multi-session.focusInput";
+  localSessionId: string;
+  activationRevision: number;
+}
+
 export type MultiSessionHostMessage =
   | { type: "feature.multi-session.ready" }
   | { type: "feature.multi-session.managerReady" }

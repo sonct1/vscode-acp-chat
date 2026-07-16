@@ -3,6 +3,7 @@ import type { ExtensionMessage, VsCodeApi } from "../../views/webview/types";
 import type {
   MultiSessionChatStateMessage,
   MultiSessionDeltaMessage,
+  MultiSessionFocusInputMessage,
   MultiSessionListItem,
   MultiSessionSnapshot,
   MultiSessionStateMessage,
@@ -16,6 +17,7 @@ interface ChatSurfaceBridge {
   beginSnapshotReplay?(): void;
   endSnapshotReplay?(): void;
   setSurfaceInteractionLocked?(value: boolean): void;
+  focusInput?(): void;
   setGenerating(value: boolean): void;
   getInputHtml(): string;
   setInputHtml(value: string): void;
@@ -61,6 +63,7 @@ export class MultiSessionWebviewController {
   private scrollTop: Record<string, number> = {};
   private optimisticLoadingText: string | undefined;
   private snapshotReplay: SnapshotReplay | undefined;
+  private pendingFocusInput: MultiSessionFocusInputMessage | undefined;
   private hasRenderedSnapshot = false;
 
   constructor(
@@ -100,6 +103,10 @@ export class MultiSessionWebviewController {
     }
     if (msg.type === "feature.multi-session.delta") {
       return this.applyDelta(msg as MultiSessionDeltaMessage).then(() => true);
+    }
+    if (msg.type === "feature.multi-session.focusInput") {
+      this.requestFocusInput(msg as MultiSessionFocusInputMessage);
+      return true;
     }
     if (msg.type === "feature.multi-session.openManager") {
       this.vscode.postMessage({
@@ -188,6 +195,7 @@ export class MultiSessionWebviewController {
     this.active = msg.active ?? this.active;
     this.aggregate = msg.aggregate;
     if (activeChanged && msg.activeLocalSessionId) {
+      this.clearStaleFocusInput(msg.activeLocalSessionId, msg.activationRevision);
       this.showOptimisticLoading("Opening chat…");
       this.bridge.setSurfaceInteractionLocked?.(true);
     } else {
@@ -315,6 +323,7 @@ export class MultiSessionWebviewController {
       }
       if (this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
         this.bridge.setSurfaceInteractionLocked?.(false);
+        this.flushPendingFocusInput();
       }
     }
 
@@ -353,6 +362,44 @@ export class MultiSessionWebviewController {
     }
     this.lastSeqBySession[msg.localSessionId] = msg.event.seq;
     await this.bridge.dispatch(msg.event.message as ExtensionMessage);
+  }
+
+  private requestFocusInput(message: MultiSessionFocusInputMessage): void {
+    if (
+      this.targetActivationRevision > 0 &&
+      message.activationRevision < this.targetActivationRevision
+    ) {
+      return;
+    }
+    this.pendingFocusInput = message;
+    this.flushPendingFocusInput();
+  }
+
+  private clearStaleFocusInput(
+    localSessionId: string,
+    activationRevision: number
+  ): void {
+    const intent = this.pendingFocusInput;
+    if (!intent) return;
+    if (
+      intent.localSessionId !== localSessionId ||
+      intent.activationRevision !== activationRevision
+    ) {
+      this.pendingFocusInput = undefined;
+    }
+  }
+
+  private flushPendingFocusInput(): void {
+    const intent = this.pendingFocusInput;
+    if (!intent || this.snapshotReplay) return;
+    if (
+      intent.localSessionId !== this.renderedLocalSessionId ||
+      intent.activationRevision !== this.activationRevision
+    ) {
+      return;
+    }
+    this.pendingFocusInput = undefined;
+    this.bridge.focusInput?.();
   }
 
   private updateActiveDraft(html: string): void {
@@ -554,6 +601,7 @@ export function registerMultiSessionWebviewFeature(
       endSnapshotReplay: () => controller.endSnapshotReplay(),
       setSurfaceInteractionLocked: (value) =>
         controller.setSessionTransitionLocked(value),
+      focusInput: () => controller.inputPanel.focus(),
       setGenerating: (value) => controller.setTurnGenerating(value),
       getInputHtml: () => controller.inputPanel.getInputHtml(),
       setInputHtml: (value) => controller.inputPanel.setInputHtml(value),

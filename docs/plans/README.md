@@ -20,6 +20,7 @@ Current plans:
 - [Clickable Chat Resource Links](./implement-clickable-chat-resource-links.md) — auto-detect file paths and web URLs in assistant responses so they can be clicked from the webview.
 - [Prompt History Navigation](./implement-prompt-history-navigation.md) — use ArrowUp/ArrowDown in the prompt input to navigate user messages in the current chat session.
 - [Pi-Style Message Queue](./implement-pi-style-message-queue.md) — add processing-aware Enter/Alt+Enter/Escape/Alt+Up queue behavior across all ACP agents, with universal host fallback and capability-gated native Pi delivery.
+- [Generic ACP Elicitation](./implement-acp-elicitation.md) — add agent-neutral structured form input through ACP `elicitation/create`, including legacy and multi-session routing, background review, validation, and follow-up adapter compatibility.
 - [Readable Inline Diff](./implement-readable-inline-diff.md) — improve inline edit/write diff readability with theme-aware styling, line numbers, hunk headers, full diff actions, and large-diff safeguards.
 - [Structured Diff Summary Bridge](./implement-structured-diff-summary-bridge.md) — record structured tool-call diffs into `DiffManager` so the diff summary panel covers non-`writeTextFile` edits.
 - [Bundled Pi ACP Agent](./implement-bundled-pi-agent.md) — ship Pi as a built-in agent by bundling/forking the `pi-acp` adapter into the extension.

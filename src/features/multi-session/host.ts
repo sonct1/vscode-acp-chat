@@ -53,6 +53,7 @@ import {
 import type {
   MultiSessionAggregate,
   MultiSessionChatStateMessage,
+  MultiSessionFocusInputMessage,
   MultiSessionHostMessage,
   MultiSessionListItem,
   MultiSessionManagerStateMessage,
@@ -163,6 +164,8 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly sessions = new Map<string, ManagedSession>();
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
+  private pendingFocusInput: MultiSessionFocusInputMessage | undefined;
+  private webviewReady = false;
   private defaultAgent: AgentConfig;
   private readonly mutationCoordinator = new WorkspaceMutationCoordinator();
   private readonly catalog: SessionCatalogService;
@@ -236,6 +239,7 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   attachView(view: vscode.WebviewView): void {
     this.view = view;
+    this.webviewReady = false;
     this.sendChatStateNow();
     this.sendSnapshot();
   }
@@ -259,8 +263,10 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     switch (message.type) {
       case "feature.multi-session.ready":
+        this.webviewReady = true;
         this.sendChatStateNow();
         this.sendSnapshot();
+        this.flushPendingInputFocus();
         await this.eagerStartActiveRuntimeOnReady();
         return true;
       case "feature.multi-session.managerReady":
@@ -409,7 +415,10 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   async newChat(options: { focusChat?: boolean } = {}): Promise<void> {
     const session = this.createDraft();
-    this.activate(session.localSessionId, options);
+    this.activate(session.localSessionId, {
+      focusChat: options.focusChat ?? true,
+      focusInput: true,
+    });
 
     // Start runtime in background; do not block UI on connect or create ACP session.
     // The ensureRuntime guard (runtimeStartPromise) prevents duplicate client/session
@@ -870,7 +879,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     await this.globalState.update(SELECTED_AGENT_KEY, agentId);
 
     const session = this.createDraftForAgent(agent);
-    this.activate(session.localSessionId, { focusChat: true });
+    this.activate(session.localSessionId, { focusChat: true, focusInput: true });
 
     try {
       await this.ensureRuntime(session, true);
@@ -905,6 +914,8 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.chatStateTimer = undefined;
     this.managerStateTimer = undefined;
     this.managerStateEmitter.dispose();
+    this.pendingFocusInput = undefined;
+    this.webviewReady = false;
     this.documentSync?.dispose();
     this.documentSync = undefined;
     for (const session of this.sessions.values()) this.disposeSession(session);
@@ -1330,7 +1341,7 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   private activate(
     localSessionId: string,
-    options: { focusChat?: boolean } = {}
+    options: { focusChat?: boolean; focusInput?: boolean } = {}
   ): void {
     const session = this.sessions.get(localSessionId);
     if (!session) return;
@@ -1340,11 +1351,57 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.sendChatStateNow();
     this.sendManagerStateNow();
     this.sendSnapshot({ scrollToBottom: true });
-    if (options.focusChat) {
+    if (options.focusInput) {
+      void this.requestInputFocusAfterActivation(
+        localSessionId,
+        this.activationRevision,
+        options.focusChat
+      );
+    } else if (options.focusChat) {
       void Promise.resolve(this.focusChat()).catch((error) => {
         console.error("[MultiSession] Failed to focus chat view:", error);
       });
     }
+  }
+
+  private async requestInputFocusAfterActivation(
+    localSessionId: string,
+    activationRevision: number,
+    focusChat: boolean | undefined
+  ): Promise<void> {
+    if (focusChat) {
+      try {
+        await Promise.resolve(this.focusChat());
+      } catch (error) {
+        console.error("[MultiSession] Failed to focus chat view:", error);
+      }
+    }
+    if (
+      this.activeLocalSessionId !== localSessionId ||
+      this.activationRevision !== activationRevision
+    ) {
+      return;
+    }
+    this.pendingFocusInput = {
+      type: "feature.multi-session.focusInput",
+      localSessionId,
+      activationRevision,
+    };
+    this.flushPendingInputFocus();
+  }
+
+  private flushPendingInputFocus(): void {
+    const message = this.pendingFocusInput;
+    if (!message || !this.webviewReady) return;
+    if (
+      this.activeLocalSessionId !== message.localSessionId ||
+      this.activationRevision !== message.activationRevision
+    ) {
+      this.pendingFocusInput = undefined;
+      return;
+    }
+    this.pendingFocusInput = undefined;
+    this.post(message as unknown as Record<string, unknown>);
   }
 
   private sendSnapshot(options: { scrollToBottom?: boolean } = {}): void {

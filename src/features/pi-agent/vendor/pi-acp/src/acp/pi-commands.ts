@@ -19,15 +19,31 @@ function describeFallback(c: PiRpcCommandInfo): string {
   return parts.length ? `(${parts.join(':')})` : '(command)'
 }
 
+export type PiAvailableCommandsOptions = {
+  enableSkillCommands?: boolean
+  includeExtensionCommands?: boolean
+  allowedExtensionCommands?: readonly string[]
+}
+
+export const PLANNOTATOR_EXTENSION_COMMANDS = [
+  'plannotator',
+  'plannotator-review',
+  'plannotator-annotate',
+  'plannotator-last'
+] as const
+
 export function toAvailableCommandsFromPiGetCommands(
   data: unknown,
-  opts?: { enableSkillCommands?: boolean; includeExtensionCommands?: boolean }
+  opts?: PiAvailableCommandsOptions
 ): {
   commands: AvailableCommand[]
   raw: PiRpcCommandInfo[]
 } {
   const enableSkillCommands = opts?.enableSkillCommands ?? true
   const includeExtensionCommands = opts?.includeExtensionCommands ?? false
+  const allowedExtensionCommands = opts?.allowedExtensionCommands
+    ? new Set<string>(opts.allowedExtensionCommands)
+    : null
 
   const root: any = data
   const commandsRaw: PiRpcCommandInfo[] = Array.isArray(root?.commands)
@@ -43,7 +59,13 @@ export function toAvailableCommandsFromPiGetCommands(
     if (!name) continue
 
     const source = typeof c?.source === 'string' ? c.source : ''
-    if (!includeExtensionCommands && source === 'extension') continue
+    if (source === 'extension') {
+      if (allowedExtensionCommands) {
+        if (!allowedExtensionCommands.has(name)) continue
+      } else if (!includeExtensionCommands) {
+        continue
+      }
+    }
 
     if (!enableSkillCommands && name.startsWith('skill:')) continue
 
