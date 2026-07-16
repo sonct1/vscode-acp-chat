@@ -457,6 +457,9 @@ export class WebviewController implements MessageHandler {
 
   setTurnGenerating(value: boolean): void {
     this.features?.messageQueue.setTurnGenerating(value);
+    if (!value) {
+      this.messageList.clearGeneratingState();
+    }
   }
 
   getTools() {

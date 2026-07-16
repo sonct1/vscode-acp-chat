@@ -257,7 +257,7 @@ export class MultiSessionManagerWebview {
             localSessionId: session.localSessionId,
             focusChat: true,
           }),
-        { pressed: isActive, busy: isOpening }
+        { pressed: isActive, busy: isOpening, nativeTitle: false }
       )
     );
     if (isStoppableStatus(session.status)) {
@@ -364,13 +364,15 @@ export class MultiSessionManagerWebview {
     iconClass: string,
     variant: "primary" | "secondary" | "danger",
     onClick: () => void,
-    options: { pressed?: boolean; busy?: boolean } = {}
+    options: { pressed?: boolean; busy?: boolean; nativeTitle?: boolean } = {}
   ): HTMLButtonElement {
     const button = this.doc.createElement("button");
     button.type = "button";
     button.className = `manager-button manager-button-icon manager-button-${variant}`;
     button.setAttribute("aria-label", label);
-    button.title = label;
+    if (options.nativeTitle !== false) {
+      button.title = label;
+    }
     if (options.pressed !== undefined) {
       button.setAttribute("aria-pressed", String(options.pressed));
     }

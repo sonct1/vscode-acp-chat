@@ -15,6 +15,7 @@ import type {
   SwarmWorkerState,
 } from "../types";
 import { SwarmCapabilityProxy } from "./capability-proxy";
+import { terminateChildProcessTree } from "./process-tree";
 import type { SwarmEvidenceStore } from "./evidence-store";
 import type { SwarmLockManager } from "./lock-manager";
 import type { SwarmMonitor } from "./monitor";
@@ -115,7 +116,7 @@ export class SwarmWorkerRuntime {
     this.agentContext = null;
     this.capabilityProxy = null;
     this.capabilityProxySessionId = null;
-    this.child?.kill();
+    if (this.child) void terminateChildProcessTree(this.child);
     this.child = null;
   }
 
@@ -130,6 +131,8 @@ export class SwarmWorkerRuntime {
         ...this.options.agent.env,
         [pathEnvName]: process.env[pathEnvName] ?? "",
       },
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
 
     this.child.stderr?.on("data", (data: Buffer) => {

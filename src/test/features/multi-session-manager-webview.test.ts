@@ -432,6 +432,11 @@ suite("multi-session manager webview", () => {
       'button[aria-label="Open chat"]'
     ) as HTMLButtonElement;
     assert.ok(openButton.querySelector(".codicon-comment"));
+    assert.strictEqual(
+      openButton.hasAttribute("title"),
+      false,
+      "Open chat should not use the native title tooltip because it renders with an unwanted border"
+    );
     assert.strictEqual(openButton.textContent, "");
     openButton.click();
 

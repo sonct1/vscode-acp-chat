@@ -3736,6 +3736,22 @@ suite("Webview", () => {
         assert.strictEqual(thoughtEl?.getAttribute("open"), null);
       });
 
+      test("chatCleared clears the typing indicator", () => {
+        controller.handleMessage({ type: "streamStart" });
+        assert.strictEqual(
+          elements.typingIndicatorEl.classList.contains("visible"),
+          true
+        );
+
+        controller.handleMessage({ type: "chatCleared" });
+
+        assert.strictEqual(
+          elements.typingIndicatorEl.classList.contains("visible"),
+          false
+        );
+        assert.strictEqual(controller.messageList.getIsGenerating(), false);
+      });
+
       test("chatCleared removes thought", () => {
         const parentEl = controller.messageList.ensureAssistantMessage();
         const block = controller.messageList
@@ -4362,6 +4378,43 @@ suite("Webview", () => {
         ),
         false
       );
+    });
+
+    test("multi-session snapshot clears stale typing indicator when idle", async () => {
+      await controller.handleMessage({ type: "streamStart" });
+      assert.strictEqual(
+        elements.typingIndicatorEl.classList.contains("visible"),
+        true
+      );
+
+      await controller.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [{ seq: 1, createdAt: 1, message: { type: "streamStart" } }],
+        lastSeq: 1,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      assert.strictEqual(
+        elements.typingIndicatorEl.classList.contains("visible"),
+        false
+      );
+      assert.strictEqual(controller.messageList.getIsGenerating(), false);
     });
 
     test("serializes multi-session snapshot replay before following deltas", async () => {

@@ -517,6 +517,7 @@ export class MessageListComponent implements MessageHandler {
 
   clear(): void {
     this.cancelPendingBottomScroll();
+    this.clearGeneratingState();
     this.elements.messagesEl.innerHTML = "";
     this.elements.messagesEl.scrollTop = 0;
     this.isAutoScrollEnabled = true;
@@ -525,6 +526,11 @@ export class MessageListComponent implements MessageHandler {
     this.updateViewState();
     this.notifyScrollPositionChange();
     this.scheduleMessagesPaintInvalidation();
+  }
+
+  clearGeneratingState(): void {
+    this.isGenerating = false;
+    this.hideTypingIndicator();
   }
 
   showTypingIndicator(): void {

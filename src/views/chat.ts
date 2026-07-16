@@ -5,6 +5,11 @@ import { getWorkspaceRoot } from "../utils/workspace";
 import { ACPClient, type SessionMetadata } from "../acp/client";
 import { getAgent, getFirstAvailableAgent } from "../acp/agents";
 import { DiffManager } from "../acp/diff-manager";
+import {
+  createOldContentUri,
+  OLD_CONTENT_SCHEME,
+  oldContentUriToFsPath,
+} from "../acp/diff-content-uri";
 import { FileHandler } from "../acp/file-handler";
 import { recordStructuredDiffsFromContent } from "../acp/structured-diff-recorder";
 import { TerminalHandler } from "../acp/terminal-handler";
@@ -265,7 +270,7 @@ export class ChatViewProvider
     });
 
     vscode.workspace.registerTextDocumentContentProvider(
-      "acp-old-content",
+      OLD_CONTENT_SCHEME,
       this
     );
 
@@ -371,7 +376,7 @@ export class ChatViewProvider
     if (this.features.multiSession) {
       return this.features.multiSession.provideTextDocumentContent(uri);
     }
-    const path = uri.path;
+    const path = oldContentUriToFsPath(uri);
     const changes = this.diffManager.getPendingChanges();
     const change = changes.find((c) => c.path === path);
     return change?.oldText || "";
@@ -784,7 +789,7 @@ export class ChatViewProvider
 
         await vscode.commands.executeCommand(
           "vscode.diff",
-          vscode.Uri.parse(`acp-old-content:${path}`),
+          createOldContentUri(path),
           uri,
           `Diff: ${vscode.workspace.asRelativePath(path)} (Original ↔ Modified)`
         );

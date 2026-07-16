@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { SessionUpdate, ToolKind } from "@agentclientprotocol/sdk";
+import { fileUriToFsPath } from "./file-uri.js";
 import type {
 	ErrorDetails,
 	PermissionInfo,
@@ -229,7 +230,7 @@ export function fsPath(p: string | null | undefined): string | null {
 	if (!p) return null;
 	if (p.startsWith("file://")) {
 		try {
-			return decodeURIComponent(new URL(p).pathname);
+			return fileUriToFsPath(p);
 		} catch {
 			return p.slice("file://".length);
 		}

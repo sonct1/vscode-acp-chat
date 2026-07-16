@@ -226,13 +226,7 @@ export class TerminalHandler {
     }
 
     if (process.platform === "win32") {
-      if (signal === "SIGKILL") {
-        this.killWindowsProcessTree(pid);
-        return;
-      }
-      try {
-        proc.kill(signal);
-      } catch {}
+      this.killWindowsProcessTree(pid);
       return;
     }
 

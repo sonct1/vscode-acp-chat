@@ -21,8 +21,29 @@ async function waitFor(
   }
 }
 
+const tempScriptDirs: string[] = [];
+
 function shellQuote(value: string): string {
+  if (process.platform === "win32") {
+    return `"${value.replace(/(["^&|<>])/g, "^$1").replace(/%/g, "%%")}"`;
+  }
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function nodeCommand(script: string): { command: string; args: string[] } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vscode-acp-node-cmd-"));
+  tempScriptDirs.push(dir);
+  const scriptPath = path.join(dir, "script.js");
+  fs.writeFileSync(scriptPath, script);
+  const nodePath = process.env.npm_node_execpath || "node";
+  return {
+    command: `${shellQuote(nodePath)} ${shellQuote(scriptPath)}`,
+    args: [],
+  };
+}
+
+function longRunningNodeCommand(): { command: string; args: string[] } {
+  return nodeCommand("setTimeout(() => {}, 30_000);\n");
 }
 
 function fileSize(filePath: string): number {
@@ -53,14 +74,16 @@ suite("TerminalHandler", () => {
 
   teardown(() => {
     handler.dispose();
+    for (const dir of tempScriptDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   suite("handleCreateTerminal", () => {
     test("should return a terminalId", async () => {
       const result = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo",
-        args: ["hello"],
+        ...nodeCommand("console.log('hello')"),
       });
       assert.ok(result.terminalId.startsWith("term-"));
     });
@@ -68,7 +91,7 @@ suite("TerminalHandler", () => {
     test("should execute command and capture stdout", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo hello",
+        ...nodeCommand("console.log('hello')"),
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
       const { output } = await handler.handleTerminalOutput({
@@ -81,7 +104,7 @@ suite("TerminalHandler", () => {
     test("should capture stderr", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo error >&2",
+        ...nodeCommand("console.error('error')"),
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
       const { output } = await handler.handleTerminalOutput({
@@ -92,23 +115,24 @@ suite("TerminalHandler", () => {
     });
 
     test("should use provided cwd", async () => {
+      const cwd = os.tmpdir();
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "pwd",
-        cwd: "/tmp",
+        ...nodeCommand("console.log(process.cwd())"),
+        cwd,
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
       const { output } = await handler.handleTerminalOutput({
         sessionId: SID,
         terminalId,
       });
-      assert.ok(output.includes("/tmp"));
+      assert.strictEqual(path.resolve(output.trim()), path.resolve(cwd));
     });
 
     test("should pass env variables", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo $MY_TEST_VAR",
+        ...nodeCommand("console.log(process.env.MY_TEST_VAR ?? '')"),
         env: [{ name: "MY_TEST_VAR", value: "test_value_123" }],
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
@@ -124,7 +148,7 @@ suite("TerminalHandler", () => {
     test("should return exitStatus after command finishes", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "exit 0",
+        ...nodeCommand("process.exit(0)"),
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
       const { exitStatus } = await handler.handleTerminalOutput({
@@ -137,7 +161,7 @@ suite("TerminalHandler", () => {
     test("should return non-zero exitStatus on failure", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "exit 42",
+        ...nodeCommand("process.exit(42)"),
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
       const { exitStatus } = await handler.handleTerminalOutput({
@@ -150,7 +174,7 @@ suite("TerminalHandler", () => {
     test("should return null exitStatus while command is still running", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "sleep 10",
+        ...longRunningNodeCommand(),
       });
       const { exitStatus } = await handler.handleTerminalOutput({
         sessionId: SID,
@@ -171,7 +195,7 @@ suite("TerminalHandler", () => {
     test("should respect outputByteLimit", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "python3 -c \"print('x' * 1000)\"",
+        ...nodeCommand("console.log('x'.repeat(1000))"),
         outputByteLimit: 100,
       });
       await handler.handleWaitForTerminalExit({ sessionId: SID, terminalId });
@@ -188,7 +212,7 @@ suite("TerminalHandler", () => {
     test("should resolve with exitCode 0 on success", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "exit 0",
+        ...nodeCommand("process.exit(0)"),
       });
       const result = await handler.handleWaitForTerminalExit({
         sessionId: SID,
@@ -200,7 +224,7 @@ suite("TerminalHandler", () => {
     test("should resolve with non-zero exitCode on failure", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "exit 7",
+        ...nodeCommand("process.exit(7)"),
       });
       const result = await handler.handleWaitForTerminalExit({
         sessionId: SID,
@@ -225,7 +249,7 @@ suite("TerminalHandler", () => {
     test("should kill a running process", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "sleep 30",
+        ...longRunningNodeCommand(),
       });
       await delay(50);
       await handler.handleKillTerminalCommand({ sessionId: SID, terminalId });
@@ -236,11 +260,7 @@ suite("TerminalHandler", () => {
       assert.notStrictEqual(result.exitCode, 0);
     });
 
-    test("should kill child processes spawned by the terminal command", async function () {
-      if (process.platform === "win32") {
-        this.skip();
-      }
-
+    test("should kill child processes spawned by the terminal command", async () => {
       const tmpDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "vscode-acp-terminal-")
       );
@@ -263,12 +283,9 @@ suite("TerminalHandler", () => {
           `fs.writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));`,
           `setInterval(() => {}, 1000);`,
         ].join("");
-        const command = `${shellQuote(process.execPath)} -e ${shellQuote(
-          parentScript
-        )}`;
         const { terminalId } = await handler.handleCreateTerminal({
           sessionId: SID,
-          command,
+          ...nodeCommand(parentScript),
         });
 
         await waitFor(
@@ -307,7 +324,7 @@ suite("TerminalHandler", () => {
     test("should release a terminal and clean up", async () => {
       const { terminalId } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "sleep 30",
+        ...longRunningNodeCommand(),
       });
       await delay(50);
       await handler.handleReleaseTerminal({ sessionId: SID, terminalId });
@@ -330,11 +347,11 @@ suite("TerminalHandler", () => {
     test("should clean up all terminals", async () => {
       const { terminalId: id1 } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "sleep 30",
+        ...longRunningNodeCommand(),
       });
       const { terminalId: id2 } = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "sleep 30",
+        ...longRunningNodeCommand(),
       });
       await delay(50);
       handler.dispose();
@@ -353,11 +370,11 @@ suite("TerminalHandler", () => {
     test("should handle multiple simultaneous terminals", async () => {
       const t1 = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo one",
+        ...nodeCommand("console.log('one')"),
       });
       const t2 = await handler.handleCreateTerminal({
         sessionId: SID,
-        command: "echo two",
+        ...nodeCommand("console.log('two')"),
       });
       await handler.handleWaitForTerminalExit({
         sessionId: SID,

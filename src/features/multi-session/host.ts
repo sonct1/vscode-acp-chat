@@ -22,6 +22,10 @@ import type {
   SessionInfo,
 } from "../../acp/session-manager";
 import { DiffManager } from "../../acp/diff-manager";
+import {
+  createOldContentUri,
+  oldContentUriToFsPath,
+} from "../../acp/diff-content-uri";
 import { FileHandler } from "../../acp/file-handler";
 import { recordStructuredDiffsFromContent } from "../../acp/structured-diff-recorder";
 import { TerminalHandler } from "../../acp/terminal-handler";
@@ -1069,9 +1073,10 @@ export class MultiSessionHostController implements vscode.Disposable {
     const session = localSessionId
       ? this.sessions.get(localSessionId)
       : this.getActive();
+    const path = oldContentUriToFsPath(uri);
     const change = session?.resources?.diffManager
       .getPendingChanges()
-      .find((item) => item.path === uri.path);
+      .find((item) => item.path === path);
     return change?.oldText ?? "";
   }
 
@@ -2279,11 +2284,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
     await vscode.commands.executeCommand(
       "vscode.diff",
-      vscode.Uri.from({
-        scheme: "acp-old-content",
-        path,
-        query: `localSessionId=${encodeURIComponent(session.localSessionId)}`,
-      }),
+      createOldContentUri(path, { localSessionId: session.localSessionId }),
       uri,
       `Diff: ${vscode.workspace.asRelativePath(path)} (Original ↔ Modified)`
     );

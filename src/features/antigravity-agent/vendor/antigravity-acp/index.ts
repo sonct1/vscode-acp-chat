@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 	};
 	connection.closed.then(shutdown).catch(shutdown);
 	process.on("SIGINT", () => void shutdown());
-	if (process.platform !== "win32") process.on("SIGTERM", () => void shutdown());
+	process.on("SIGTERM", () => void shutdown());
 }
 
 main().catch((err: Error) => {

@@ -12,6 +12,7 @@ import { client, methods, ndJsonStream } from "@agentclientprotocol/sdk";
 import type { SwarmCapabilityPolicy, SwarmRoleConfig, SwarmRuntimeAgentConfig } from "../types";
 import { SwarmCapabilityProxy } from "./capability-proxy";
 import { SwarmLockManager } from "./lock-manager";
+import { terminateChildProcessTree } from "./process-tree";
 import type { SwarmSpawnFunction } from "./worker-runtime";
 
 export type SwarmRootPhase = "route" | "direct" | "finalizeWorkflow";
@@ -117,7 +118,7 @@ export class SwarmRootRuntime {
       this.capabilityProxyKey = null;
       this.rootAgentSessionId = null;
       this.child = null;
-      if (child) await terminateChild(child);
+      if (child) await terminateChildProcessTree(child);
     }
   }
 
@@ -145,6 +146,8 @@ export class SwarmRootRuntime {
         ...this.options.agent.env,
         [pathEnvName]: process.env[pathEnvName] ?? "",
       },
+      detached: process.platform !== "win32",
+      windowsHide: true,
     } satisfies SpawnOptions);
 
     this.child.stderr?.resume();
@@ -293,34 +296,5 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | voi
         reject(error);
       }
     );
-  });
-}
-
-async function terminateChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exitedAfterTerm = waitForChildExit(child, 500);
-  child.kill("SIGTERM");
-  if (await exitedAfterTerm) return;
-
-  const exitedAfterKill = waitForChildExit(child, 500);
-  child.kill("SIGKILL");
-  await exitedAfterKill;
-}
-
-function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (exited: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.off("exit", onExit);
-      child.off("close", onExit);
-      resolve(exited);
-    };
-    const onExit = () => finish(true);
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    child.once("exit", onExit);
-    child.once("close", onExit);
   });
 }

@@ -40,6 +40,7 @@ import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slas
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
 import { PLANNOTATOR_EXTENSION_COMMANDS, toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
+import { toFileResourceUri } from './file-uri.js'
 import { isAbsolute } from 'node:path'
 import { existsSync, readFileSync, realpathSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -1041,7 +1042,7 @@ export class PiAcpAgent implements ACPAgent {
           return { stopReason: 'end_turn' }
         }
 
-        const uri = `file://${resultPath}`
+        const uri = toFileResourceUri(resultPath)
 
         // Emit a short prefix + a resource link. Many clients concatenate chunks into a single
         // assistant message, so this avoids the "link + duplicate plain text" look.
