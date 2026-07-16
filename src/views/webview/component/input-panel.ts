@@ -1,4 +1,5 @@
 import type { InputPanelElements, Mention, ExtensionMessage } from "../types";
+import type { MultiSessionFocusInputProof } from "../../../features/multi-session/contracts";
 import type { WebviewContext } from "../context";
 import type { MessageHandler } from "../message-router";
 import { ChipRendererComponent } from "./chip-renderer";
@@ -251,6 +252,36 @@ export class InputPanelComponent implements MessageHandler {
 
   focus(): void {
     this.elements.inputEl.focus();
+  }
+
+  focusWithCaret(): boolean {
+    const inputEl = this.elements.inputEl;
+    if (
+      inputEl.getAttribute("contenteditable") !== "true" ||
+      inputEl.closest("[inert]")
+    ) {
+      return false;
+    }
+
+    this.ctx.win?.focus();
+    inputEl.focus({ preventScroll: true });
+    this.moveCaretToEnd();
+    return isSuccessfulFocusProof(this.getFocusProof());
+  }
+
+  getFocusProof(): MultiSessionFocusInputProof {
+    const inputEl = this.elements.inputEl;
+    const selection = this.ctx.win?.getSelection();
+    const range = selection?.rangeCount === 1 ? selection.getRangeAt(0) : null;
+    return {
+      documentHasFocus: this.ctx.doc.hasFocus(),
+      activeInput: this.ctx.doc.activeElement === inputEl,
+      caret: Boolean(
+        range &&
+          range.collapsed &&
+          inputEl.contains(range.commonAncestorContainer)
+      ),
+    };
   }
 
   /**
@@ -573,4 +604,8 @@ export class InputPanelComponent implements MessageHandler {
     }
     range.deleteContents();
   }
+}
+
+function isSuccessfulFocusProof(proof: MultiSessionFocusInputProof): boolean {
+  return proof.documentHasFocus && proof.activeInput && proof.caret;
 }

@@ -9,12 +9,27 @@ export interface UsageUpdatePayload {
   cost?: { amount: number; currency: string };
 }
 
+interface OldFormatSessionModelState {
+  availableModels: Array<{
+    modelId: string;
+    name: string;
+  }>;
+  currentModelId: string;
+}
+
+interface OldFormatNewSessionResponse extends acp.NewSessionResponse {
+  models?: OldFormatSessionModelState | null;
+}
+
 export interface MockACPServerOptions {
   demoMode?: DemoMode;
   enableLoadSession?: boolean;
   enableListSessions?: boolean;
   enableDeleteSession?: boolean;
   useConfigOptions?: boolean;
+  oldFormatModels?: OldFormatSessionModelState | null;
+  rejectSetConfigOption?: boolean;
+  onLegacySetModel?: (params: Record<string, unknown> | undefined) => void;
   emitUsageUpdate?: UsageUpdatePayload | null;
   onInitialize?: (params: Record<string, unknown> | undefined) => void;
 }
@@ -34,6 +49,11 @@ export class MockACPServer {
   private enableListSessions: boolean;
   private enableDeleteSession: boolean;
   private useConfigOptions: boolean;
+  private oldFormatModels: OldFormatSessionModelState | null;
+  private rejectSetConfigOption: boolean;
+  private onLegacySetModel?: (
+    params: Record<string, unknown> | undefined
+  ) => void;
   private emitUsageUpdate: UsageUpdatePayload | null;
   private onInitialize?: (params: Record<string, unknown> | undefined) => void;
 
@@ -49,6 +69,9 @@ export class MockACPServer {
     this.enableListSessions = options.enableListSessions ?? true;
     this.enableDeleteSession = options.enableDeleteSession ?? false;
     this.useConfigOptions = options.useConfigOptions ?? false;
+    this.oldFormatModels = options.oldFormatModels ?? null;
+    this.rejectSetConfigOption = options.rejectSetConfigOption ?? false;
+    this.onLegacySetModel = options.onLegacySetModel;
     this.emitUsageUpdate = options.emitUsageUpdate ?? null;
     this.onInitialize = options.onInitialize;
 
@@ -115,11 +138,18 @@ export class MockACPServer {
         void this.handlePrompt(request.id, request.params);
         break;
       case "session/set_mode":
+        this.sendResponse(request.id, {});
+        break;
       case "session/set_model":
+        this.onLegacySetModel?.(request.params);
         this.sendResponse(request.id, {});
         break;
       case "session/set_config_option":
-        this.handleSetConfigOption(request.id, request.params);
+        if (this.rejectSetConfigOption) {
+          this.sendError(request.id, -32601, "Method not found");
+        } else {
+          this.handleSetConfigOption(request.id, request.params);
+        }
         break;
       case "session/cancel":
         this.handleCancel(request.id, request.params);
@@ -163,7 +193,7 @@ export class MockACPServer {
       ],
     });
 
-    const response: acp.NewSessionResponse = {
+    const response: OldFormatNewSessionResponse = {
       sessionId,
       modes: {
         availableModes: [
@@ -173,6 +203,10 @@ export class MockACPServer {
         currentModeId: "code",
       },
     };
+
+    if (this.oldFormatModels) {
+      response.models = this.oldFormatModels;
+    }
 
     // If useConfigOptions is true, also include configOptions (new ACP format)
     // and remove models/modes to simulate newer agents like OpenCode

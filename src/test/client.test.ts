@@ -338,6 +338,45 @@ suite("ACPClient with Mock Server", () => {
       assert.strictEqual(metadata.modes?.currentModeId, "code");
     });
 
+    test("should populate metadata from old-format models", async () => {
+      const localClient = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: () =>
+          createMockProcess({
+            oldFormatModels: {
+              availableModels: [
+                { modelId: "legacy-sonnet", name: "Legacy Sonnet" },
+                { modelId: "legacy-opus", name: "Legacy Opus" },
+              ],
+              currentModelId: "legacy-sonnet",
+            },
+          }) as unknown as ChildProcess,
+        skipAvailabilityCheck: true,
+      });
+
+      try {
+        await localClient.connect();
+        const response = await localClient.newSession("/test/dir");
+
+        assert.strictEqual(response.configOptions, undefined);
+        const metadata = localClient.getSessionMetadata();
+        assert.ok(metadata?.models);
+        assert.strictEqual(metadata.models.currentModelId, "legacy-sonnet");
+        assert.deepStrictEqual(metadata.models.availableModels, [
+          { modelId: "legacy-sonnet", name: "Legacy Sonnet" },
+          { modelId: "legacy-opus", name: "Legacy Opus" },
+        ]);
+        assert.strictEqual(metadata.modes?.currentModeId, "code");
+      } finally {
+        localClient.dispose();
+      }
+    });
+
     test("should sanitize MCP server names for new sessions", async () => {
       await client.connect();
       (client as any).mcpServerConfigs = [
@@ -624,6 +663,78 @@ suite("ACPClient with Mock Server", () => {
 
       const metadata = client.getSessionMetadata();
       assert.strictEqual(metadata?.models?.currentModelId, "claude-3-opus");
+    });
+
+    test("should fall back to legacy session/set_model", async () => {
+      let legacyParams: Record<string, unknown> | undefined;
+      const localClient = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: () =>
+          createMockProcess({
+            oldFormatModels: {
+              availableModels: [
+                { modelId: "legacy-sonnet", name: "Legacy Sonnet" },
+                { modelId: "legacy-opus", name: "Legacy Opus" },
+              ],
+              currentModelId: "legacy-sonnet",
+            },
+            rejectSetConfigOption: true,
+            onLegacySetModel: (params) => {
+              legacyParams = params;
+            },
+          }) as unknown as ChildProcess,
+        skipAvailabilityCheck: true,
+      });
+
+      try {
+        await localClient.connect();
+        const session = await localClient.newSession("/test/dir");
+        await localClient.setModel("legacy-opus");
+
+        assert.deepStrictEqual(legacyParams, {
+          sessionId: session.sessionId,
+          modelId: "legacy-opus",
+        });
+        assert.strictEqual(
+          localClient.getSessionMetadata()?.models?.currentModelId,
+          "legacy-opus"
+        );
+      } finally {
+        localClient.dispose();
+      }
+    });
+
+    test("should not fall back when set_config_option fails generically", async () => {
+      await client.connect();
+      await client.newSession("/test/dir");
+      const agentCtx = client.getAgentContext();
+      assert.ok(agentCtx);
+      const originalRequest = agentCtx.request.bind(agentCtx);
+      let legacyCalled = false;
+      agentCtx.request = async (method: string, params: unknown) => {
+        if (method === "session/set_config_option") {
+          throw new Error("transport failure");
+        }
+        if (method === "session/set_model") {
+          legacyCalled = true;
+        }
+        return originalRequest(method, params);
+      };
+
+      try {
+        await assert.rejects(
+          () => client.setModel("claude-3-opus"),
+          /transport failure/
+        );
+        assert.strictEqual(legacyCalled, false);
+      } finally {
+        agentCtx.request = originalRequest;
+      }
     });
 
     test("should throw if no session", async () => {
@@ -920,6 +1031,42 @@ suite("ACPClient with configOptions format", () => {
     assert.strictEqual(metadata.modes.currentModeId, "code");
     assert.strictEqual(metadata.models.availableModels.length, 2);
     assert.strictEqual(metadata.modes.availableModes.length, 2);
+  });
+
+  test("newSession should prefer configOptions over old-format models", async () => {
+    const localClient = new ACPClient({
+      agentConfig: {
+        id: "mock-agent",
+        name: "Mock Agent",
+        command: "mock",
+        args: [],
+      },
+      spawn: () =>
+        createMockProcess({
+          enableLoadSession: true,
+          useConfigOptions: true,
+          oldFormatModels: {
+            availableModels: [{ modelId: "legacy-model", name: "Legacy" }],
+            currentModelId: "legacy-model",
+          },
+        }) as unknown as ChildProcess,
+      skipAvailabilityCheck: true,
+    });
+
+    try {
+      await localClient.connect();
+      await localClient.newSession("/test/dir");
+
+      const metadata = localClient.getSessionMetadata();
+      assert.ok(metadata?.models);
+      assert.strictEqual(
+        metadata.models.currentModelId,
+        "anthropic/claude-3-sonnet"
+      );
+      assert.strictEqual(metadata.models.availableModels.length, 2);
+    } finally {
+      localClient.dispose();
+    }
   });
 
   test("setModel should use setSessionConfigOption and update metadata", async () => {

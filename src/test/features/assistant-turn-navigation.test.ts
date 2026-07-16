@@ -204,6 +204,87 @@ suite("assistant-turn-navigation feature", () => {
     return targets;
   }
 
+  function createSnapshot(
+    localSessionId: string,
+    activationRevision: number,
+    answers: string[]
+  ): Record<string, unknown> {
+    let seq = 0;
+    const transcript = answers.flatMap((answer, index) => [
+      {
+        seq: ++seq,
+        createdAt: seq,
+        message: { type: "userMessage", text: `Q${index + 1}` },
+      },
+      {
+        seq: ++seq,
+        createdAt: seq,
+        message: { type: "streamStart" },
+      },
+      {
+        seq: ++seq,
+        createdAt: seq,
+        message: { type: "streamChunk", text: answer },
+      },
+      {
+        seq: ++seq,
+        createdAt: seq,
+        message: { type: "streamEnd" },
+      },
+    ]);
+
+    return {
+      type: "feature.multi-session.snapshot",
+      activeLocalSessionId: localSessionId,
+      activationRevision,
+      session: {
+        localSessionId,
+        agentId: "test-agent",
+        agentName: "Test Agent",
+        title: localSessionId,
+        status: "idle",
+        createdAt: activationRevision,
+        updatedAt: activationRevision,
+        pendingPermissionCount: 0,
+      },
+      transcript,
+      lastSeq: seq,
+      metadata: null,
+      contextUsage: null,
+      diffChanges: [],
+      pendingPermissions: [],
+      isGenerating: false,
+    };
+  }
+
+  async function activateSession(
+    localSessionId: string,
+    activationRevision: number
+  ): Promise<void> {
+    await controller.handleMessage({
+      type: "feature.multi-session.chatState",
+      enabled: true,
+      activeLocalSessionId: localSessionId,
+      activationRevision,
+      active: {
+        localSessionId,
+        agentId: "test-agent",
+        agentName: "Test Agent",
+        title: localSessionId,
+        status: "idle",
+        createdAt: activationRevision,
+        updatedAt: activationRevision,
+        pendingPermissionCount: 0,
+      },
+      aggregate: {
+        open: 1,
+        running: 0,
+        awaitingPermission: 0,
+        awaitingInput: 0,
+      },
+    } as any);
+  }
+
   test("renders for one completed assistant response and ignores empty streamEnd", async () => {
     controller.handleMessage({ type: "streamEnd" });
     await settleNavigation();
@@ -655,6 +736,79 @@ suite("assistant-turn-navigation feature", () => {
     assert.strictEqual(getCounter(), "Assistant 2 / 3");
     assert.strictEqual(getNavButton("previous").disabled, false);
     assert.strictEqual(getNavButton("next").disabled, false);
+  });
+
+  test("resets stale button anchors before a reopened session snapshot", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Old question 1", "Old answer 1");
+    addCompletedAssistantTurn("Old question 2", "Old answer 2");
+    await settleNavigation();
+    getNavButton("previous").click();
+    assert.strictEqual(getCounter(), "Assistant 1 / 2");
+
+    await activateSession("local-b", 2);
+    const snapshotPromise = controller.handleMessage(
+      createSnapshot("local-b", 2, ["B1", "B2", "B3", "B4"]) as any
+    );
+
+    assert.strictEqual(getNavigator()?.hidden ?? true, true);
+    assert.strictEqual(getNavButton("next").click(), undefined);
+    await snapshotPromise;
+    await settleNavigation();
+
+    const targets = setReadingGeometry([100, 180, 210, 300]);
+    getNavButton("next").click();
+    assert.strictEqual(scrollTargets.at(-1), targets[2]);
+
+    messagesEl.dispatchEvent(new window.WheelEvent("wheel"));
+    getNavButton("previous").click();
+    assert.strictEqual(scrollTargets.at(-1), targets[1]);
+  });
+
+  test("resets stale focus anchors before reopening the same session", async () => {
+    const scrollTargets: HTMLElement[] = [];
+    (window.HTMLElement.prototype as any).scrollIntoView = function () {
+      scrollTargets.push(this as HTMLElement);
+    };
+
+    addCompletedAssistantTurn("Old question 1", "Old answer 1");
+    addCompletedAssistantTurn("Old question 2", "Old answer 2");
+    await settleNavigation();
+    const oldAssistant = messagesEl.querySelectorAll<HTMLElement>(
+      ".message.assistant"
+    )[1];
+    oldAssistant.focus();
+    getNavButton("next").focus();
+
+    await activateSession("local-a", 3);
+    await controller.handleMessage(
+      createSnapshot("local-a", 3, ["A1", "A2", "A3", "A4"]) as any
+    );
+    await settleNavigation();
+
+    const targets = setReadingGeometry([100, 180, 210, 300]);
+    getNavButton("next").click();
+    assert.strictEqual(scrollTargets.at(-1), targets[2]);
+  });
+
+  test("keeps navigation hidden when a snapshot replay aborts", async () => {
+    addCompletedAssistantTurn("Old question", "Old answer");
+    await settleNavigation();
+    assert.strictEqual(getNavigator()?.hidden, false);
+
+    const generation = controller.beginChatSurfaceReplacement();
+    controller.resetChatState();
+    addCompletedAssistantTurn("Partial question", "Partial answer");
+    await settleNavigation();
+
+    controller.finishChatSurfaceReplacement(generation, false);
+
+    assert.strictEqual(getNavigator()?.hidden ?? true, true);
+    assert.strictEqual(getNavButton("next").click(), undefined);
   });
 
   test("rebuilds after chat clear and multi-session snapshot replay", async () => {

@@ -419,6 +419,41 @@ test('PiAcpSession: cancels unsupported input and editor extension UI requests w
   assert.match((conn.updates[1]!.update as any).content.text, /editor UI request is not supported/)
 })
 
+test('PiAcpSession: terminates extension UI notifications with a line break', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: [],
+    promptCompletionTiming: { settleGraceMs: 5, pollIntervalMs: 2, getStateTimeoutMs: 5 }
+  })
+
+  proc.emit({
+    type: 'extension_ui_request',
+    id: 'ui-notify-1',
+    method: 'notify',
+    message: 'Đã gửi auto-continue sau auto_retry_end success=false: tiếp tục'
+  })
+  proc.emit({
+    type: 'extension_ui_request',
+    id: 'ui-notify-2',
+    method: 'notify',
+    message: 'Already terminated\n'
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.deepEqual(
+    conn.updates.map(update => (update.update as any).content.text),
+    ['Đã gửi auto-continue sau auto_retry_end success=false: tiếp tục\n', 'Already terminated\n']
+  )
+})
+
 test('PiAcpSession: emits agent_message_chunk for auto_retry_start with attempt/maxAttempts and rounded delay', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
@@ -440,7 +475,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_retry_start with attempt/
   assert.equal(conn.updates.length, 1)
   assert.deepEqual(conn.updates[0]!.update, {
     sessionUpdate: 'agent_message_chunk',
-    content: { type: 'text', text: 'Retrying (attempt 2/5, waiting 2s)...' }
+    content: { type: 'text', text: 'Retrying (attempt 2/5, waiting 2s)...\n' }
   })
 })
 
@@ -465,7 +500,7 @@ test('PiAcpSession: formats a positive sub-second auto_retry_start delay as wait
   assert.equal(conn.updates.length, 1)
   assert.deepEqual(conn.updates[0]!.update, {
     sessionUpdate: 'agent_message_chunk',
-    content: { type: 'text', text: 'Retrying (attempt 1/3, waiting 1s)...' }
+    content: { type: 'text', text: 'Retrying (attempt 1/3, waiting 1s)...\n' }
   })
 })
 
@@ -490,7 +525,7 @@ test('PiAcpSession: falls back to a generic retry message when auto_retry_start 
   assert.equal(conn.updates.length, 1)
   assert.deepEqual(conn.updates[0]!.update, {
     sessionUpdate: 'agent_message_chunk',
-    content: { type: 'text', text: 'Retrying...' }
+    content: { type: 'text', text: 'Retrying...\n' }
   })
 })
 
@@ -520,7 +555,7 @@ test('PiAcpSession: omits raw errorMessage content from surfaced auto_retry_star
 
   assert.equal(conn.updates.length, 1)
   assert.equal(conn.updates[0]!.update.sessionUpdate, 'agent_message_chunk')
-  assert.equal((conn.updates[0]!.update as any).content.text, 'Retrying (attempt 1/4, waiting 2s)...')
+  assert.equal((conn.updates[0]!.update as any).content.text, 'Retrying (attempt 1/4, waiting 2s)...\n')
   assert.equal((conn.updates[0]!.update as any).content.text.includes('provider overloaded'), false)
 })
 
@@ -545,7 +580,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_retry_end', async () => {
   assert.equal(conn.updates.length, 1)
   assert.deepEqual(conn.updates[0]!.update, {
     sessionUpdate: 'agent_message_chunk',
-    content: { type: 'text', text: 'Retry finished, resuming.' }
+    content: { type: 'text', text: 'Retry finished, resuming.\n' }
   })
 })
 
@@ -628,7 +663,7 @@ test('PiAcpSession: preserves ordering when auto_retry_start is interleaved with
       { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'before ' } },
       {
         sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: 'Retrying (attempt 1/2, waiting 2s)...' }
+        content: { type: 'text', text: 'Retrying (attempt 1/2, waiting 2s)...\n' }
       },
       { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'after' } }
     ]

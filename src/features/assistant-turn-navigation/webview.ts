@@ -21,6 +21,15 @@ export class AssistantTurnNavigationWebviewFeature {
   private rebuildFrame: number | null = null;
   private lastFocusedAssistantElement: HTMLElement | null = null;
   private hasButtonNavigationAnchor = false;
+  private surfaceGeneration = 0;
+  private surfaceReplacementPending = false;
+  private readonly onSurfaceReplacementStarted = (event: {
+    generation: number;
+  }) => this.beginSurfaceReplacement(event.generation);
+  private readonly onSurfaceReplacementFinished = (event: {
+    generation: number;
+    committed: boolean;
+  }) => this.finishSurfaceReplacement(event.generation, event.committed);
   private readonly clearButtonNavigationAnchor = () => {
     this.hasButtonNavigationAnchor = false;
     this.lastFocusedAssistantElement = null;
@@ -70,6 +79,15 @@ export class AssistantTurnNavigationWebviewFeature {
       "keydown",
       this.clearButtonNavigationAnchor
     );
+    const eventBus = this.controller.getEventBus();
+    eventBus.on(
+      "chatSurfaceReplacementStarted",
+      this.onSurfaceReplacementStarted
+    );
+    eventBus.on(
+      "chatSurfaceReplacementFinished",
+      this.onSurfaceReplacementFinished
+    );
 
     this.rebuildEntries();
   }
@@ -98,10 +116,21 @@ export class AssistantTurnNavigationWebviewFeature {
       "keydown",
       this.clearButtonNavigationAnchor
     );
+    const eventBus = this.controller.getEventBus();
+    eventBus.off(
+      "chatSurfaceReplacementStarted",
+      this.onSurfaceReplacementStarted
+    );
+    eventBus.off(
+      "chatSurfaceReplacementFinished",
+      this.onSurfaceReplacementFinished
+    );
     this.navigatorEl.remove();
   }
 
   navigate(direction: AssistantTurnNavigationDirection): boolean {
+    if (this.surfaceReplacementPending) return false;
+    if (!this.hasCurrentEntries()) this.rebuildEntries();
     if (this.entries.length === 0) return false;
 
     this.jumpTo(this.resolveNavigationTargetIndex(direction));
@@ -184,11 +213,75 @@ export class AssistantTurnNavigationWebviewFeature {
   }
 
   private scheduleRebuild(): void {
-    if (this.rebuildFrame !== null) return;
+    if (this.surfaceReplacementPending || this.rebuildFrame !== null) return;
+    const generation = this.surfaceGeneration;
     this.rebuildFrame = this.requestFrame(() => {
       this.rebuildFrame = null;
+      if (
+        this.surfaceReplacementPending ||
+        generation !== this.surfaceGeneration
+      ) {
+        return;
+      }
       this.rebuildEntries();
     });
+  }
+
+  private beginSurfaceReplacement(generation: number): void {
+    if (generation < this.surfaceGeneration) return;
+    this.surfaceGeneration = generation;
+    this.surfaceReplacementPending = true;
+    this.cancelScheduledRebuild();
+    this.entries = [];
+    this.activeIndex = -1;
+    this.clearButtonNavigationAnchor();
+    this.updateNavigator();
+  }
+
+  private finishSurfaceReplacement(
+    generation: number,
+    committed: boolean
+  ): void {
+    if (generation !== this.surfaceGeneration) return;
+    this.cancelScheduledRebuild();
+    this.clearButtonNavigationAnchor();
+    if (!committed) {
+      this.surfaceReplacementPending = true;
+      this.entries = [];
+      this.activeIndex = -1;
+      this.updateNavigator();
+      return;
+    }
+
+    this.surfaceReplacementPending = false;
+    this.rebuildEntries();
+    if (this.entries.length > 0) {
+      const containerRect = this.messagesEl.getBoundingClientRect();
+      this.activeIndex =
+        containerRect.height > 0
+          ? this.findNearestIndexFromScroll()
+          : this.entries.length - 1;
+      this.updateNavigator();
+    }
+  }
+
+  private cancelScheduledRebuild(): void {
+    if (this.rebuildFrame === null) return;
+    this.cancelFrame(this.rebuildFrame);
+    this.rebuildFrame = null;
+  }
+
+  private hasCurrentEntries(): boolean {
+    return (
+      this.entries.length > 0 &&
+      this.entries.every(
+        (entry) =>
+          entry.element.isConnected &&
+          entry.scrollTarget.isConnected &&
+          this.messagesEl.contains(entry.element) &&
+          entry.element.contains(entry.scrollTarget)
+      )
+    );
   }
 
   private rebuildEntries(): void {
@@ -445,7 +538,7 @@ export class AssistantTurnNavigationWebviewFeature {
   }
 
   private updateActiveFromScroll(): void {
-    if (this.entries.length === 0) return;
+    if (this.surfaceReplacementPending || this.entries.length === 0) return;
     if (this.hasButtonNavigationAnchor) return;
 
     const viewportAssistant = this.getViewportAssistantElement();
@@ -478,7 +571,16 @@ export class AssistantTurnNavigationWebviewFeature {
 
   private jumpTo(index: number): void {
     const entry = this.entries[index];
-    if (!entry) return;
+    if (
+      !entry ||
+      !entry.element.isConnected ||
+      !entry.scrollTarget.isConnected ||
+      !this.messagesEl.contains(entry.element) ||
+      !entry.element.contains(entry.scrollTarget)
+    ) {
+      this.rebuildEntries();
+      return;
+    }
 
     this.activeIndex = index;
     this.hasButtonNavigationAnchor = true;

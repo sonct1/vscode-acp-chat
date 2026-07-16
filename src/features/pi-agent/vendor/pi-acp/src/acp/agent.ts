@@ -235,8 +235,8 @@ type PiSessionListSnapshot = {
 
 export class PiAcpAgent implements ACPAgent {
   private readonly conn: AgentSideConnection
-  private readonly store = new SessionStore()
-  private readonly sessions = new SessionManager(this.store)
+  private readonly store: SessionStore
+  private readonly sessions: SessionManager
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
   private readonly listSnapshots = new Map<string, PiSessionListSnapshot>()
 
@@ -247,9 +247,10 @@ export class PiAcpAgent implements ACPAgent {
   // Remember recent session cwd and use it as the default filter.
   private lastSessionCwd: string | null = null
 
-  constructor(conn: AgentSideConnection, _config?: unknown) {
+  constructor(conn: AgentSideConnection, config?: { sessionStorePath?: string }) {
     this.conn = conn
-    void _config
+    this.store = new SessionStore(config?.sessionStorePath)
+    this.sessions = new SessionManager(this.store)
   }
 
   private cleanupFailedNewSession(sessionId: string, state?: any | null): void {
@@ -280,10 +281,18 @@ export class PiAcpAgent implements ACPAgent {
     }
 
     const before = getLastPiSessionDiscoverySnapshot()
-    const piSession = before?.items.find(s => s.sessionId === sessionId) ?? findPiSession(sessionId)
+    let piSession = before?.items.find(s => s.sessionId === sessionId) ?? findPiSession(sessionId)
+    let forcedScan = false
+    if (!piSession) {
+      piSession = discoverPiSessionsSnapshot({ force: true }).items.find(s => s.sessionId === sessionId) ?? null
+      forcedScan = true
+    }
     const after = getLastPiSessionDiscoverySnapshot()
     if (!piSession) {
-      this.debugHistoryLookup(before === after ? 'miss-snapshot' : 'miss-scan', performance.now() - started)
+      this.debugHistoryLookup(
+        forcedScan ? 'miss-forced-scan' : before === after ? 'miss-snapshot' : 'miss-scan',
+        performance.now() - started
+      )
       return null
     }
 
@@ -292,7 +301,10 @@ export class PiAcpAgent implements ACPAgent {
       cwd: piSession.cwd,
       sessionFile: piSession.sessionFile
     })
-    this.debugHistoryLookup(before === after ? 'repair-snapshot' : 'repair-scan', performance.now() - started)
+    this.debugHistoryLookup(
+      forcedScan ? 'repair-forced-scan' : before === after ? 'repair-snapshot' : 'repair-scan',
+      performance.now() - started
+    )
 
     return {
       cwd: piSession.cwd,
@@ -427,7 +439,16 @@ export class PiAcpAgent implements ACPAgent {
       })
 
       this.lastSessionCwd = cwd
-      this.store.upsert({ sessionId, cwd, sessionFile: stored.sessionFile })
+      let currentSessionFile = stored.sessionFile
+      try {
+        const state = (await proc.getState()) as { sessionFile?: unknown }
+        if (typeof state?.sessionFile === 'string' && state.sessionFile.trim()) {
+          currentSessionFile = state.sessionFile
+        }
+      } catch {
+        // Keep the discovered path when Pi state is temporarily unavailable.
+      }
+      this.store.upsert({ sessionId, cwd, sessionFile: currentSessionFile })
 
       return session
     })()
@@ -1173,11 +1194,19 @@ export class PiAcpAgent implements ACPAgent {
     // (Tests sometimes stub out `this.sessions`, so guard the call.)
     ;(this.sessions as any).closeAllExcept?.(session.sessionId)
 
-    // (Optional) ensure mapping stays fresh.
+    let currentSessionFile = stored.sessionFile
+    try {
+      const state = (await proc.getState()) as { sessionFile?: unknown }
+      if (typeof state?.sessionFile === 'string' && state.sessionFile.trim()) {
+        currentSessionFile = state.sessionFile
+      }
+    } catch {
+      // Keep the discovered path when Pi state is temporarily unavailable.
+    }
     this.store.upsert({
       sessionId: params.sessionId,
       cwd: params.cwd,
-      sessionFile: stored.sessionFile
+      sessionFile: currentSessionFile
     })
 
     const loadMode = getPiHistoryLoadModeFromEnv()
@@ -1187,17 +1216,17 @@ export class PiAcpAgent implements ACPAgent {
       messages = await readCompactedMessagesFromRpc(proc)
     } else {
       try {
-        messages = await readPiSessionTranscript(stored.sessionFile)
+        messages = await readPiSessionTranscript(currentSessionFile)
       } catch (e) {
         console.warn(
-          `[pi-acp] Failed to read full Pi session transcript from ${stored.sessionFile}; falling back to compacted get_messages:`,
+          `[pi-acp] Failed to read full Pi session transcript from ${currentSessionFile}; falling back to compacted get_messages:`,
           e
         )
       }
 
       if (messages.length === 0) {
         console.warn(
-          `[pi-acp] Full Pi session transcript from ${stored.sessionFile} yielded no replayable messages; falling back to compacted get_messages.`
+          `[pi-acp] Full Pi session transcript from ${currentSessionFile} yielded no replayable messages; falling back to compacted get_messages.`
         )
         messages = await readCompactedMessagesFromRpc(proc)
       }

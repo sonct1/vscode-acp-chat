@@ -130,12 +130,37 @@ export interface MultiSessionDeltaMessage {
 
 export interface MultiSessionFocusInputMessage {
   type: "feature.multi-session.focusInput";
+  requestId: string;
   localSessionId: string;
   activationRevision: number;
 }
 
+export interface MultiSessionFocusInputCommitMessage {
+  type: "feature.multi-session.focusInputCommit";
+  requestId: string;
+  localSessionId: string;
+  activationRevision: number;
+}
+
+export interface MultiSessionFocusInputProof {
+  documentHasFocus: boolean;
+  activeInput: boolean;
+  caret: boolean;
+}
+
+export interface MultiSessionFocusInputResponseMessage {
+  type:
+    | "feature.multi-session.focusInputArmed"
+    | "feature.multi-session.focusInputAck";
+  requestId: string;
+  localSessionId: string;
+  activationRevision: number;
+  proof?: MultiSessionFocusInputProof;
+}
+
 export type MultiSessionHostMessage =
   | { type: "feature.multi-session.ready" }
+  | MultiSessionFocusInputResponseMessage
   | { type: "feature.multi-session.managerReady" }
   | { type: "feature.multi-session.managerResync" }
   | { type: "feature.multi-session.new"; focusChat?: boolean }
@@ -146,6 +171,7 @@ export type MultiSessionHostMessage =
     }
   | { type: "feature.multi-session.stop"; localSessionId?: string }
   | { type: "feature.multi-session.close"; localSessionId: string }
+  | { type: "feature.multi-session.retry"; localSessionId: string }
   | { type: "feature.multi-session.manage" }
   | { type: "feature.multi-session.openManagerPanel" }
   | { type: "feature.multi-session.quickSwitch" }

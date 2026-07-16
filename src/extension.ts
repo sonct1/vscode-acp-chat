@@ -163,6 +163,19 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  if (context.extensionMode === vscode.ExtensionMode.Test) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(
+        "vscode-acp-chat._test.getLastFocusInputAck",
+        () => chatProvider?.getLastFocusInputAckForTest()
+      ),
+      vscode.commands.registerCommand(
+        "vscode-acp-chat._test.getFocusInputDebug",
+        () => chatProvider?.getFocusInputDebugForTest()
+      )
+    );
+  }
+
   // Clear current chat messages
   context.subscriptions.push(
     vscode.commands.registerCommand("vscode-acp-chat.clearChat", () => {

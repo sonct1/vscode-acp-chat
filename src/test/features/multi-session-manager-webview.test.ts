@@ -162,6 +162,56 @@ suite("multi-session manager webview", () => {
     assert.ok(styles.includes("min-height:0;overflow:auto"));
   });
 
+  test("error rows expose Retry action", () => {
+    new MultiSessionManagerWebview(dom.window.document);
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: {
+          type: "feature.multi-session.managerState",
+          revision: 1,
+          activeLocalSessionId: "local-a",
+          aggregate: {
+            open: 1,
+            running: 0,
+            awaitingPermission: 0,
+            awaitingInput: 0,
+          },
+          agents: [],
+          selectedAgentId: "test-agent",
+          sessions: [
+            {
+              localSessionId: "local-a",
+              agentId: "test-agent",
+              agentName: "Test Agent",
+              title: "A",
+              status: "error",
+              createdAt: 1,
+              updatedAt: 1,
+              pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
+              lastError: "connect failed",
+            },
+          ],
+        },
+      })
+    );
+
+    const retryButton = dom.window.document.querySelector(
+      'button[aria-label="Retry"]'
+    ) as HTMLButtonElement;
+    assert.ok(retryButton);
+    assert.ok(dom.window.document.body.textContent?.includes("connect failed"));
+    retryButton.click();
+
+    assert.ok(
+      messages.some(
+        (message: any) =>
+          message.type === "feature.multi-session.retry" &&
+          message.localSessionId === "local-a"
+      )
+    );
+  });
+
   test("permission-waiting rows expose non-destructive stop action", () => {
     new MultiSessionManagerWebview(dom.window.document);
     dom.window.dispatchEvent(

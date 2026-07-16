@@ -44,6 +44,7 @@ export class WebviewController implements MessageHandler {
   private incomingNotifier = new AsyncSerialQueue();
   private features?: RegisteredWebviewFeatures;
   private snapshotReplayDepth = 0;
+  private chatSurfaceGeneration = 0;
 
   readonly messageList: MessageListComponent;
   readonly inputPanel: InputPanelComponent;
@@ -243,7 +244,7 @@ export class WebviewController implements MessageHandler {
         return;
 
       case "focusInput":
-        this.inputPanel.focus();
+        this.inputPanel.focusWithCaret();
         return;
 
       case "confirmAction": {
@@ -375,6 +376,22 @@ export class WebviewController implements MessageHandler {
   endSnapshotReplay(): void {
     this.messageList.endSnapshotReplay();
     this.snapshotReplayDepth = Math.max(0, this.snapshotReplayDepth - 1);
+  }
+
+  beginChatSurfaceReplacement(): number {
+    const generation = ++this.chatSurfaceGeneration;
+    this.ctx.eventBus.emit("chatSurfaceReplacementStarted", { generation });
+    return generation;
+  }
+
+  finishChatSurfaceReplacement(
+    generation: number,
+    committed: boolean
+  ): void {
+    this.ctx.eventBus.emit("chatSurfaceReplacementFinished", {
+      generation,
+      committed,
+    });
   }
 
   beforeMultiSessionSend(): void {

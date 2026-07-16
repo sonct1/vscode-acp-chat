@@ -47,13 +47,21 @@ import {
 import { TranscriptStore } from "./transcript-store";
 import { WorkspaceMutationCoordinator } from "./workspace-mutation-coordinator";
 import {
+  clearActiveSessionBinding,
+  hasActiveSessionBindingRecord,
+  readActiveSessionBinding,
+  writeActiveSessionBinding,
+} from "./active-session-persistence";
+import {
   SessionCatalogService,
   type CatalogCapabilities,
 } from "./session-catalog";
 import type {
   MultiSessionAggregate,
   MultiSessionChatStateMessage,
+  MultiSessionFocusInputCommitMessage,
   MultiSessionFocusInputMessage,
+  MultiSessionFocusInputResponseMessage,
   MultiSessionHostMessage,
   MultiSessionListItem,
   MultiSessionManagerStateMessage,
@@ -77,6 +85,47 @@ function newSessionFallbackTitle(
   sessionId: string
 ): string {
   return agent.id === "pi" ? `Pi ${sessionId}` : "New chat";
+}
+
+function isMissingSessionError(error: unknown): boolean {
+  if (error instanceof Error && isMissingSessionMessage(error.message)) {
+    return true;
+  }
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  const code = record.code;
+  if (code === "not_found" || code === "NOT_FOUND") {
+    return true;
+  }
+  const data = record.data;
+  if (typeof data === "string" && isMissingSessionMessage(data)) {
+    return true;
+  }
+  if (data && typeof data === "object") {
+    const dataRecord = data as Record<string, unknown>;
+    const dataCode = dataRecord.code ?? dataRecord.reason;
+    if (
+      dataCode === "not_found" ||
+      dataCode === "NOT_FOUND" ||
+      dataCode === "invalid_session" ||
+      dataCode === "INVALID_SESSION"
+    ) {
+      return true;
+    }
+    const dataMessage = dataRecord.message;
+    if (
+      typeof dataMessage === "string" &&
+      isMissingSessionMessage(dataMessage)
+    ) {
+      return true;
+    }
+  }
+  const message = record.message;
+  return typeof message === "string" && isMissingSessionMessage(message);
+}
+
+function isMissingSessionMessage(message: string): boolean {
+  return /session not found|unknown sessionid|no such session/i.test(message);
 }
 
 export interface MultiSessionRuntimeClient {
@@ -156,8 +205,12 @@ interface ManagedSession {
   historyLoadEpoch: number;
   sendInFlight: boolean;
   recoveryPayloads: ComposerPayload[];
+  pendingResumeSessionId?: string;
+  allowMissingSessionReplacement: boolean;
   eagerRuntimeAttempted?: boolean;
   runtimeStartPromise?: Promise<void>;
+  acpInitializationPromise?: Promise<void>;
+  identityEpoch: number;
   resources?: SessionResources;
   client?: ACPClient;
   sessionManager?: AgentSessionManager;
@@ -171,7 +224,12 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly sessions = new Map<string, ManagedSession>();
   private activeLocalSessionId: string | undefined;
   private activationRevision = 0;
+  private initialLocalSessionId: string | undefined;
+  private initialReadyStartupAttempted = false;
+  private bindingMutationQueue: Promise<void> = Promise.resolve();
   private pendingFocusInput: MultiSessionFocusInputMessage | undefined;
+  private lastFocusInputAck: MultiSessionFocusInputResponseMessage | undefined;
+  private focusInputStage = "idle";
   private webviewReady = false;
   private defaultAgent: AgentConfig;
   private readonly mutationCoordinator = new WorkspaceMutationCoordinator();
@@ -243,7 +301,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.mutationCoordinator.onDidWrite((ownerId, path) =>
       this.markOtherDiffsStale(ownerId, path)
     );
-    this.createDraft();
+    this.initialLocalSessionId = this.createInitialDraft().localSessionId;
   }
 
   static isEnabled(): boolean {
@@ -255,8 +313,30 @@ export class MultiSessionHostController implements vscode.Disposable {
   attachView(view: vscode.WebviewView): void {
     this.view = view;
     this.webviewReady = false;
+    view.onDidDispose(() => {
+      if (this.view === view) {
+        this.view = undefined;
+        this.webviewReady = false;
+        this.pendingFocusInput = undefined;
+      }
+    });
     this.sendChatStateNow();
     this.sendSnapshot();
+  }
+
+  getLastFocusInputAckForTest():
+    MultiSessionFocusInputResponseMessage | undefined {
+    return this.lastFocusInputAck;
+  }
+
+  getFocusInputDebugForTest() {
+    return {
+      stage: this.focusInputStage,
+      pending: this.pendingFocusInput,
+      lastAck: this.lastFocusInputAck,
+      webviewReady: this.webviewReady,
+      hasView: Boolean(this.view),
+    };
   }
 
   onDidChangeManagerState(
@@ -279,11 +359,14 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     switch (message.type) {
       case "feature.multi-session.ready":
-        this.webviewReady = true;
-        this.sendChatStateNow();
-        this.sendSnapshot();
-        this.flushPendingInputFocus();
-        await this.eagerStartActiveRuntimeOnReady();
+        await this.handleWebviewReady();
+        return true;
+      case "feature.multi-session.focusInputArmed":
+        this.focusInputStage = "armed";
+        await this.commitPendingInputFocus(message);
+        return true;
+      case "feature.multi-session.focusInputAck":
+        this.acknowledgePendingInputFocus(message);
         return true;
       case "feature.multi-session.managerReady":
       case "feature.multi-session.managerResync":
@@ -300,6 +383,9 @@ export class MultiSessionHostController implements vscode.Disposable {
         return true;
       case "feature.multi-session.close":
         await this.close(message.localSessionId);
+        return true;
+      case "feature.multi-session.retry":
+        await this.retry(message.localSessionId);
         return true;
       case "feature.multi-session.manage":
       case "feature.multi-session.openManagerPanel":
@@ -360,8 +446,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         await this.connectActive();
         return true;
       case "ready":
-        this.sendChatStateNow();
-        this.sendSnapshot();
+        await this.handleWebviewReady();
         return true;
       case "newChat":
         await this.newChat();
@@ -434,6 +519,14 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
   }
 
+  private async handleWebviewReady(): Promise<void> {
+    this.webviewReady = true;
+    this.sendChatStateNow();
+    this.sendSnapshot();
+    this.flushPendingInputFocus();
+    await this.eagerStartActiveRuntimeOnReady();
+  }
+
   async newChat(options: { focusChat?: boolean } = {}): Promise<void> {
     const session = this.createDraft();
     this.activate(session.localSessionId, {
@@ -441,26 +534,21 @@ export class MultiSessionHostController implements vscode.Disposable {
       focusInput: true,
     });
 
-    // Start runtime in background; do not block UI on connect or create ACP session.
-    // The ensureRuntime guard (runtimeStartPromise) prevents duplicate client/session
+    // Start runtime and create ACP session in background; do not block UI.
+    // The ensureRuntime guard (runtimeStartPromise) prevents duplicate clients
     // when the first send races with background startup.
-    this.ensureRuntime(session, false).then(
+    this.ensureRuntime(session, true).then(
       () => {
-        if (!this.sessions.has(session.localSessionId)) return;
-        if (!session.acpSessionId && session.status === "starting") {
-          session.status = "idle";
-          this.touch(session);
-          this.sendState();
-        }
+        if (!this.isCurrentSession(session)) return;
         if (session.localSessionId === this.activeLocalSessionId) {
           this.sendSnapshot();
         }
       },
       (error) => {
-        if (!this.sessions.has(session.localSessionId)) return;
+        if (!this.isCurrentSession(session)) return;
         const message = error instanceof Error ? error.message : String(error);
         session.lastError = message;
-        session.status = "draft";
+        session.status = "error";
         this.append(session, { type: "error", text: message });
         this.touch(session);
         this.sendState();
@@ -499,6 +587,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     } catch (error) {
       session.lastError =
         error instanceof Error ? error.message : String(error);
+      session.status = "error";
       this.touch(session);
       this.sendState();
       this.sendSnapshot();
@@ -547,7 +636,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       await this.ensureRuntime(session);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      session.status = "draft";
+      session.status = "error";
       session.lastError = message;
       this.append(session, { type: "error", text: message });
       this.sendState();
@@ -673,6 +762,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   async close(localSessionId: string): Promise<void> {
     const session = this.sessions.get(localSessionId);
     if (!session) return;
+    const identityEpoch = session.identityEpoch;
 
     if (session.isGenerating) {
       const confirmed = await vscode.window.showWarningMessage(
@@ -680,24 +770,87 @@ export class MultiSessionHostController implements vscode.Disposable {
         { modal: true },
         "Stop and Close"
       );
-      if (confirmed !== "Stop and Close") return;
+      if (
+        confirmed !== "Stop and Close" ||
+        !this.isCurrentIdentity(session, identityEpoch)
+      ) {
+        return;
+      }
       await session.client?.cancel();
+      if (!this.isCurrentIdentity(session, identityEpoch)) return;
       await this.waitForIdle(session);
+      if (!this.isCurrentIdentity(session, identityEpoch)) return;
     }
 
+    if (!this.isCurrentIdentity(session, identityEpoch)) return;
     this.disposeSession(session);
     this.sessions.delete(localSessionId);
 
     if (this.activeLocalSessionId === localSessionId) {
       const next = this.sessions.values().next().value as
         ManagedSession | undefined;
-      this.activeLocalSessionId =
-        next?.localSessionId ?? this.createDraft().localSessionId;
+      if (next) {
+        this.activeLocalSessionId = next.localSessionId;
+      } else {
+        const draft = this.createDraft();
+        this.activeLocalSessionId = draft.localSessionId;
+        this.ensureRuntime(draft, true).then(
+          () => {
+            if (!this.isCurrentSession(draft)) return;
+            if (draft.localSessionId === this.activeLocalSessionId)
+              this.sendSnapshot();
+          },
+          (error) => {
+            if (!this.isCurrentSession(draft)) return;
+            const message =
+              error instanceof Error ? error.message : String(error);
+            draft.lastError = message;
+            draft.status = "error";
+            this.append(draft, { type: "error", text: message });
+            this.touch(draft);
+            this.sendState();
+            if (draft.localSessionId === this.activeLocalSessionId)
+              this.sendSnapshot();
+          }
+        );
+      }
       this.activationRevision += 1;
+      const replacement = this.getActive();
+      if (replacement) void this.reconcileActiveBindingForSession(replacement);
     }
 
     this.sendState();
     this.sendSnapshot();
+  }
+
+  async retry(localSessionId: string): Promise<void> {
+    const session = this.sessions.get(localSessionId);
+    if (!session || session.status !== "error") return;
+    if (
+      session.isGenerating ||
+      session.sendInFlight ||
+      session.runtimeStartPromise ||
+      session.acpInitializationPromise
+    ) {
+      return;
+    }
+    const resumeSessionId =
+      session.acpSessionId ?? session.pendingResumeSessionId;
+    this.disposeRuntime(session);
+    session.identityEpoch += 1;
+    session.acpSessionId = undefined;
+    session.pendingResumeSessionId = resumeSessionId;
+    session.status = "draft";
+    session.lastError = undefined;
+    session.isLoadingHistory = false;
+    session.historyReplayPhase = "live";
+    session.allowMissingSessionReplacement = true;
+    session.eagerRuntimeAttempted = true;
+    this.touch(session);
+    this.sendState();
+    if (session.localSessionId === this.activeLocalSessionId)
+      this.sendSnapshot();
+    await this.startupSession(session);
   }
 
   async loadHistorySession(
@@ -723,6 +876,8 @@ export class MultiSessionHostController implements vscode.Disposable {
     session.cwd = ref.cwd;
     session.isLoadingHistory = true;
     session.historyReplayPhase = "collecting";
+    session.pendingResumeSessionId = ref.sessionId;
+    session.allowMissingSessionReplacement = false;
     this.activate(session.localSessionId);
     const loadEpoch = ++session.historyLoadEpoch;
 
@@ -733,28 +888,11 @@ export class MultiSessionHostController implements vscode.Disposable {
           `Agent "${session.agent.name}" does not support loading history sessions.`
         );
       }
-      session.output!.setLoadingHistory(true);
-      await session.sessionManager.loadSession(ref.sessionId, session.cwd);
+      await this.ensureAcpInitialized(session);
       if (!this.isCurrentHistoryLoad(session, loadEpoch)) {
         return;
-      }
-      session.acpSessionId = ref.sessionId;
-      this.rebindDocumentSync(session);
-      await session.queue!.waitForIdle();
-      if (!this.isCurrentHistoryLoad(session, loadEpoch)) {
-        return;
-      }
-      session.output!.flushUserMessageBuffer();
-      session.status = "idle";
-      session.metadata = clientMetadata(session.client!);
-      if (session.transcript.snapshot().length > 0) {
-        session.transcript.append({
-          type: "streamEnd",
-          stopReason: "history_load",
-        });
       }
       this.sendHistorySnapshot(session);
-      session.historyReplayPhase = "live";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.sessions.get(session.localSessionId) === session) {
@@ -767,7 +905,7 @@ export class MultiSessionHostController implements vscode.Disposable {
         });
       }
     } finally {
-      if (this.sessions.get(session.localSessionId) === session) {
+      if (this.isCurrentSession(session)) {
         if (session.historyReplayPhase === "collecting") {
           session.historyReplayPhase = "live";
         }
@@ -846,6 +984,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       ref.sessionId,
       this.getCatalogRuntimeForAgent(agent.id)
     );
+    await this.clearActiveBindingIfMatchesRef(ref);
   }
 
   getSupportsLoadSession(): boolean {
@@ -915,7 +1054,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       await this.ensureRuntime(session, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      session.status = "draft";
+      session.status = "error";
       session.lastError = message;
       this.append(session, { type: "error", text: message });
       this.sendState();
@@ -950,8 +1089,45 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.documentSync = undefined;
     for (const session of this.sessions.values()) this.disposeSession(session);
     this.sessions.clear();
+    this.bindingMutationQueue = Promise.resolve();
     if (this.ownsElicitationFeature) this.elicitationFeature.dispose();
     this.catalog.dispose();
+  }
+
+  private createInitialDraft(): ManagedSession {
+    const workspaceRoot = getWorkspaceRoot();
+    const hasBindingRecord = hasActiveSessionBindingRecord(
+      this.globalState,
+      workspaceRoot
+    );
+    const binding = readActiveSessionBinding(this.globalState, workspaceRoot);
+    if (!binding) {
+      const session = this.createDraft();
+      if (hasBindingRecord) {
+        void this.enqueueActiveBindingMutation(
+          session.localSessionId,
+          this.activationRevision,
+          () => clearActiveSessionBinding(this.globalState, workspaceRoot)
+        );
+      }
+      return session;
+    }
+    const agent = getAgent(binding.agentId);
+    if (!agent) {
+      const session = this.createDraft();
+      void this.enqueueActiveBindingMutation(
+        session.localSessionId,
+        this.activationRevision,
+        () => clearActiveSessionBinding(this.globalState, workspaceRoot)
+      );
+      return session;
+    }
+    const session = this.createDraftForAgent(agent);
+    session.cwd = binding.cwd;
+    session.title =
+      binding.title?.trim() || historyFallbackTitle(binding.sessionId);
+    session.pendingResumeSessionId = binding.sessionId;
+    return session;
   }
 
   private createDraft(status: MultiSessionStatus = "draft"): ManagedSession {
@@ -983,6 +1159,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       historyLoadEpoch: 0,
       sendInFlight: false,
       recoveryPayloads: [],
+      allowMissingSessionReplacement: true,
+      identityEpoch: 0,
     };
     session.elicitationOwner = this.elicitationFeature.createOwner({
       ownerId: session.localSessionId,
@@ -1026,35 +1204,134 @@ export class MultiSessionHostController implements vscode.Disposable {
   private async eagerStartActiveRuntimeOnReady(): Promise<void> {
     const session = this.getActive();
     if (!session || session.eagerRuntimeAttempted) return;
+    if (this.initialReadyStartupAttempted) return;
+    if (session.localSessionId !== this.initialLocalSessionId) return;
     if (session.client || session.acpSessionId || session.isLoadingHistory)
       return;
     if (session.status !== "draft") return;
 
+    this.initialReadyStartupAttempted = true;
     session.eagerRuntimeAttempted = true;
+    await this.startupSession(session);
+  }
+
+  private async startupSession(session: ManagedSession): Promise<void> {
     try {
       await this.ensureRuntime(session, false);
-      if (!this.sessions.has(session.localSessionId)) return;
-      if (
-        !session.acpSessionId &&
-        (session.status as MultiSessionStatus) === "starting"
-      ) {
-        session.status = "idle";
-        this.touch(session);
-        this.sendState();
-      }
+      if (!this.isCurrentSession(session)) return;
+      await this.ensureAcpInitialized(session);
       if (session.localSessionId === this.activeLocalSessionId) {
         this.sendSnapshot();
       }
     } catch (error) {
-      if (!this.sessions.has(session.localSessionId)) return;
+      if (!this.isCurrentSession(session)) return;
       const message = error instanceof Error ? error.message : String(error);
       session.lastError = message;
-      session.status = session.acpSessionId ? "error" : "draft";
+      session.status = "error";
       this.append(session, { type: "error", text: message });
       this.touch(session);
       this.sendState();
       if (session.localSessionId === this.activeLocalSessionId) {
         this.sendSnapshot();
+      }
+    }
+  }
+
+  private async resumeOrCreateAcpSession(
+    session: ManagedSession,
+    identityEpoch: number
+  ): Promise<void> {
+    if (!this.isCurrentIdentity(session, identityEpoch)) return;
+    if (session.acpSessionId) return;
+    const resumeSessionId = session.pendingResumeSessionId;
+    if (!resumeSessionId) {
+      await this.createAcpSession(session, identityEpoch);
+      return;
+    }
+    if (!session.sessionManager?.supportsLoadSession) {
+      await this.createAcpSession(session, identityEpoch);
+      return;
+    }
+    session.isLoadingHistory = true;
+    session.historyReplayPhase = "collecting";
+    const loadEpoch = ++session.historyLoadEpoch;
+    const priorTranscript = session.transcript.snapshot();
+    const priorContextUsage = session.contextUsage;
+    const restoringExistingSurface = priorTranscript.length > 0;
+    try {
+      session.output!.setLoadingHistory(true);
+      if (restoringExistingSurface) {
+        session.transcript.clear();
+        session.contextUsage = null;
+        session.output!.reset();
+      }
+      await session.sessionManager.loadSession(resumeSessionId, session.cwd);
+      if (
+        !this.isCurrentHistoryLoad(session, loadEpoch) ||
+        !this.isCurrentIdentity(session, identityEpoch)
+      ) {
+        return;
+      }
+      session.acpSessionId = resumeSessionId;
+      session.pendingResumeSessionId = undefined;
+      this.rebindDocumentSync(session);
+      await session.queue!.waitForIdle();
+      if (
+        !this.isCurrentHistoryLoad(session, loadEpoch) ||
+        !this.isCurrentIdentity(session, identityEpoch)
+      ) {
+        return;
+      }
+      session.output!.flushUserMessageBuffer();
+      session.status = "idle";
+      session.metadata = clientMetadata(session.client!);
+      if (session.transcript.snapshot().length > 0) {
+        session.transcript.append({
+          type: "streamEnd",
+          stopReason: "history_load",
+        });
+      }
+      session.historyReplayPhase = "live";
+      void this.reconcileActiveBindingForSession(session);
+      this.emitSessionMetadata(session);
+      this.sendHistorySnapshot(session);
+    } catch (error) {
+      if (
+        session.allowMissingSessionReplacement &&
+        isMissingSessionError(error)
+      ) {
+        session.pendingResumeSessionId = undefined;
+        void this.reconcileActiveBindingForSession(session);
+        session.historyReplayPhase = "live";
+        session.isLoadingHistory = false;
+        session.output?.setLoadingHistory(false);
+        await this.createAcpSession(session, identityEpoch);
+        return;
+      }
+      if (
+        restoringExistingSurface &&
+        this.isCurrentIdentity(session, identityEpoch)
+      ) {
+        session.transcript.clear();
+        for (const event of priorTranscript) {
+          session.transcript.append(event.message);
+        }
+        session.contextUsage = priorContextUsage;
+        session.historyReplayPhase = "live";
+        if (session.localSessionId === this.activeLocalSessionId) {
+          this.sendSnapshot();
+        }
+      }
+      throw error;
+    } finally {
+      if (this.isCurrentSession(session)) {
+        if (session.historyReplayPhase === "collecting") {
+          session.historyReplayPhase = "live";
+        }
+        session.isLoadingHistory = false;
+        session.output?.setLoadingHistory(false);
+        this.touch(session);
+        this.sendState();
       }
     }
   }
@@ -1076,6 +1353,7 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     if (trackDiffs) {
       diffManager.onDidChange((changes) => {
+        if (!this.isCurrentSession(session)) return;
         this.append(session, {
           type: "diffSummary",
           localSessionId: session.localSessionId,
@@ -1099,6 +1377,14 @@ export class MultiSessionHostController implements vscode.Disposable {
     session: ManagedSession,
     createAcpSession = true
   ): Promise<void> {
+    await this.ensureRuntimeConnected(session);
+
+    if (createAcpSession) {
+      await this.ensureAcpInitialized(session);
+    }
+  }
+
+  private async ensureRuntimeConnected(session: ManagedSession): Promise<void> {
     if (session.runtimeStartPromise) {
       await session.runtimeStartPromise;
     } else if (!session.client) {
@@ -1112,20 +1398,47 @@ export class MultiSessionHostController implements vscode.Disposable {
         }
       }
     }
+  }
 
-    if (createAcpSession && !session.acpSessionId) {
-      const response = await session.sessionManager!.newSession(session.cwd);
-      session.acpSessionId = response.sessionId;
-      this.rebindDocumentSync(session);
-      session.title = newSessionFallbackTitle(
-        session.agent,
-        response.sessionId
-      );
-      session.metadata = clientMetadata(session.client!);
-      await this.restoreSessionPreferences(session);
-      session.status = "idle";
-      this.sendState();
-      this.emitSessionMetadata(session);
+  private async ensureAcpInitialized(session: ManagedSession): Promise<void> {
+    if (session.acpSessionId) return;
+    if (session.acpInitializationPromise) {
+      await session.acpInitializationPromise;
+      return;
+    }
+    const epoch = session.identityEpoch;
+    const promise = this.resumeOrCreateAcpSession(session, epoch);
+    session.acpInitializationPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (session.acpInitializationPromise === promise) {
+        session.acpInitializationPromise = undefined;
+      }
+    }
+  }
+
+  private async createAcpSession(
+    session: ManagedSession,
+    identityEpoch: number
+  ): Promise<void> {
+    if (!this.isCurrentIdentity(session, identityEpoch)) return;
+    session.status = "starting";
+    this.sendState();
+    const response = await session.sessionManager!.newSession(session.cwd);
+    if (!this.isCurrentIdentity(session, identityEpoch)) return;
+    session.acpSessionId = response.sessionId;
+    session.pendingResumeSessionId = undefined;
+    this.rebindDocumentSync(session);
+    session.title = newSessionFallbackTitle(session.agent, response.sessionId);
+    session.metadata = clientMetadata(session.client!);
+    await this.restoreSessionPreferences(session);
+    if (!this.isCurrentIdentity(session, identityEpoch)) return;
+    session.status = "idle";
+    void this.reconcileActiveBindingForSession(session);
+    this.sendState();
+    this.emitSessionMetadata(session);
+    if (session.localSessionId === this.activeLocalSessionId) {
       this.sendSnapshot();
     }
   }
@@ -1157,10 +1470,12 @@ export class MultiSessionHostController implements vscode.Disposable {
       emit: (message) => this.append(session, message),
       liveToolOutputProfile: session.agent.liveToolOutputProfile,
       onMetadataChanged: (metadata) => {
+        if (!this.isCurrentSession(session)) return;
         session.metadata = metadata;
         this.emitSessionMetadata(session);
       },
       onContextUsageChanged: (usage) => {
+        if (!this.isCurrentSession(session)) return;
         session.contextUsage = usage;
         this.append(session, {
           type: "contextUsage",
@@ -1170,11 +1485,15 @@ export class MultiSessionHostController implements vscode.Disposable {
         });
       },
       onSessionInfoChanged: (update) => {
+        if (!this.isCurrentSession(session)) return;
         const title = update.title;
         if (typeof title === "string" && title.trim()) {
           session.title = title;
           this.touch(session);
           this.sendState();
+          if (session.localSessionId === this.activeLocalSessionId) {
+            void this.reconcileActiveBindingForSession(session);
+          }
         }
       },
       onStructuredDiffContent: async (content) => {
@@ -1208,13 +1527,14 @@ export class MultiSessionHostController implements vscode.Disposable {
 
     try {
       await client.connect(session.cwd);
+      if (!this.isCurrentRuntime(session, client)) return;
       sessionManager.syncCapabilities();
       if (session.localSessionId === this.activeLocalSessionId) {
         this.rebindDocumentSync(session);
       }
     } catch (error) {
       this.disposeRuntime(session);
-      session.status = session.acpSessionId ? "error" : "draft";
+      session.status = "error";
       throw error;
     }
   }
@@ -1224,8 +1544,15 @@ export class MultiSessionHostController implements vscode.Disposable {
     client: ACPClient,
     resources: SessionResources
   ): void {
-    client.setOnSessionUpdate((update) => session.queue?.push(update));
-    client.setOnStderr((text) => this.handleStderr(session, text));
+    const queue = session.queue;
+    client.setOnSessionUpdate((update) => {
+      if (!queue || !this.isCurrentRuntime(session, client)) return;
+      queue.push(update);
+    });
+    client.setOnStderr((text) => {
+      if (!this.isCurrentRuntime(session, client)) return;
+      this.handleStderr(session, text);
+    });
     client.setOnReadTextFile((params) =>
       resources.fileHandler.handleReadTextFile(params)
     );
@@ -1248,14 +1575,17 @@ export class MultiSessionHostController implements vscode.Disposable {
       resources.terminalHandler.handleReleaseTerminal(params)
     );
     client.setOnPermissionRequest((params) =>
-      this.handlePermissionRequest(session, params)
+      this.isCurrentRuntime(session, client)
+        ? this.handlePermissionRequest(session, params)
+        : Promise.resolve({ outcome: { outcome: "cancelled" } })
     );
     client.setOnElicitationRequest((context) =>
-      session.elicitationOwner
+      session.elicitationOwner && this.isCurrentRuntime(session, client)
         ? session.elicitationOwner.handleRequest(context)
         : Promise.resolve({ action: "cancel" })
     );
     client.setOnStateChange((state) => {
+      if (!this.isCurrentRuntime(session, client)) return;
       this.append(session, { type: "connectionState", state });
       if (state === "error" || state === "disconnected") {
         session.elicitationOwner?.cancelAll();
@@ -1404,6 +1734,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.activeLocalSessionId = localSessionId;
     this.activationRevision += 1;
     this.rebindDocumentSync(session);
+    void this.reconcileActiveBindingForSession(session);
     this.sendChatStateNow();
     this.sendManagerStateNow();
     this.sendSnapshot({ scrollToBottom: true });
@@ -1425,11 +1756,11 @@ export class MultiSessionHostController implements vscode.Disposable {
     activationRevision: number,
     focusChat: boolean | undefined
   ): Promise<void> {
-    if (focusChat) {
+    if (focusChat && (!this.view || !this.webviewReady)) {
       try {
         await Promise.resolve(this.focusChat());
       } catch (error) {
-        console.error("[MultiSession] Failed to focus chat view:", error);
+        console.error("[MultiSession] Failed to resolve chat view:", error);
       }
     }
     if (
@@ -1440,9 +1771,13 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
     this.pendingFocusInput = {
       type: "feature.multi-session.focusInput",
+      requestId: `focus-${activationRevision}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`,
       localSessionId,
       activationRevision,
     };
+    this.focusInputStage = "requested";
     this.flushPendingInputFocus();
   }
 
@@ -1456,8 +1791,82 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.pendingFocusInput = undefined;
       return;
     }
-    this.pendingFocusInput = undefined;
+    this.focusInputStage = "posted";
     this.post(message as unknown as Record<string, unknown>);
+  }
+
+  private async commitPendingInputFocus(message: {
+    requestId: string;
+    localSessionId: string;
+    activationRevision: number;
+  }): Promise<void> {
+    const pending = this.pendingFocusInput;
+    if (!pending || !this.matchesPendingFocus(message, pending)) return;
+    if (
+      this.activeLocalSessionId !== pending.localSessionId ||
+      this.activationRevision !== pending.activationRevision
+    ) {
+      this.pendingFocusInput = undefined;
+      return;
+    }
+    if (!this.view || !this.webviewReady) return;
+    try {
+      this.focusInputStage = "focusing-view";
+      await Promise.resolve(this.focusChat());
+    } catch (error) {
+      console.error("[MultiSession] Failed to focus chat view:", error);
+    }
+    if (
+      this.pendingFocusInput !== pending ||
+      this.activeLocalSessionId !== pending.localSessionId ||
+      this.activationRevision !== pending.activationRevision ||
+      !this.view ||
+      !this.webviewReady
+    ) {
+      return;
+    }
+    this.view.show(false);
+    const commit: MultiSessionFocusInputCommitMessage = {
+      type: "feature.multi-session.focusInputCommit",
+      requestId: pending.requestId,
+      localSessionId: pending.localSessionId,
+      activationRevision: pending.activationRevision,
+    };
+    this.focusInputStage = "committed";
+    this.post(commit as unknown as Record<string, unknown>);
+  }
+
+  private acknowledgePendingInputFocus(
+    message: MultiSessionFocusInputResponseMessage
+  ): void {
+    const pending = this.pendingFocusInput;
+    if (!pending || !this.matchesPendingFocus(message, pending)) return;
+    this.lastFocusInputAck = message;
+    if (
+      message.proof?.documentHasFocus &&
+      message.proof.activeInput &&
+      message.proof.caret
+    ) {
+      this.focusInputStage = "acknowledged";
+      this.pendingFocusInput = undefined;
+    } else {
+      this.focusInputStage = "focus-attempt-failed";
+    }
+  }
+
+  private matchesPendingFocus(
+    message: {
+      requestId: string;
+      localSessionId: string;
+      activationRevision: number;
+    },
+    pending: MultiSessionFocusInputMessage
+  ): boolean {
+    return (
+      message.requestId === pending.requestId &&
+      message.localSessionId === pending.localSessionId &&
+      message.activationRevision === pending.activationRevision
+    );
   }
 
   private sendSnapshot(options: { scrollToBottom?: boolean } = {}): void {
@@ -2019,6 +2428,103 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
   }
 
+  private async reconcileActiveBindingForSession(
+    session: ManagedSession
+  ): Promise<void> {
+    const localSessionId = session.localSessionId;
+    const activationRevision = this.activationRevision;
+    await this.enqueueActiveBindingMutation(
+      localSessionId,
+      activationRevision,
+      async () => {
+        const current = this.sessions.get(localSessionId);
+        if (current !== session) return;
+        const sessionId =
+          session.acpSessionId ?? session.pendingResumeSessionId;
+        if (sessionId) {
+          await writeActiveSessionBinding(
+            this.globalState,
+            getWorkspaceRoot(),
+            {
+              agentId: session.agent.id,
+              sessionId,
+              cwd: session.cwd,
+              title: session.title,
+            }
+          );
+        } else {
+          await clearActiveSessionBinding(this.globalState, getWorkspaceRoot());
+        }
+      }
+    );
+  }
+
+  private async clearActiveBindingIfMatchesRef(
+    ref: HistorySessionRef
+  ): Promise<void> {
+    await this.enqueueActiveBindingMutation(
+      this.activeLocalSessionId,
+      this.activationRevision,
+      async () => {
+        const current = readActiveSessionBinding(
+          this.globalState,
+          getWorkspaceRoot()
+        );
+        if (
+          current?.agentId === ref.agentId &&
+          current.sessionId === ref.sessionId
+        ) {
+          await clearActiveSessionBinding(this.globalState, getWorkspaceRoot());
+        }
+      }
+    );
+  }
+
+  private async enqueueActiveBindingMutation(
+    activeLocalSessionId: string | undefined,
+    activationRevision: number,
+    mutate: () => Thenable<void> | Promise<void>
+  ): Promise<void> {
+    const run = async () => {
+      if (
+        this.disposed ||
+        this.activeLocalSessionId !== activeLocalSessionId ||
+        this.activationRevision !== activationRevision
+      ) {
+        return;
+      }
+      await mutate();
+    };
+    const next = this.bindingMutationQueue.then(run, run);
+    this.bindingMutationQueue = next.catch((error) => {
+      console.error(
+        "[MultiSession] Failed to persist active session binding:",
+        error
+      );
+    });
+    await next.catch(() => undefined);
+  }
+
+  private isCurrentSession(session: ManagedSession): boolean {
+    return this.sessions.get(session.localSessionId) === session;
+  }
+
+  private isCurrentIdentity(
+    session: ManagedSession,
+    identityEpoch: number
+  ): boolean {
+    return (
+      this.isCurrentSession(session) && session.identityEpoch === identityEpoch
+    );
+  }
+
+  private isCurrentRuntime(
+    session: ManagedSession,
+    client: ACPClient
+  ): boolean {
+    return this.isCurrentSession(session) && session.client === client;
+  }
+
   private async restoreSessionPreferences(
     session: ManagedSession
   ): Promise<void> {
@@ -2177,6 +2683,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     session.sessionManager = undefined;
     session.runtimeId = undefined;
     session.runtimeStartPromise = undefined;
+    session.acpInitializationPromise = undefined;
   }
 
   private disposeSession(session: ManagedSession): void {

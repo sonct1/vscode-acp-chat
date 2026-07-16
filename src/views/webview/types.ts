@@ -307,6 +307,13 @@ export interface WebviewEventMap {
   draftChanged: { html: string };
   /** Fired after a Markdown block has been rendered into the DOM. */
   markdownRendered: { root: HTMLElement; kind: "text" | "thought" };
+  /** Fired before the active transcript DOM is replaced or replayed. */
+  chatSurfaceReplacementStarted: { generation: number };
+  /** Fired after transcript replay and scroll restoration finish or abort. */
+  chatSurfaceReplacementFinished: {
+    generation: number;
+    committed: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------

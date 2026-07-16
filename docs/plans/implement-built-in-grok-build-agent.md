@@ -2,9 +2,9 @@
 
 | Attribute  | Value                                                                                                                                                                                                          |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Draft                                                                                                                                                                                                          |
+| Status     | Implemented                                                                                                                                                                                                    |
 | Owner      | TBD                                                                                                                                                                                                            |
-| Phase      | Planning complete; implementation pending                                                                                                                                                                      |
+| Phase      | Implementation, verification, packaging, and local installation complete                                                                                                                                       |
 | Scope      | Feature-owned external CLI configuration, built-in agent catalog, generic ACP model compatibility, tests, docs, packaging, local install                                                                       |
 | References | `src/acp/agents.ts`, `src/acp/client.ts`, `src/acp/session-manager.ts`, `src/features/agent-selection/`, `src/test/agents.test.ts`, `src/test/client.test.ts`, `README.md`, `docs/features/feature-catalog.md` |
 
@@ -443,8 +443,29 @@ Không gộp generic ACP compatibility fix và product-specific Grok integration
 - Production build, VSIX packaging và local installation thành công.
 - User được nhắc chạy `Developer: Reload Window`.
 
+## Completion notes
+
+Implemented on 2026-07-16:
+
+- Added feature-owned `createGrokBuildAgentConfig()` under `src/features/grok-build/` and registered built-in id `grok-build` without changing the first/default catalog entry.
+- Added exact direct launch configuration `grok --no-auto-update agent stdio`; custom same-id agents continue to override it.
+- Fixed generic `ACPClient.newSession()` precedence so old-format `response.models` is accepted after `configOptions` and before existing metadata.
+- Added a generic model-change fallback from `session/set_config_option` to legacy `session/set_model` only when the modern method returns JSON-RPC method-not-found; other errors are preserved.
+- Added focused Grok config/catalog/override tests and generic old-format model/model-change regression coverage.
+- Updated `README.md`, `docs/features/feature-catalog.md`, and `CHANGELOG.md`.
+- Verification completed:
+  - `npm run check-types` — passed.
+  - focused ESLint for changed implementation/tests — passed.
+  - `xvfb-run -a npm test -- --grep "Grok Build|features/grok-build|old-format models|legacy session/set_model|set_config_option fails generically"` — 7 passing.
+  - full `xvfb-run -a npm test` — 861 passing, 1 unrelated existing webview layout assertion failed (`renders sub-agent recent nested tools in a separate scrollable box`, expected scroll height to differ from `500`).
+  - `npm run package` — passed before unrelated concurrent multi-session edits introduced temporary type errors in the shared working tree; final package verification was repeated in an isolated clean-tree overlay containing only Grok-related changes and passed.
+  - authenticated Grok `0.2.101` ACP smoke (`initialize`, `session/new`, modern set-model rejection, legacy `session/set_model`, `session/load`, old-format model response) — passed.
+  - isolated VSIX packaged to `/tmp/vscode-acp-chat-grok-build-1.18.8.vsix`, verified to contain `id:"grok-build"`, installed with `code --install-extension ... --force`, and removed after installation; installed version reported `fiyqkrc.vscode-acp-chat@1.18.8`.
+- Unauthenticated isolated-home smoke was attempted, but current Grok `0.2.101` did not return from `session/new` within the timeout after advertising only `grok.com`; no automatic ACP auth behavior was added.
+
 ## Revision history
 
 | Date       | Author | Summary                                                                                                    |
 | ---------- | ------ | ---------------------------------------------------------------------------------------------------------- |
 | 2026-07-16 | Bytes  | Initial plan based on repository flow, official Grok ACP docs, and local Grok 0.2.101 protocol smoke tests |
+| 2026-07-16 | Bytes  | Implemented built-in Grok Build support, compatibility fix, tests, docs, package, and local installation   |

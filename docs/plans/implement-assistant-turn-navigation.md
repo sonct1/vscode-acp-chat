@@ -550,3 +550,37 @@ code --install-extension .tmp/vscode-acp-chat-assistant-turn-navigation.vsix --f
 - Focused navigable response, focused tool-only response, button-navigation anchor, single-response và boundary clamp giữ nguyên semantics trước đó.
 - Thêm regression coverage cho `Next → 210 → 300`, `Previous → 180 → 100`, geometry khác DOM order, equality epsilon, boundary clamp và smooth-scroll event giữa chuỗi bấm.
 - Targeted assistant-turn suite pass 15 tests, gồm cả focus chuyển từ assistant sang header button, focused tool-only turn và exact-anchor geometry với DOM order không tuần tự. Repo-wide type/test/package gates hiện bị chặn bởi các thay đổi ACP elicitation ngoài phạm vi đang thiếu `awaitingInput`, `pendingElicitationCount` và `ExtensionMessage.ownerId` compatibility; các file đó không bị sửa hoặc revert trong task này.
+
+## Hardening: reset navigation theo transcript surface lifecycle
+
+**Trạng thái:** Completed — triển khai ngày 2026-07-16.
+
+### Nguyên nhân
+
+Multi-session snapshot thay transcript và restore `scrollTop` bất đồng bộ, trong khi assistant-turn feature trước đây chỉ rebuild bằng `MutationObserver` ở animation frame tiếp theo. Nếu người dùng đã điều hướng hoặc focus assistant ở session cũ, `hasButtonNavigationAnchor`, `lastFocusedAssistantElement`, `activeIndex` và `entries` có thể sống qua thời điểm mở lại session; các state này có độ ưu tiên cao hơn reading-anchor geometry. Clear và replay cũng có thể bị observer coalesce nên navigator không bao giờ thấy trạng thái DOM rỗng để tự reset.
+
+### Thay đổi
+
+- `WebviewController` phát lifecycle nội bộ có generation tăng đơn điệu: `chatSurfaceReplacementStarted` và `chatSurfaceReplacementFinished`.
+- Multi-session bắt đầu lifecycle ngay khi activation revision đổi, trước khi snapshot đến; snapshot dùng cùng generation cho tới sau replay và scroll restoration.
+- Assistant-turn navigator khi nhận `Started` sẽ cancel rebuild frame, xóa entries/current/focus/button anchor và ẩn controls ngay lập tức.
+- Trong transition, `navigate()` trả `false` và mutation/scroll callbacks không được rebuild hoặc thay state.
+- Khi nhận `Finished`, feature chỉ xử lý generation hiện tại, rebuild đồng bộ từ active DOM và tính counter sau restored scroll. Callback thuộc generation cũ bị bỏ qua.
+- Trước mỗi navigation và jump, entries phải còn connected, thuộc `#messages`, và scroll target phải còn nằm trong assistant root; stale/detached entries bị rebuild thay vì scroll.
+- Snapshot thất bại kết thúc lifecycle với `committed: false`, giữ navigator ẩn, interaction lock/loading `Reloading chat…` và bỏ qua delta cho tới khi một snapshot resync mới commit; same-revision chat-state update không được xóa recovery overlay.
+- Snapshot sequence chỉ được advance sau replay thành công. Buffered deltas được catch up trước khi lifecycle commit, navigator hiện lại và surface unlock. Delta sequence chỉ advance sau dispatch thành công; delta gap hoặc dispatch failure đưa surface về cùng recovery lifecycle, khóa interaction và request resync.
+
+### Regression coverage
+
+- Session cũ đã có button-navigation anchor, chuyển sang session khác: navigator ẩn trong transition và lần bấm đầu tiên sau replay dùng geometry mới (`Next → 210`, `Previous → 180`).
+- Focus anchor ở transcript cũ không tồn tại khi mở lại cùng local session với activation revision mới.
+- Existing live navigation, focus/tool-only, clear và snapshot replay coverage vẫn pass.
+
+### Verification
+
+- `npm run check-types` — PASS.
+- `npm run compile-tests` — PASS.
+- ESLint trên các file thay đổi — PASS.
+- Assistant-turn targeted suite — 18 passing.
+- Multi-session webview targeted suite — 8 passing.
+- Full `npm test` — 886 passing, 2 failures ngoài phạm vi: sub-agent nested-tool scroll assertion và Electron `document.hasFocus()` integration assertion.

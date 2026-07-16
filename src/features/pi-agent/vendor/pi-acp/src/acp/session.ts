@@ -1063,7 +1063,7 @@ export class PiAcpSession {
         this.lifecycleRevision += 1
         this.emit({
           sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: 'Retry finished, resuming.' } satisfies ContentBlock
+          content: { type: 'text', text: 'Retry finished, resuming.\n' } satisfies ContentBlock
         })
         break
       }
@@ -1174,9 +1174,10 @@ export class PiAcpSession {
     }
 
     if (method === 'notify') {
+      const message = stringProp(ev, 'message') ?? 'Pi notification'
       this.emit({
         sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: stringProp(ev, 'message') ?? 'Pi notification' } satisfies ContentBlock
+        content: { type: 'text', text: message.endsWith('\n') ? message : `${message}\n` } satisfies ContentBlock
       })
       await this.proc.sendExtensionUiResponse({ id, cancelled: true })
       return
@@ -1285,13 +1286,13 @@ function formatAutoRetryMessage(ev: PiRpcEvent): string {
   const delayMs = Number((ev as any).delayMs)
 
   if (!Number.isFinite(attempt) || !Number.isFinite(maxAttempts) || !Number.isFinite(delayMs)) {
-    return 'Retrying...'
+    return 'Retrying...\n'
   }
 
   let delaySeconds = Math.round(delayMs / 1000)
   if (delayMs > 0 && delaySeconds === 0) delaySeconds = 1
 
-  return `Retrying (attempt ${attempt}/${maxAttempts}, waiting ${delaySeconds}s)...`
+  return `Retrying (attempt ${attempt}/${maxAttempts}, waiting ${delaySeconds}s)...\n`
 }
 
 function toToolKind(toolName: string): ToolKind {

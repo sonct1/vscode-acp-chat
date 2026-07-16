@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,6 +9,75 @@ import { FakeAgentSideConnection, asAgentConn } from '../helpers/fakes.js'
 
 // We mock PiRpcProcess.spawn so loadSession doesn't actually spawn `pi`.
 import { PiRpcProcess } from '../../src/pi-rpc/process.js'
+
+test('PiAcpAgent: repairs a stale session map before a second-process load', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-acp-reload-test-'))
+  const sessionsDir = join(root, 'sessions', '--tmp--project--')
+  const sessionFile = join(sessionsDir, '0000_reload.jsonl')
+  const mapPath = join(root, 'session-map.json')
+  mkdirSync(sessionsDir, { recursive: true })
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      type: 'session',
+      version: 3,
+      id: 'reload-session',
+      timestamp: '2026-02-11T00:00:00.000Z',
+      cwd: '/tmp/project'
+    }) + '\n',
+    'utf8'
+  )
+  writeFileSync(
+    mapPath,
+    JSON.stringify({
+      version: 1,
+      sessions: {
+        'reload-session': {
+          sessionId: 'reload-session',
+          cwd: '/tmp/project',
+          sessionFile,
+          updatedAt: new Date(0).toISOString(),
+          fileSize: 1,
+          fileMtimeMs: 1
+        }
+      }
+    }),
+    'utf8'
+  )
+
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = root
+  const originalSpawn = PiRpcProcess.spawn
+  ;(PiRpcProcess as any).spawn = async () =>
+    ({
+      onEvent: () => () => {},
+      getMessages: async () => ({ messages: [] }),
+      getAvailableModels: async () => ({ models: [] }),
+      getState: async () => ({ sessionFile, thinkingLevel: 'medium' })
+    }) as any
+
+  try {
+    const agent = new PiAcpAgent(asAgentConn(new FakeAgentSideConnection()), {
+      sessionStorePath: mapPath
+    })
+    await agent.loadSession({
+      sessionId: 'reload-session',
+      cwd: '/tmp/project',
+      mcpServers: [],
+      _meta: null
+    } as any)
+
+    const stored = JSON.parse(readFileSync(mapPath, 'utf8')).sessions['reload-session']
+    const signature = statSync(sessionFile)
+    assert.equal(stored.sessionFile, sessionFile)
+    assert.equal(stored.fileSize, signature.size)
+    assert.equal(stored.fileMtimeMs, signature.mtimeMs)
+  } finally {
+    PiRpcProcess.spawn = originalSpawn
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir
+  }
+})
 
 test('PiAcpAgent: listSessions lists pi sessions and loadSession replays history', async () => {
   // Create a fake PI_CODING_AGENT_DIR with one session.

@@ -3,6 +3,7 @@ import {
   createAntigravityAgentConfig,
   isAntigravityAgentEnabled,
 } from "../features/antigravity-agent";
+import { createGrokBuildAgentConfig } from "../features/grok-build";
 import { createPiAgentConfig } from "../features/pi-agent";
 import {
   createSwarmAgentConfig,
@@ -127,9 +128,14 @@ function getBuiltinAgents(): AgentConfig[] {
       command: "codebuddy",
       args: ["--acp"],
     },
+    createGrokBuildAgentConfig(),
     ...(isAntigravityAgentEnabled() ? [createAntigravityAgentConfig()] : []),
     ...(isSwarmAgentEnabled()
-      ? [createSwarmAgentConfig({ getAvailableAgents: () => getMergedAgents() })]
+      ? [
+          createSwarmAgentConfig({
+            getAvailableAgents: () => getMergedAgents(),
+          }),
+        ]
       : []),
     createPiAgentConfig(),
   ];

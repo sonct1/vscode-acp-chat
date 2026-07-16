@@ -203,8 +203,7 @@ export class ChatViewProvider
       postMessage: (message) => this.postMessage(message),
       onStatusChanged: (summary) => this.onMultiSessionStatus(summary),
       onOpenManager: () => this.revealMultiSessionManager(),
-      onFocusChat: () =>
-        vscode.commands.executeCommand("vscode-acp-chat.chatView.focus"),
+      onFocusChat: () => this.focusChatView(),
       onQuickSwitch: () => this.switchSession(),
     });
     if (!this.features.multiSession && this.features.acpElicitation) {
@@ -385,6 +384,12 @@ export class ChatViewProvider
   ): void {
     this.view = webviewView;
     this.webviewReady = false;
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) {
+        this.view = undefined;
+        this.webviewReady = false;
+      }
+    });
     this.features.multiSession?.attachView(webviewView);
 
     webviewView.webview.options = {
@@ -392,7 +397,6 @@ export class ChatViewProvider
       localResourceRoots: [this.extensionUri],
     };
 
-    webviewView.webview.html = this.getHtmlContent(webviewView.webview);
     this.features.chatAutoScroll?.sendSettings();
     this.features.chatFontSize?.sendSettings();
 
@@ -755,6 +759,10 @@ export class ChatViewProvider
           break;
       }
     });
+
+    // Register the receive handler before loading HTML. The webview script posts
+    // `ready` during initialization and can otherwise beat listener registration.
+    webviewView.webview.html = this.getHtmlContent(webviewView.webview);
   }
 
   private async handleReviewDiff(path: string): Promise<void> {
@@ -816,6 +824,14 @@ export class ChatViewProvider
   public getMultiSessionManagerViewProvider():
     MultiSessionManagerViewProvider | undefined {
     return this.multiSessionManagerView;
+  }
+
+  public getLastFocusInputAckForTest() {
+    return this.features.multiSession?.getLastFocusInputAckForTest();
+  }
+
+  public getFocusInputDebugForTest() {
+    return this.features.multiSession?.getFocusInputDebugForTest();
   }
 
   public async switchSession(): Promise<void> {
@@ -1517,12 +1533,14 @@ export class ChatViewProvider
     }
   }
 
+  private async focusChatView(): Promise<void> {
+    await vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
+  }
+
   private async requestLegacyInputFocus(): Promise<void> {
     this.legacyInputFocusPending = true;
     try {
-      await vscode.commands.executeCommand(
-        `${ChatViewProvider.viewType}.focus`
-      );
+      await this.focusChatView();
     } catch (error) {
       console.error("[Chat] Failed to focus chat view:", error);
     }

@@ -216,6 +216,20 @@ export class MultiSessionManagerWebview {
         )
       );
     }
+    if (session.status === "error") {
+      actions.append(
+        this.button(
+          "Retry",
+          "codicon-debug-restart",
+          "secondary",
+          () =>
+            this.vscode.postMessage({
+              type: "feature.multi-session.retry",
+              localSessionId: session.localSessionId,
+            })
+        )
+      );
+    }
     if (session.pendingPermissionCount > 0) {
       actions.append(
         this.button(

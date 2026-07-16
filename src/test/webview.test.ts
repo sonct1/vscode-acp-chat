@@ -1167,13 +1167,23 @@ suite("Webview", () => {
         assert.strictEqual(document.activeElement, elements.messagesEl);
       });
 
-      test("focusInput focuses the rich composer input", () => {
+      test("focusInput focuses the rich composer input with a caret", () => {
         elements.messagesEl.setAttribute("tabindex", "0");
         elements.messagesEl.focus();
+        document.hasFocus = () => true;
 
         controller.handleMessage({ type: "focusInput" });
 
+        const selection = window.getSelection();
         assert.strictEqual(document.activeElement, elements.inputEl);
+        assert.strictEqual(selection?.rangeCount, 1);
+        assert.strictEqual(selection?.getRangeAt(0).collapsed, true);
+        assert.strictEqual(
+          elements.inputEl.contains(
+            selection?.getRangeAt(0).commonAncestorContainer ?? null
+          ),
+          true
+        );
       });
 
       test("handles toolCallStart", () => {
@@ -4085,9 +4095,15 @@ suite("Webview", () => {
       );
       const localDoc = localDom.window.document;
       let replayDepth = 0;
+      const postedMessages: unknown[] = [];
+      const replacementFinishes: Array<{
+        generation: number;
+        committed: boolean;
+      }> = [];
+      const locks: boolean[] = [];
       const feature = new MultiSessionWebviewController(
         {
-          postMessage: () => {},
+          postMessage: (message) => postedMessages.push(message),
           getState: () => undefined,
           setState: <T>(state: T) => state,
         },
@@ -4100,6 +4116,11 @@ suite("Webview", () => {
           endSnapshotReplay: () => {
             replayDepth -= 1;
           },
+          beginSurfaceReplacement: () => 1,
+          finishSurfaceReplacement: (generation, committed) => {
+            replacementFinishes.push({ generation, committed });
+          },
+          setSurfaceInteractionLocked: (value) => locks.push(value),
           dispatch: async () => {
             throw new Error("replay failed");
           },
@@ -4144,9 +4165,116 @@ suite("Webview", () => {
       const loading = localDoc.querySelector(
         ".multi-session-loading"
       ) as HTMLElement;
-      assert.strictEqual(loading.hidden, true);
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Reloading chat"));
       assert.strictEqual(replayDepth, 0);
+      assert.deepStrictEqual(replacementFinishes, [
+        { generation: 1, committed: false },
+      ]);
+      assert.deepStrictEqual(locks, [true]);
+      assert.strictEqual(
+        postedMessages.some(
+          (message: any) => message.type === "feature.multi-session.resync"
+        ),
+        true
+      );
+      feature.handleMessage({
+        type: "feature.multi-session.chatState",
+        enabled: true,
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        active: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 2,
+          pendingPermissionCount: 0,
+        },
+        aggregate: { open: 1, running: 0, awaitingPermission: 0 },
+      } as any);
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Reloading chat"));
       localDom.window.close();
+    });
+
+    test("enters recovery when a live transcript delta fails", async () => {
+      const postedMessages: unknown[] = [];
+      const locks: boolean[] = [];
+      let dispatchCount = 0;
+      const feature = new MultiSessionWebviewController(
+        {
+          postMessage: (message) => postedMessages.push(message),
+          getState: () => undefined,
+          setState: <T>(state: T) => state,
+        },
+        document,
+        {
+          reset: () => {},
+          dispatch: async () => {
+            dispatchCount += 1;
+            if (dispatchCount > 5) throw new Error("delta failed");
+          },
+          setSurfaceInteractionLocked: (value) => locks.push(value),
+          setGenerating: () => {},
+          getInputHtml: () => "",
+          setInputHtml: () => {},
+          getScrollTop: () => 0,
+          setScrollTop: () => {},
+          scrollToBottom: () => {},
+          getWebviewState: () => undefined,
+          saveWebviewState: () => {},
+        }
+      );
+
+      await feature.handleMessage({
+        type: "feature.multi-session.snapshot",
+        activeLocalSessionId: "local-a",
+        activationRevision: 1,
+        session: {
+          localSessionId: "local-a",
+          agentId: "test-agent",
+          agentName: "Test Agent",
+          title: "A",
+          status: "idle",
+          createdAt: 1,
+          updatedAt: 1,
+          pendingPermissionCount: 0,
+        },
+        transcript: [{ seq: 1, createdAt: 1, message: { type: "streamStart" } }],
+        lastSeq: 1,
+        metadata: null,
+        contextUsage: null,
+        diffChanges: [],
+        pendingPermissions: [],
+        isGenerating: false,
+      } as any);
+
+      await feature.handleMessage({
+        type: "feature.multi-session.delta",
+        localSessionId: "local-a",
+        activationRevision: 1,
+        event: {
+          seq: 2,
+          createdAt: 2,
+          message: { type: "streamChunk", text: "failed" },
+        },
+      } as any);
+
+      const loading = document.querySelector(
+        ".multi-session-loading"
+      ) as HTMLElement;
+      assert.strictEqual(loading.hidden, false);
+      assert.ok(loading.textContent?.includes("Reloading chat"));
+      assert.strictEqual(locks.at(-1), true);
+      assert.strictEqual(
+        postedMessages.some(
+          (message: any) => message.type === "feature.multi-session.resync"
+        ),
+        true
+      );
     });
 
     test("buffers deltas that arrive while snapshot replay is in progress", async () => {
@@ -4392,9 +4520,10 @@ suite("Webview", () => {
       );
       const localDoc = localDom.window.document;
       const calls: string[] = [];
+      const messages: unknown[] = [];
       const feature = new MultiSessionWebviewController(
         {
-          postMessage: () => {},
+          postMessage: (message) => messages.push(message),
           getState: () => undefined,
           setState: <T>(state: T) => state,
         },
@@ -4403,7 +4532,15 @@ suite("Webview", () => {
           reset: () => calls.push("reset"),
           dispatch: () => {},
           setSurfaceInteractionLocked: (value) => calls.push(`lock:${value}`),
-          focusInput: () => calls.push("focus"),
+          focusInput: () => {
+            calls.push("focus");
+            return true;
+          },
+          getFocusInputProof: () => ({
+            documentHasFocus: true,
+            activeInput: true,
+            caret: true,
+          }),
           setGenerating: () => {},
           getInputHtml: () => "",
           setInputHtml: (value) => calls.push(`draft:${value}`),
@@ -4421,6 +4558,7 @@ suite("Webview", () => {
 
       feature.handleMessage({
         type: "feature.multi-session.focusInput",
+        requestId: "focus-a",
         localSessionId: "local-a",
         activationRevision: 1,
       } as any);
@@ -4454,8 +4592,41 @@ suite("Webview", () => {
         "reset",
         "draft:restored",
         "lock:false",
+      ]);
+      assert.deepStrictEqual(messages, [
+        {
+          type: "feature.multi-session.focusInputArmed",
+          requestId: "focus-a",
+          localSessionId: "local-a",
+          activationRevision: 1,
+        },
+      ]);
+
+      feature.handleMessage({
+        type: "feature.multi-session.focusInputCommit",
+        requestId: "focus-a",
+        localSessionId: "local-a",
+        activationRevision: 1,
+      } as any);
+
+      assert.deepStrictEqual(calls, [
+        "lock:true",
+        "reset",
+        "draft:restored",
+        "lock:false",
         "focus",
       ]);
+      assert.deepStrictEqual(messages[1], {
+        type: "feature.multi-session.focusInputAck",
+        requestId: "focus-a",
+        localSessionId: "local-a",
+        activationRevision: 1,
+        proof: {
+          documentHasFocus: true,
+          activeInput: true,
+          caret: true,
+        },
+      });
       localDom.window.close();
     });
 
@@ -4472,7 +4643,10 @@ suite("Webview", () => {
           reset: () => {},
           dispatch: () => {},
           setSurfaceInteractionLocked: () => {},
-          focusInput: () => calls.push("focus"),
+          focusInput: () => {
+            calls.push("focus");
+            return true;
+          },
           setGenerating: () => {},
           getInputHtml: () => "",
           setInputHtml: () => {},
@@ -4486,6 +4660,7 @@ suite("Webview", () => {
 
       feature.handleMessage({
         type: "feature.multi-session.focusInput",
+        requestId: "focus-stale",
         localSessionId: "local-a",
         activationRevision: 1,
       } as any);

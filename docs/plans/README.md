@@ -12,6 +12,7 @@ Typical files:
 Current plans:
 
 - [Add Selection/File/Folder to Chat](./implement-add-to-chat-context.md) — add editor selection, Explorer file, and Explorer folder resources to the chat composer as mention chips.
+- [Selected-Text Ask Agent Side Session](./implement-selected-text-ask-agent-side-session.md) — show an `Ask agent` action for text selected inside the chat transcript and answer in an isolated read-only ACP side session without changing the active chat.
 - [Agent Selection and New Session](./implement-agent-selection-new-session.md) — keep the selected-agent marker correct across reopen/reload and make agent selection start a new chat/session with that agent.
 - [Inline Agent Selector on ACP Chat Surface](./implement-selected-agent-view-title.md) — replace the robot title action with an always-visible searchable agent selector inside the shared chat header while retaining QuickPick as a Command Palette fallback.
 - [Assistant Turn Navigation](./implement-assistant-turn-navigation.md) — jump quickly between completed assistant response turns in the chat transcript.

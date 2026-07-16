@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 import { TranscriptStore } from "../../features/multi-session/transcript-store";
 import { WorkspaceMutationCoordinator } from "../../features/multi-session/workspace-mutation-coordinator";
 import { MultiSessionHostController } from "../../features/multi-session/host";
+import { activeSessionBindingKey } from "../../features/multi-session/active-session-persistence";
 
 class TestMemento implements vscode.Memento {
   private readonly state = new Map<string, unknown>();
@@ -46,13 +47,21 @@ class FakeSessionManager {
 
   syncCapabilities(): void {}
 
+  newPromise?: Promise<void>;
+
   async newSession(): Promise<{ sessionId: string }> {
     this.newCalls += 1;
+    if (this.newPromise) await this.newPromise;
     return { sessionId: this.nextSessionIds.shift() ?? `acp-${this.newCalls}` };
   }
 
+  loadError?: unknown;
+  loadPromise?: Promise<void>;
+
   async loadSession(sessionId: string): Promise<{ sessionId: string }> {
     this.loadCalls.push(sessionId);
+    if (this.loadPromise) await this.loadPromise;
+    if (this.loadError) throw this.loadError;
     return { sessionId };
   }
 
@@ -443,7 +452,7 @@ suite("multi-session feature", () => {
     assert.strictEqual(oldSession?.status, "running");
     assert.strictEqual(oldSession?.agentId, runningAgentId);
     assert.strictEqual(activeSession?.agentId, "opencode");
-    assert.strictEqual(activeSession?.status, "draft");
+    assert.strictEqual(activeSession?.status, "error");
     assert.strictEqual(activeSession?.lastError, "opencode failed");
     assert.strictEqual(clients.length, 2);
     assert.strictEqual(managers[1].newCalls, 0);
@@ -464,8 +473,7 @@ suite("multi-session feature", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.strictEqual(clients[0].cancelCalls, 0);
     assert.strictEqual(clients.length, 2);
-    // New Chat no longer creates an ACP session immediately
-    assert.strictEqual(managers[1].newCalls, 0);
+    assert.strictEqual(managers[1].newCalls, 1);
     assert.strictEqual(clients[1].state, "connected");
 
     const promptB = controller.sendActiveMessage("B");
@@ -1263,7 +1271,7 @@ suite("multi-session feature", () => {
             session.localSessionId ===
             controller.getStateForTest().activeLocalSessionId
         );
-      assert.strictEqual(active?.status, "draft");
+      assert.strictEqual(active?.status, "error");
       assert.match(active?.lastError ?? "", /Maximum concurrent sessions/);
       clients[0].resolvePrompt();
       await promptA;
@@ -1342,6 +1350,28 @@ suite("multi-session feature", () => {
     assert.strictEqual(managers[2].listCalls, 0);
     assert.deepStrictEqual(managers[0].deleteCalls, ["pi-history"]);
     assert.deepStrictEqual(managers[1].deleteCalls, []);
+    controller.dispose();
+  });
+
+  test("explicit missing history load reports error without creating replacement", async () => {
+    const { controller, managers } = createController(undefined, {
+      configureManager: (manager) => {
+        manager.loadError = new Error("Session not found");
+      },
+    });
+
+    await controller.loadHistorySession("missing-history");
+
+    const active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
+      );
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active?.status, "error");
+    assert.match(active?.lastError ?? "", /Session not found/);
     controller.dispose();
   });
 
@@ -1445,7 +1475,7 @@ suite("multi-session feature", () => {
     await controller.newChat();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // Draft is created but no ACP session yet
+    // newChat now creates the ACP session immediately with the expected session ID
     let active = controller
       .getStateForTest()
       .sessions.find(
@@ -1453,10 +1483,10 @@ suite("multi-session feature", () => {
           session.localSessionId ===
           controller.getStateForTest().activeLocalSessionId
       );
-    assert.strictEqual(active?.acpSessionId, undefined);
-    assert.strictEqual(active?.title, "Untitled chat");
+    assert.strictEqual(active?.acpSessionId, fullSessionId);
+    assert.strictEqual(active?.title, `Pi ${fullSessionId}`);
 
-    // First send creates the ACP session with the expected session ID
+    // Title update from session_info emits a session state delta
     const prompt = controller.sendActiveMessage("hello");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1580,7 +1610,7 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("ready auto-starts runtime without creating an ACP session", async () => {
+  test("ready creates a new ACP session immediately", async () => {
     const { controller, clients, managers } = createController();
 
     await controller.handleMessage({ type: "feature.multi-session.ready" });
@@ -1594,9 +1624,9 @@ suite("multi-session feature", () => {
       )!;
     assert.strictEqual(clients.length, 1);
     assert.strictEqual(clients[0].state, "connected");
-    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(managers[0].newCalls, 1);
     assert.strictEqual(active.status, "idle");
-    assert.strictEqual(active.acpSessionId, undefined);
+    assert.strictEqual(active.acpSessionId, "acp-1");
     controller.dispose();
   });
 
@@ -1608,11 +1638,11 @@ suite("multi-session feature", () => {
 
     assert.strictEqual(clients.length, 1);
     assert.strictEqual(clients[0].connectCalls, 1);
-    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(managers[0].newCalls, 1);
     controller.dispose();
   });
 
-  test("failed ready auto-start leaves retryable draft state", async () => {
+  test("failed ready auto-start leaves retryable error state", async () => {
     const { controller, messages, clients, managers } = createController(
       (client) => {
         client.connectError = new Error("connect failed");
@@ -1637,46 +1667,405 @@ suite("multi-session feature", () => {
     assert.strictEqual(clients.length, 1);
     assert.strictEqual(clients[0].disposeCalls, 1);
     assert.strictEqual(managers[0].newCalls, 0);
-    assert.strictEqual(active.status, "draft");
+    assert.strictEqual(active.status, "error");
     assert.match(active.lastError ?? "", /connect failed/);
     assert.strictEqual(errors.length, 1);
     controller.dispose();
   });
 
-  test("send during pending ready auto-start reuses runtime and creates one ACP session", async () => {
-    let releaseConnect!: () => void;
-    let resolveConnectStarted!: () => void;
-    const connectStarted = new Promise<void>((resolve) => {
-      resolveConnectStarted = resolve;
+  test("invalid persisted agent binding is cleared after fallback draft creation", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "unknown-agent",
+      sessionId: "stale-session",
+      cwd: process.cwd(),
     });
-    const { controller, clients, managers } = createController((client) => {
-      client.connectPromise = new Promise<void>((resolve) => {
-        releaseConnect = resolve;
-        resolveConnectStarted();
-      });
+
+    const { controller } = createController(undefined, { state });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(state.get(key), undefined);
+    assert.strictEqual(controller.getStateForTest().sessions.length, 1);
+    controller.dispose();
+  });
+
+  test("malformed persisted binding is cleared through the serialized host path", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "",
+      cwd: process.cwd(),
+    });
+
+    const { controller } = createController(undefined, { state });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(state.get(key), undefined);
+    controller.dispose();
+  });
+
+  test("ready restores persisted supported session without creating new", async () => {
+    const state = new TestMemento();
+    await state.update(activeSessionBindingKey(process.cwd()), {
+      agentId: "pi",
+      sessionId: "saved-1",
+      cwd: process.cwd(),
+      title: "Saved chat",
+    });
+    const { controller, managers } = createController(undefined, { state });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller.getStateForTest().sessions[0];
+    assert.strictEqual(managers[0].loadCalls[0], "saved-1");
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.acpSessionId, "saved-1");
+    assert.strictEqual(active.status, "idle");
+    controller.dispose();
+  });
+
+  test("unsupported persisted load creates new ACP session", async () => {
+    const state = new TestMemento();
+    await state.update(activeSessionBindingKey(process.cwd()), {
+      agentId: "pi",
+      sessionId: "saved-2",
+      cwd: process.cwd(),
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.supportsLoadSession = false;
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller.getStateForTest().sessions[0];
+    assert.deepStrictEqual(managers[0].loadCalls, []);
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(active.acpSessionId, "acp-1");
+    controller.dispose();
+  });
+
+  test("missing persisted load clears binding and creates replacement", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "missing-1",
+      cwd: process.cwd(),
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = new Error("Session not found");
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(
+      controller.getStateForTest().sessions[0].acpSessionId,
+      "acp-1"
+    );
+    assert.strictEqual(state.get<any>(key)?.sessionId, "acp-1");
+    controller.dispose();
+  });
+
+  test("generic persisted load error remains error and retains binding", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "saved-err",
+      cwd: process.cwd(),
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = new Error("backend unavailable");
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller.getStateForTest().sessions[0];
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(active.status, "error");
+    assert.strictEqual(active.acpSessionId, undefined);
+    assert.strictEqual(state.get<any>(key)?.sessionId, "saved-err");
+    controller.dispose();
+  });
+
+  test("unrelated invalid params do not discard a persisted session", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "saved-invalid-params",
+      cwd: process.cwd(),
+    });
+    const error = Object.assign(new Error("cwd must be absolute"), {
+      code: -32602,
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = error;
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(
+      controller.getStateForTest().sessions[0].status,
+      "error"
+    );
+    assert.strictEqual(state.get<any>(key)?.sessionId, "saved-invalid-params");
+    controller.dispose();
+  });
+
+  test("string error data identifies a missing persisted session", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "missing-string-data",
+      cwd: process.cwd(),
+    });
+    const error = Object.assign(new Error("Invalid params"), {
+      code: -32602,
+      data: "Unknown sessionId: missing-string-data",
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = error;
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(state.get<any>(key)?.sessionId, "acp-1");
+    controller.dispose();
+  });
+
+  test("session-specific invalid params replace a missing persisted session", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "pi",
+      sessionId: "missing-invalid-params",
+      cwd: process.cwd(),
+    });
+    const error = Object.assign(
+      new Error("Unknown sessionId: missing-invalid-params"),
+      { code: -32602 }
+    );
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = error;
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(state.get<any>(key)?.sessionId, "acp-1");
+    controller.dispose();
+  });
+
+  test("retry reuses pending resume target with fresh runtime", async () => {
+    const state = new TestMemento();
+    await state.update(activeSessionBindingKey(process.cwd()), {
+      agentId: "pi",
+      sessionId: "retry-target",
+      cwd: process.cwd(),
+    });
+    let fail = true;
+    const { controller, clients, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        if (fail) manager.loadError = new Error("backend unavailable");
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+    const localSessionId =
+      controller.getStateForTest().sessions[0].localSessionId;
+    fail = false;
+    await controller.handleMessage({
+      type: "feature.multi-session.retry",
+      localSessionId,
+    });
+
+    assert.strictEqual(clients.length, 2);
+    assert.strictEqual(managers[1].loadCalls[0], "retry-target");
+    assert.strictEqual(
+      controller.getStateForTest().sessions[0].acpSessionId,
+      "retry-target"
+    );
+    controller.dispose();
+  });
+
+  test("failed retry restores the existing transcript surface", async () => {
+    let clientCount = 0;
+    const { controller } = createController(undefined, {
+      configureManager: (manager) => {
+        clientCount += 1;
+        if (clientCount === 2) {
+          manager.loadError = new Error("backend unavailable");
+        }
+      },
+    });
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+    const sessionId = controller.getStateForTest().activeLocalSessionId!;
+    const managedSession = (controller as any).sessions.get(sessionId);
+    managedSession.transcript.append({ type: "userMessage", text: "keep me" });
+    managedSession.status = "error";
+
+    await controller.retry(sessionId);
+
+    const snapshot = (managedSession.transcript as TranscriptStore).snapshot();
+    assert.strictEqual(managedSession.status, "error");
+    assert.strictEqual(
+      snapshot.some((event) => event.message.text === "keep me"),
+      true
+    );
+    controller.dispose();
+  });
+
+  test("retry reloads an established ACP session on a fresh runtime", async () => {
+    const { controller, clients, managers } = createController();
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+    const sessionId = controller.getStateForTest().activeLocalSessionId!;
+    const managedSession = (controller as any).sessions.get(sessionId);
+    managedSession.status = "error";
+    managedSession.lastError = "transport failed";
+
+    await controller.retry(sessionId);
+
+    assert.strictEqual(clients.length, 2);
+    assert.deepStrictEqual(managers[1].loadCalls, ["acp-1"]);
+    assert.strictEqual(managers[1].newCalls, 0);
+    assert.strictEqual(controller.getStateForTest().sessions[0].status, "idle");
+    assert.strictEqual(
+      controller.getStateForTest().sessions[0].lastError,
+      undefined
+    );
+    controller.dispose();
+  });
+
+  test("send joins deferred ready-time newSession; exactly one new; prompt waits", async () => {
+    let releaseNew!: () => void;
+    const newBlocked = new Promise<void>((resolve) => {
+      releaseNew = resolve;
+    });
+    const { controller, clients, managers } = createController(undefined, {
+      configureManager: (manager) => {
+        manager.newPromise = newBlocked;
+      },
     });
 
     const ready = controller.handleMessage({
       type: "feature.multi-session.ready",
     });
-    await connectStarted;
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const prompt = controller.sendActiveMessage("hello");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.strictEqual(clients.length, 1);
+    assert.strictEqual(managers[0].newCalls, 1);
     assert.strictEqual(clients[0].promptResolvers.length, 0);
 
-    releaseConnect();
+    releaseNew();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.strictEqual(clients.length, 1);
-    assert.strictEqual(clients[0].connectCalls, 1);
     assert.strictEqual(managers[0].newCalls, 1);
     assert.strictEqual(clients[0].promptResolvers.length, 1);
 
     clients[0].resolvePrompt();
     await prompt;
     await ready;
+    controller.dispose();
+  });
+
+  test("send joins deferred persisted restore; no new session; prompt waits", async () => {
+    const state = new TestMemento();
+    await state.update(activeSessionBindingKey(process.cwd()), {
+      agentId: "pi",
+      sessionId: "saved-deferred",
+      cwd: process.cwd(),
+    });
+    let releaseLoad!: () => void;
+    const loadBlocked = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    const { controller, clients, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadPromise = loadBlocked;
+      },
+    });
+
+    const ready = controller.handleMessage({
+      type: "feature.multi-session.ready",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepStrictEqual(managers[0].loadCalls, ["saved-deferred"]);
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(clients[0].promptResolvers.length, 0);
+
+    releaseLoad();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(clients[0].promptResolvers.length, 1);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    await ready;
+    controller.dispose();
+  });
+
+  test("send joins deferred explicit history load; no new", async () => {
+    let releaseLoad!: () => void;
+    const loadBlocked = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    const { controller, clients, managers } = createController(undefined, {
+      configureManager: (manager) => {
+        manager.loadPromise = loadBlocked;
+      },
+    });
+
+    const load = controller.loadHistorySession("history-deferred");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const prompt = controller.sendActiveMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepStrictEqual(managers[0].loadCalls, ["history-deferred"]);
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(clients[0].promptResolvers.length, 0);
+
+    releaseLoad();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.strictEqual(managers[0].newCalls, 0);
+    assert.strictEqual(clients[0].promptResolvers.length, 1);
+
+    clients[0].resolvePrompt();
+    await prompt;
+    await load;
     controller.dispose();
   });
 
@@ -1687,6 +2076,12 @@ suite("multi-session feature", () => {
         focusCalls.push("focusView");
       },
     });
+    const disposeEmitter = new vscode.EventEmitter<void>();
+    controller.attachView({
+      webview: { postMessage: async () => true } as any,
+      onDidDispose: disposeEmitter.event,
+      show: () => {},
+    } as any);
 
     await controller.newChat();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1702,9 +2097,13 @@ suite("multi-session feature", () => {
       (message) => message.type === "feature.multi-session.focusInput"
     );
     const state = controller.getStateForTest();
-    const snapshot = messages.find(
-      (message) => message.type === "feature.multi-session.snapshot"
-    );
+    const snapshot = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.multi-session.snapshot" &&
+          message.activeLocalSessionId === focusMessages[0].localSessionId
+      );
     assert.strictEqual(focusCalls.length, 1);
     assert.strictEqual(focusMessages.length, 1);
     assert.strictEqual(
@@ -1715,6 +2114,30 @@ suite("multi-session feature", () => {
       focusMessages[0].activationRevision,
       snapshot?.activationRevision
     );
+    assert.strictEqual(
+      typeof focusMessages[0].requestId === "string" &&
+        focusMessages[0].requestId.startsWith("focus-"),
+      true
+    );
+
+    await controller.handleMessage({
+      type: "feature.multi-session.focusInputArmed",
+      requestId: focusMessages[0].requestId as string,
+      localSessionId: focusMessages[0].localSessionId as string,
+      activationRevision: focusMessages[0].activationRevision as number,
+    });
+    const commit = messages.find(
+      (message) => message.type === "feature.multi-session.focusInputCommit"
+    );
+    assert.ok(commit);
+    assert.strictEqual(focusCalls.length, 2);
+
+    await controller.handleMessage({
+      type: "feature.multi-session.focusInputAck",
+      requestId: focusMessages[0].requestId as string,
+      localSessionId: focusMessages[0].localSessionId as string,
+      activationRevision: focusMessages[0].activationRevision as number,
+    });
     controller.dispose();
   });
 
@@ -1829,7 +2252,7 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("newChat does not call manager.newSession() by itself", async () => {
+  test("newChat creates an ACP session immediately", async () => {
     const { controller, clients, managers } = createController();
 
     await controller.newChat();
@@ -1840,13 +2263,13 @@ suite("multi-session feature", () => {
       (s) => s.localSessionId === state.activeLocalSessionId
     )!;
     assert.strictEqual(clients.length, 1);
-    assert.strictEqual(managers[0].newCalls, 0);
-    assert.strictEqual(active.acpSessionId, undefined);
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(typeof active.acpSessionId, "string");
     assert.strictEqual(active.status, "idle");
     controller.dispose();
   });
 
-  test("background connect failure does not reject newChat and leaves retryable draft", async () => {
+  test("background connect failure does not reject newChat and leaves retryable error", async () => {
     const { controller, messages, clients, managers } = createController(
       (client) => {
         client.connectError = new Error("connect failed");
@@ -1868,7 +2291,7 @@ suite("multi-session feature", () => {
     assert.strictEqual(clients.length, 1);
     assert.strictEqual(clients[0].disposeCalls, 1);
     assert.strictEqual(managers[0].newCalls, 0);
-    assert.strictEqual(active.status, "draft");
+    assert.strictEqual(active.status, "error");
     assert.match(active.lastError ?? "", /connect failed/);
     assert.strictEqual(errors.length, 1);
     controller.dispose();
@@ -1983,7 +2406,7 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("failed start chat republishes draft state instead of leaving starting visible", async () => {
+  test("failed start chat publishes error state instead of leaving starting visible", async () => {
     const { controller } = createController((client) => {
       client.connectError = new Error("connect failed");
     });
@@ -1995,12 +2418,42 @@ suite("multi-session feature", () => {
       (session: any) => session.localSessionId === state.activeLocalSessionId
     );
 
-    assert.strictEqual(active?.status, "draft");
+    assert.strictEqual(active?.status, "error");
     assert.match(active?.lastError ?? "", /connect failed/);
     controller.dispose();
   });
 
-  test("closing idle session disposes only its runtime", async () => {
+  test("close drops a stale request after session identity changes", async () => {
+    const { controller, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionId = controller.getStateForTest().activeLocalSessionId!;
+
+    const originalShowWarningMessage = vscode.window.showWarningMessage;
+    let resolveConfirmation!: (value: "Stop and Close") => void;
+    const confirmation = new Promise<"Stop and Close">((resolve) => {
+      resolveConfirmation = resolve;
+    });
+    (vscode.window as any).showWarningMessage = () => confirmation;
+
+    try {
+      const close = controller.close(sessionId);
+      const managedSession = (controller as any).sessions.get(sessionId);
+      managedSession.identityEpoch += 1;
+      resolveConfirmation("Stop and Close");
+      await close;
+
+      assert.strictEqual(controller.getStateForTest().sessions.length, 1);
+      assert.strictEqual(clients[0].cancelCalls, 0);
+    } finally {
+      (vscode.window as any).showWarningMessage = originalShowWarningMessage;
+      clients[0].resolvePrompt();
+      await prompt;
+      controller.dispose();
+    }
+  });
+
+  test("closing last session creates a new active ACP session", async () => {
     const { controller, clients } = createController();
     const prompt = controller.sendActiveMessage("A");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2008,12 +2461,19 @@ suite("multi-session feature", () => {
     await prompt;
     const sessionId = controller.getStateForTest().activeLocalSessionId!;
     await controller.close(sessionId);
+    // close schedules runtime start in background; wait for it to settle
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.strictEqual(clients[0].disposeCalls, 1);
     assert.strictEqual(controller.getStateForTest().sessions.length, 1);
     assert.strictEqual(
       controller.getStateForTest().sessions[0].status,
-      "draft"
+      "idle"
     );
+    assert.strictEqual(
+      typeof controller.getStateForTest().sessions[0].acpSessionId,
+      "string"
+    );
+    assert.strictEqual(clients.length, 2);
     controller.dispose();
   });
 

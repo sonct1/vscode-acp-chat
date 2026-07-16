@@ -49,6 +49,15 @@ suite("agents", () => {
       assert.strictEqual(claude?.command, "npx");
     });
 
+    test("should include Grok Build agent without changing default ordering", () => {
+      const grok = AGENTS.find((a) => a.id === "grok-build");
+      assert.ok(grok, "grok-build agent should exist");
+      assert.strictEqual(grok.name, "Grok Build");
+      assert.strictEqual(grok.command, "grok");
+      assert.deepStrictEqual(grok.args, ["--no-auto-update", "agent", "stdio"]);
+      assert.notStrictEqual(AGENTS[0]?.id, "grok-build");
+    });
+
     test("should not include bundled Antigravity agent by default", () => {
       const antigravity = AGENTS.find((a) => a.id === "antigravity");
       assert.strictEqual(antigravity, undefined);
@@ -97,6 +106,24 @@ suite("agents", () => {
       const pi = getAgent("pi");
       assert.strictEqual(pi?.name, "Custom Pi");
       assert.strictEqual(pi?.liveToolOutputProfile, undefined);
+    });
+
+    test("custom Grok Build id overrides built-in launch config", async () => {
+      const custom = {
+        id: "grok-build",
+        name: "Custom Grok",
+        command: "custom-grok",
+        args: ["agent", "stdio"],
+        availabilityCommand: "custom-grok",
+      };
+      await updateConfig("customAgents", [custom]);
+
+      const grok = getAgent("grok-build");
+      assert.ok(grok, "custom grok-build agent should be returned");
+      assert.strictEqual(grok.name, custom.name);
+      assert.strictEqual(grok.command, custom.command);
+      assert.deepStrictEqual(grok.args, custom.args);
+      assert.strictEqual(grok.availabilityCommand, custom.availabilityCommand);
     });
   });
 

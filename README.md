@@ -12,7 +12,7 @@
 
 ## 🚀 Features
 
-- **Multi-Agent Support** — Connect to OpenCode, Pi, Antigravity (experimental opt-in), Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
+- **Multi-Agent Support** — Connect to OpenCode, Grok Build, Pi, Antigravity (experimental opt-in), Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
 - **Native Chat Interface** — Integrated sidebar chat that feels like a native part of VS Code.
 - **Context-Aware** — Send code selections or terminal output directly to the chat via context menus.
 - **Tool Visibility** — See what commands the AI runs with expandable input/output and file diffs.
@@ -35,6 +35,7 @@ You need at least one ACP-compatible agent installed and available in your `$PAT
 - **[Pi](https://github.com/earendil-works/pi)**: `npm install -g @earendil-works/pi-coding-agent`
 - **[Claude Code](https://claude.ai/code)**: `npm install -g @anthropic-ai/claude-code`
 - **[Gemini CLI](https://github.com/google/gemini-cli)**: `npm install -g @google/gemini-cli`
+- **[Grok Build](https://github.com/xai-org/grok-build)**: install the official `grok` CLI, then run `grok login`
 - **[Google Antigravity](https://antigravity.google/)** (experimental bundled adapter, disabled by default): install the official `agy` CLI separately, then run `agy` and `agy models` in an interactive terminal before enabling `vscode-acp-chat.antigravity.enabled`.
 
 > [!IMPORTANT]
@@ -63,6 +64,7 @@ The extension automatically detects installed agents by checking your system's `
 | Agent          | Command                                     | Detection      |
 | -------------- | ------------------------------------------- | -------------- |
 | OpenCode       | `opencode acp`                              | Checks `$PATH` |
+| Grok Build     | `grok --no-auto-update agent stdio`         | Checks `grok`  |
 | Pi             | bundled `pi-acp` adapter                    | Checks `pi`    |
 | Antigravity    | bundled experimental adapter                | Checks `agy`   |
 | Claude Code    | `npx @agentclientprotocol/claude-agent-acp` | Checks `$PATH` |
@@ -79,6 +81,25 @@ The extension automatically detects installed agents by checking your system's `
 | Qwen Code      | `qwen --acp`                                | Checks `$PATH` |
 | Kiro CLI       | `kiro-cli acp`                              | Checks `$PATH` |
 | Cursor Cli     | `agent acp`                                 | Checks `$PATH` |
+
+### Grok Build
+
+The built-in `grok-build` agent launches the installed official Grok Build CLI directly:
+
+```bash
+grok --no-auto-update agent stdio
+```
+
+Authenticate before connecting from VS Code:
+
+```bash
+grok login
+grok --version
+```
+
+`XAI_API_KEY` can be used when it is available to the VS Code Extension Host environment. The extension does not install Grok, manage its credentials, or start an interactive ACP authentication flow. Grok session loading is used when advertised; session listing falls back to the extension's local session metadata when Grok does not advertise `session/list`.
+
+A custom agent with `id: "grok-build"` replaces this built-in launch configuration.
 
 ### Antigravity (Experimental, opt-in)
 

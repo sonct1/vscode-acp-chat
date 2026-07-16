@@ -26,6 +26,7 @@ import {
   type ReleaseTerminalRequest,
   type ReleaseTerminalResponse,
   type InitializeResponse,
+  type NewSessionRequest,
   type NewSessionResponse,
   type PromptResponse,
   type SessionModeState,
@@ -101,6 +102,19 @@ export interface ContextUsageUpdate {
   used: number;
   size: number;
   cost?: { amount: number; currency: string } | null;
+}
+
+interface OldFormatNewSessionResponse extends NewSessionResponse {
+  models?: SessionModelState | null;
+}
+
+interface LegacySetSessionModelRequest {
+  sessionId: string;
+  modelId: string;
+}
+
+function isMethodNotFoundError(error: unknown): boolean {
+  return error instanceof acp.RequestError && error.code === -32601;
 }
 
 /**
@@ -954,16 +968,18 @@ export class ACPClient {
       throw new Error("Not connected");
     }
 
-    const response = await this.agentCtx.request(
-      acp.methods.agent.session.new,
-      {
-        cwd: workingDirectory,
-        mcpServers: this.filterAndConvertMcpServers(
-          this.mcpServerConfigs,
-          this.agentCapabilities?.mcpCapabilities
-        ),
-      }
-    );
+    const request: NewSessionRequest = {
+      cwd: workingDirectory,
+      mcpServers: this.filterAndConvertMcpServers(
+        this.mcpServerConfigs,
+        this.agentCapabilities?.mcpCapabilities
+      ),
+    };
+
+    const response = await this.agentCtx.request<
+      OldFormatNewSessionResponse,
+      NewSessionRequest
+    >(acp.methods.agent.session.new, request);
 
     this.currentSessionId = response.sessionId;
 
@@ -980,6 +996,7 @@ export class ACPClient {
     }
 
     // Fall back to old format if configOptions didn't provide model/mode
+    models = models ?? response.models ?? null;
     modes = modes ?? response.modes ?? null;
 
     // Fall back to existing session metadata
@@ -1072,17 +1089,33 @@ export class ACPClient {
       throw new Error("No active session");
     }
 
-    // Use setSessionConfigOption (returns configOptions for metadata update)
-    const response = await this.agentCtx.request(
-      acp.methods.agent.session.setConfigOption,
-      {
-        sessionId: this.currentSessionId,
-        configId: "model",
-        value: modelId,
+    try {
+      const response = await this.agentCtx.request(
+        acp.methods.agent.session.setConfigOption,
+        {
+          sessionId: this.currentSessionId,
+          configId: "model",
+          value: modelId,
+        }
+      );
+      if (response.configOptions) {
+        this.updateSessionMetadataFromConfigOptions(response.configOptions);
       }
-    );
-    if (response.configOptions) {
-      this.updateSessionMetadataFromConfigOptions(response.configOptions);
+    } catch (error) {
+      if (!isMethodNotFoundError(error)) {
+        throw error;
+      }
+
+      await this.agentCtx.request<unknown, LegacySetSessionModelRequest>(
+        "session/set_model",
+        {
+          sessionId: this.currentSessionId,
+          modelId,
+        }
+      );
+      if (this.sessionMetadata?.models) {
+        this.sessionMetadata.models.currentModelId = modelId;
+      }
     }
   }
 

@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+- Add Grok Build as a built-in external ACP agent using `grok --no-auto-update agent stdio`, with custom `grok-build` overrides, old-format ACP model metadata compatibility, and legacy model-selection fallback.
 - Add an experimental bundled Google Antigravity ACP adapter behind the opt-in `vscode-acp-chat.antigravity.enabled` setting. It uses the official `agy` CLI and existing OAuth/keyring session, checks `agy` availability, and remains overrideable by a custom agent with `id: "antigravity"`.
 
 ### BREAKING CHANGES
