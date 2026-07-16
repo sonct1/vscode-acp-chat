@@ -245,12 +245,12 @@
         },
         "vscode-acp-chat.antigravity.enabled": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Enable the bundled experimental Antigravity ACP adapter. Google states that third-party access using Antigravity OAuth may violate the Antigravity Terms of Service and may result in account suspension or termination. See https://antigravity.google/terms and https://antigravity.google/docs/faq before enabling."
         },
         "vscode-acp-chat.swarmAgent.enabled": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Enable the bundled experimental Swarm ACP root orchestrator. Swarm reads user-defined roles and workflows from the workspace and can spawn multiple worker ACP agents."
         },
         "vscode-acp-chat.swarmAgent.configDirectory": {
