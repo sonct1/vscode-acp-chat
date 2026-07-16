@@ -1855,6 +1855,38 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
+  test("Codex no-rollout persisted load error creates a replacement", async () => {
+    const state = new TestMemento();
+    const key = activeSessionBindingKey(process.cwd());
+    await state.update(key, {
+      agentId: "codex",
+      sessionId: "019f6b9a-6ab8-7873-901a-1e17e915e5d6",
+      cwd: process.cwd(),
+    });
+    const error = Object.assign(new Error("Internal error"), {
+      code: -32603,
+      data: {
+        details:
+          "no rollout found for thread id 019f6b9a-6ab8-7873-901a-1e17e915e5d6",
+      },
+    });
+    const { controller, managers } = createController(undefined, {
+      state,
+      configureManager: (manager) => {
+        manager.loadError = error;
+      },
+    });
+
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
+
+    const active = controller.getStateForTest().sessions[0];
+    assert.strictEqual(managers[0].newCalls, 1);
+    assert.strictEqual(active.status, "idle");
+    assert.strictEqual(active.acpSessionId, "acp-1");
+    assert.strictEqual(state.get<any>(key)?.sessionId, "acp-1");
+    controller.dispose();
+  });
+
   test("session-specific invalid params replace a missing persisted session", async () => {
     const state = new TestMemento();
     const key = activeSessionBindingKey(process.cwd());

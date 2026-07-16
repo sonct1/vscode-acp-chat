@@ -123,13 +123,22 @@ function isMissingSessionError(error: unknown): boolean {
     ) {
       return true;
     }
+    const dataDetails = dataRecord.details;
+    if (
+      typeof dataDetails === "string" &&
+      isMissingSessionMessage(dataDetails)
+    ) {
+      return true;
+    }
   }
   const message = record.message;
   return typeof message === "string" && isMissingSessionMessage(message);
 }
 
 function isMissingSessionMessage(message: string): boolean {
-  return /session not found|unknown sessionid|no such session/i.test(message);
+  return /session not found|unknown sessionid|no such session|no rollout found/i.test(
+    message
+  );
 }
 
 export interface MultiSessionRuntimeClient {
