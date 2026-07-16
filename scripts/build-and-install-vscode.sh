@@ -20,7 +20,8 @@ echo "==> Linting"
 npm run lint
 
 echo "==> Packaging VSIX: ${VSIX_PATH}"
-npx vsce package --out "$VSIX_PATH"
+# --no-dependencies skips npm dependency validation which is incompatible with pnpm
+npx vsce package --no-dependencies --out "$VSIX_PATH"
 
 echo "==> Installing extension into VS Code"
 code --install-extension "$VSIX_PATH" --force
