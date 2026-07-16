@@ -4,7 +4,9 @@ import { SwarmCapabilityProxy } from "../../features/swarm-agent/adapter/capabil
 import { SwarmEvidenceStore } from "../../features/swarm-agent/adapter/evidence-store";
 import { SwarmLockManager } from "../../features/swarm-agent/adapter/lock-manager";
 import { renderStepPrompt } from "../../features/swarm-agent/adapter/prompt-renderer";
+import { parseSwarmRootRouteDecision } from "../../features/swarm-agent/adapter/route-parser";
 import { SwarmWorkflowEngine } from "../../features/swarm-agent/adapter/workflow-engine";
+import { validateSwarmRuntimeConfig } from "../../features/swarm-agent/types";
 import type {
   SwarmRuntimeConfig,
   SwarmWorkflowConfig,
@@ -203,6 +205,81 @@ suite("features/swarm-agent adapter", () => {
     assert.strictEqual(evidence.getViolations()[0].capability, "terminal");
   });
 
+  test("root route parser accepts only strict direct/workflow decisions", () => {
+    const config = runtimeConfig({ id: "default", steps: [{ id: "s", role: "r", prompt: "", dependsOn: [], requiresLocks: [], produces: [], onFailure: "stop", retryLimit: 0 }] });
+    config.workflows.other = { id: "other", steps: [{ id: "s", role: "r", prompt: "", dependsOn: [], requiresLocks: [], produces: [], onFailure: "stop", retryLimit: 0 }] };
+
+    assert.deepStrictEqual(parseSwarmRootRouteDecision('{"version":1,"action":"direct"}', config), { version: 1, action: "direct" });
+    assert.deepStrictEqual(parseSwarmRootRouteDecision('```json\n{"version":1,"action":"workflow","workflowId":"other"}\n```', config), { version: 1, action: "workflow", workflowId: "other" });
+    assert.throws(() => parseSwarmRootRouteDecision('{"version":1,"action":"workflow","workflowId":"missing"}', config));
+    assert.throws(() => parseSwarmRootRouteDecision('{"version":1,"action":"direct","workflowId":"default"}', config));
+    assert.throws(() => parseSwarmRootRouteDecision('prefix {"version":1,"action":"direct"}', config));
+    assert.throws(() => parseSwarmRootRouteDecision(`${"x".repeat(8193)}`, config));
+  });
+
+  test("root route parser rejects inherited prototype workflow ids", () => {
+    const config = runtimeConfig({ id: "default", steps: [{ id: "s", role: "r", prompt: "", dependsOn: [], requiresLocks: [], produces: [], onFailure: "stop", retryLimit: 0 }] });
+    assert.throws(() => parseSwarmRootRouteDecision('{"version":1,"action":"workflow","workflowId":"__proto__"}', config));
+    assert.throws(() => parseSwarmRootRouteDecision('{"version":1,"action":"workflow","workflowId":"constructor"}', config));
+    assert.throws(() => parseSwarmRootRouteDecision('{"version":1,"action":"workflow","workflowId":"toString"}', config));
+  });
+
+  test("runtime config rejects reserved workflow and role ids", () => {
+    for (const reservedId of ["__proto__", "constructor", "prototype", "toString"]) {
+      const input = {
+        version: 1,
+        workspaceRoot: process.cwd(),
+        rootRole: reservedId,
+        defaultWorkflow: reservedId,
+        maxWorkers: 1,
+        requireApprovalBeforeWrites: false,
+        testLockPatterns: [],
+        agents: [{ id: "pi", name: "Pi", command: "pi", args: [] }],
+        roles: Object.assign(Object.create(null), {
+          [reservedId]: { id: reservedId, agentId: "pi", capabilities: { read: true } },
+        }),
+        workflows: Object.assign(Object.create(null), {
+          [reservedId]: {
+            id: reservedId,
+            steps: [{ id: "s", role: reservedId, prompt: "" }],
+          },
+        }),
+        locks: { test_runner: { patterns: [] }, named: [] },
+      };
+
+      assert.throws(() => validateSwarmRuntimeConfig(input), /reserved registry id/);
+    }
+  });
+
+  test("evidence finalization payload preserves all steps and important trailing evidence", () => {
+    const evidence = new SwarmEvidenceStore();
+    for (const stepId of ["one", "two", "three", "final"]) {
+      evidence.startStep(stepId, "worker", 1);
+      evidence.finishStep({
+        stepId,
+        roleId: "worker",
+        state: "DONE",
+        output: `${stepId}-start-${"x".repeat(25_000)}-${stepId}-end`,
+      });
+    }
+    evidence.addViolation({
+      stepId: "final",
+      roleId: "worker",
+      capability: "write",
+      message: "denied write",
+    });
+
+    const monitorSummary = evidence.summarize("DONE");
+    const finalization = evidence.finalizationEvidence("DONE");
+    assert.ok(!monitorSummary.includes("final-end"));
+    for (const stepId of ["one", "two", "three", "final"]) {
+      assert.ok(finalization.includes(`${stepId}-start`));
+      assert.ok(finalization.includes(`${stepId}-end`));
+    }
+    assert.ok(finalization.includes("denied write"));
+    assert.ok(finalization.length <= 80_000);
+  });
+
   test("prompt renderer injects dependency outputs without root answer prefill", () => {
     const evidence = new SwarmEvidenceStore();
     evidence.startStep("research", "peer", 1);
@@ -254,12 +331,28 @@ function runtimeConfig(workflow: SwarmWorkflowConfig): SwarmRuntimeConfig {
   return {
     version: 1,
     workspaceRoot: process.cwd(),
+    rootRole: "root",
     defaultWorkflow: workflow.id,
     maxWorkers: 3,
     requireApprovalBeforeWrites: true,
     testLockPatterns: ["npm test"],
     agents: [{ id: "pi", name: "Pi", command: "pi", args: [] }],
-    roles: {},
+    roles: {
+      root: {
+        id: "root",
+        agentId: "pi",
+        capabilities: {
+          read: true,
+          write: false,
+          terminal: false,
+          allowFileDelete: false,
+          testLock: true,
+          allowedTerminalCommands: [],
+          requireApprovalBeforeWrite: false,
+          requireApprovalBeforeTerminal: false,
+        },
+      },
+    },
     workflows: { [workflow.id]: workflow },
     locks: { test_runner: { patterns: ["npm test"] }, named: [] },
   };

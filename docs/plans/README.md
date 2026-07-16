@@ -23,6 +23,7 @@ Current plans:
 - [Readable Inline Diff](./implement-readable-inline-diff.md) — improve inline edit/write diff readability with theme-aware styling, line numbers, hunk headers, full diff actions, and large-diff safeguards.
 - [Structured Diff Summary Bridge](./implement-structured-diff-summary-bridge.md) — record structured tool-call diffs into `DiffManager` so the diff summary panel covers non-`writeTextFile` edits.
 - [Bundled Pi ACP Agent](./implement-bundled-pi-agent.md) — ship Pi as a built-in agent by bundling/forking the `pi-acp` adapter into the extension.
+- [Built-in Grok Build ACP Agent](./implement-built-in-grok-build-agent.md) — add the official external `grok --no-auto-update agent stdio` runtime to the built-in catalog with generic old-format ACP model compatibility.
 - [Bundled Antigravity ACP Agent](./implement-bundled-antigravity-agent.md) — fork, harden, and bundle an opt-in Antigravity ACP adapter that reuses the installed `agy` CLI and its OAuth session.
 - [Pi ACP Full History Replay](./implement-pi-acp-full-history-replay.md) — fix bundled Pi history loading by replaying full active-path transcript from Pi JSONL files instead of compacted RPC state.
 - [Fast Chat History Loading](./implement-fast-chat-history-loading.md) — optimize agent-scoped history listing and restoration with Pi metadata indexing, paged cached pickers, single-pass multi-session publication, and finalized webview rendering.

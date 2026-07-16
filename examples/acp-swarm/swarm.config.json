@@ -1,4 +1,5 @@
 {
+  "rootRole": "root",
   "defaultWorkflow": "review-only",
   "maxWorkers": 2,
   "requireApprovalBeforeWrites": true,

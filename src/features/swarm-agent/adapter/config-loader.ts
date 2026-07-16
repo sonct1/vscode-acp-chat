@@ -1,3 +1,4 @@
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
@@ -13,6 +14,10 @@ import {
   type SwarmRuntimeConfig,
   type SwarmValidationIssue,
 } from "../types";
+
+const objectConstructor = Object as ObjectConstructor & { hasOwn?: (object: object, key: PropertyKey) => boolean };
+const hasOwn = (object: object, key: PropertyKey): boolean =>
+  objectConstructor.hasOwn?.(object, key) ?? Object.prototype.hasOwnProperty.call(object, key);
 
 export const DEFAULT_SWARM_CONFIG_DIRECTORY = ".vscode/acp-swarm";
 export const DEFAULT_SWARM_WORKFLOW = "default";
@@ -37,6 +42,7 @@ export interface SwarmRuntimeConfigMaterializeInput {
 
 const swarmConfigSchema = z
   .object({
+    rootRole: z.string().trim().min(1),
     defaultWorkflow: z.string().trim().min(1).optional(),
     maxWorkers: z.number().int().min(1).optional(),
     requireApprovalBeforeWrites: z.boolean().optional(),
@@ -70,8 +76,10 @@ export async function createSwarmRuntimeConfig(
     ? safeParseBaseConfig(baseConfig, issues)
     : undefined;
 
-  const roles = await readConfigDirectory(rolesDir, (id, value) =>
-    parseSwarmRoleConfig(id, value)
+  const roles = await readConfigDirectory(rolesDir, (id, value, filePath) =>
+    parseSwarmRoleConfig(id, value, {
+      materializePromptFile: (promptFile) => materializePromptFile(promptFile, filePath, input.configDirectory),
+    })
   );
   issues.push(...roles.issues);
 
@@ -88,6 +96,7 @@ export async function createSwarmRuntimeConfig(
   const runtime: SwarmRuntimeConfig = {
     version: SWARM_RUNTIME_CONFIG_VERSION,
     workspaceRoot: input.workspaceRoot,
+    rootRole: parsedBase?.rootRole ?? "",
     defaultWorkflow,
     maxWorkers: parsedBase?.maxWorkers ?? input.maxWorkers,
     requireApprovalBeforeWrites:
@@ -166,9 +175,9 @@ function safeParseBaseConfig(
 
 async function readConfigDirectory<T>(
   directory: string,
-  parse: (id: string, value: unknown) => T & { id: string }
+  parse: (id: string, value: unknown, filePath: string) => T & { id: string }
 ): Promise<{ values: Record<string, T>; issues: SwarmValidationIssue[] }> {
-  const values: Record<string, T> = {};
+  const values: Record<string, T> = Object.create(null) as Record<string, T>;
   const issues: SwarmValidationIssue[] = [];
   let entries: string[];
 
@@ -195,8 +204,8 @@ async function readConfigDirectory<T>(
     try {
       const text = await fs.readFile(filePath, "utf8");
       const parsed = JSON.parse(text) as unknown;
-      const value = parse(id, parsed);
-      if (values[value.id]) {
+      const value = parse(id, parsed, filePath);
+      if (hasOwn(values, value.id)) {
         issues.push({ path: filePath, message: `duplicate id "${value.id}"` });
       }
       values[value.id] = value;
@@ -206,4 +215,34 @@ async function readConfigDirectory<T>(
   }
 
   return { values, issues };
+}
+
+function materializePromptFile(
+  promptFile: string,
+  roleFilePath: string,
+  configDirectory: string
+): string {
+  const configRoot = nodeFs.realpathSync(path.resolve(configDirectory));
+  const roleDirectory = nodeFs.realpathSync(path.dirname(roleFilePath));
+  assertPathInsideConfig(configRoot, roleDirectory, promptFile);
+  const resolved = path.resolve(roleDirectory, promptFile);
+
+  const realResolved = nodeFs.realpathSync(resolved);
+  assertPathInsideConfig(configRoot, realResolved, promptFile);
+  return nodeFs.readFileSync(realResolved, "utf8");
+}
+
+function assertPathInsideConfig(
+  configRoot: string,
+  targetPath: string,
+  promptFile: string
+): void {
+  const relativeToConfig = path.relative(configRoot, targetPath);
+  if (
+    relativeToConfig === "" ||
+    relativeToConfig.startsWith("..") ||
+    path.isAbsolute(relativeToConfig)
+  ) {
+    throw new Error(`promptFile escapes Swarm config directory: ${promptFile}`);
+  }
 }

@@ -250,7 +250,7 @@
         },
         "vscode-acp-chat.swarmAgent.enabled": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Enable the bundled experimental Swarm ACP root orchestrator. Swarm reads user-defined roles and workflows from the workspace and can spawn multiple worker ACP agents."
         },
         "vscode-acp-chat.swarmAgent.configDirectory": {
@@ -261,7 +261,7 @@
         "vscode-acp-chat.swarmAgent.defaultWorkflow": {
           "type": "string",
           "default": "default",
-          "description": "Default Swarm workflow id to execute for new Swarm prompts."
+          "description": "Backward-compatible Swarm workflow id used only as a Root routing tie-break hint when workspace swarm.config.json does not override it. The configured rootRole decides per prompt whether to answer directly or run one workflow; malformed routing never auto-executes this workflow."
         },
         "vscode-acp-chat.swarmAgent.maxWorkers": {
           "type": "number",

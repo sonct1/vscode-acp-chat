@@ -79,6 +79,7 @@ export interface SwarmLockConfig {
 export interface SwarmRuntimeConfig {
   version: typeof SWARM_RUNTIME_CONFIG_VERSION;
   workspaceRoot: string;
+  rootRole: string;
   defaultWorkflow: string;
   maxWorkers: number;
   requireApprovalBeforeWrites: boolean;
@@ -103,6 +104,13 @@ export class SwarmConfigValidationError extends Error {
 }
 
 const nonEmptyString = z.string().trim().min(1);
+const RESERVED_REGISTRY_IDS = new Set(["__proto__", "constructor", "prototype", "toString"]);
+const registryId = nonEmptyString.refine((value) => !RESERVED_REGISTRY_IDS.has(value), {
+  message: "reserved registry id",
+});
+const objectConstructor = Object as ObjectConstructor & { hasOwn?: (object: object, key: PropertyKey) => boolean };
+const hasOwn = (object: object, key: PropertyKey): boolean =>
+  objectConstructor.hasOwn?.(object, key) ?? Object.prototype.hasOwnProperty.call(object, key);
 
 const partialCapabilitiesSchema = z
   .object({
@@ -120,7 +128,7 @@ const partialCapabilitiesSchema = z
 
 const roleInputSchema = z
   .object({
-    id: nonEmptyString.optional(),
+    id: registryId.optional(),
     displayName: z.string().optional(),
     agentId: nonEmptyString,
     mode: z.string().optional(),
@@ -133,7 +141,7 @@ const roleInputSchema = z
 const workflowStepInputSchema = z
   .object({
     id: nonEmptyString,
-    role: nonEmptyString,
+    role: registryId,
     prompt: z.string().default(""),
     dependsOn: z.array(nonEmptyString).optional(),
     requiresLocks: z.array(nonEmptyString).optional(),
@@ -145,7 +153,7 @@ const workflowStepInputSchema = z
 
 const workflowInputSchema = z
   .object({
-    id: nonEmptyString.optional(),
+    id: registryId.optional(),
     displayName: z.string().optional(),
     entry: nonEmptyString.optional(),
     final: nonEmptyString.optional(),
@@ -170,7 +178,8 @@ const runtimeConfigSchema = z
   .object({
     version: z.literal(SWARM_RUNTIME_CONFIG_VERSION),
     workspaceRoot: nonEmptyString,
-    defaultWorkflow: nonEmptyString,
+    rootRole: registryId,
+    defaultWorkflow: registryId,
     maxWorkers: z.number().int().min(1),
     requireApprovalBeforeWrites: z.boolean(),
     testLockPatterns: z.array(z.string()),
@@ -213,12 +222,17 @@ export function normalizeSwarmCapabilities(
 
 export function parseSwarmRoleConfig(
   idFromFile: string,
-  input: unknown
+  input: unknown,
+  options?: { materializePromptFile?: (promptFile: string) => string }
 ): SwarmRoleConfig {
   const parsed = roleInputSchema.parse(input);
-  const id = parsed.id ?? idFromFile;
+  const id = registryId.parse(parsed.id ?? idFromFile);
+  const prompt = parsed.prompt ?? (parsed.promptFile && options?.materializePromptFile
+    ? options.materializePromptFile(parsed.promptFile)
+    : parsed.prompt);
   return {
     ...parsed,
+    prompt,
     id,
     capabilities: normalizeSwarmCapabilities(parsed.capabilities),
   };
@@ -229,7 +243,7 @@ export function parseSwarmWorkflowConfig(
   input: unknown
 ): SwarmWorkflowConfig {
   const parsed = workflowInputSchema.parse(input);
-  const id = parsed.id ?? idFromFile;
+  const id = registryId.parse(parsed.id ?? idFromFile);
   return {
     ...parsed,
     id,
@@ -258,7 +272,7 @@ export function validateSwarmWorkflow(
     }
     stepIds.add(step.id);
 
-    if (!roles[step.role]) {
+    if (!hasOwn(roles, step.role)) {
       issues.push({ path: `${path}.role`, message: `unknown role "${step.role}"` });
     }
   }
@@ -317,8 +331,8 @@ export function validateSwarmRuntimeConfig(
   input: unknown
 ): SwarmRuntimeConfig {
   const parsed = runtimeConfigSchema.parse(input);
-  const roles: Record<string, SwarmRoleConfig> = {};
-  const workflows: Record<string, SwarmWorkflowConfig> = {};
+  const roles: Record<string, SwarmRoleConfig> = Object.create(null) as Record<string, SwarmRoleConfig>;
+  const workflows: Record<string, SwarmWorkflowConfig> = Object.create(null) as Record<string, SwarmWorkflowConfig>;
   const issues: SwarmValidationIssue[] = [];
 
   const agentIds = new Set<string>();
@@ -332,6 +346,9 @@ export function validateSwarmRuntimeConfig(
   for (const [id, value] of Object.entries(parsed.roles)) {
     try {
       const role = parseSwarmRoleConfig(id, value);
+      if (hasOwn(roles, role.id)) {
+        issues.push({ path: `roles.${role.id}`, message: "duplicate role id" });
+      }
       roles[role.id] = role;
       if (!agentIds.has(role.agentId)) {
         issues.push({
@@ -347,13 +364,23 @@ export function validateSwarmRuntimeConfig(
   for (const [id, value] of Object.entries(parsed.workflows)) {
     try {
       const workflow = parseSwarmWorkflowConfig(id, value);
+      if (hasOwn(workflows, workflow.id)) {
+        issues.push({ path: `workflows.${workflow.id}`, message: "duplicate workflow id" });
+      }
       workflows[workflow.id] = workflow;
     } catch (error) {
       issues.push(...zodIssues(`workflows.${id}`, error));
     }
   }
 
-  if (!workflows[parsed.defaultWorkflow]) {
+  if (!hasOwn(roles, parsed.rootRole)) {
+    issues.push({
+      path: "rootRole",
+      message: `unknown role "${parsed.rootRole}"`,
+    });
+  }
+
+  if (!hasOwn(workflows, parsed.defaultWorkflow)) {
     issues.push({
       path: "defaultWorkflow",
       message: `unknown workflow "${parsed.defaultWorkflow}"`,

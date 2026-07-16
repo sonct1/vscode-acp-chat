@@ -2,7 +2,7 @@
 
 | Attribute  | Value                                                                                                                                                                                                                                                                     |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status     | Phase 1-3 MVP implemented; Phase 4 monitor/bootstrap deferred                                                                                                                                                                                                              |
+| Status     | Phase 1-3 MVP implemented; autonomous Root routing implemented; Phase 4 monitor/bootstrap deferred                                                                                                                                                                          |
 | Owner      | TBD                                                                                                                                                                                                                                                                       |
 | Scope      | Built-in ACP agent catalog, bundled Swarm ACP adapter, configurable role/workflow infrastructure, dedicated worker sessions, monitor/state normalization, capability policy, locks, live progress UI, tests, packaging                                                     |
 | References | `src/acp/agents.ts`, `src/acp/client.ts`, `src/acp/session-output-pipeline.ts`, `src/acp/tool-output-presentation.ts`, `src/features/pi-agent/`, `src/features/antigravity-agent/`, `src/features/multi-session/`, `src/features/register-host.ts`, `esbuild.js` |
@@ -22,7 +22,7 @@ Extension chỉ cung cấp:
 - Department Monitor/state normalization.
 - Live progress/evidence channel về chat.
 
-User tự setup role và workflow trong workspace config. Các role như `planner`, `implementer`, `reviewer`, `proof-auditor`, `peer`, `red-team`, `security-reviewer`, `docs-writer` chỉ là ví dụ/preset mẫu, không phải role cố định của hệ thống.
+User tự setup Root role, role worker và workflow trong workspace config. `rootRole` là bắt buộc và phải tham chiếu tới một role có `agentId` resolve được. Root autonomous quyết định mỗi prompt là DIRECT hay một workflow cụ thể; `defaultWorkflow` chỉ còn là backward-compatible tie-break hint trong prompt routing, không phải workflow được auto-execute. Các role như `planner`, `implementer`, `reviewer`, `proof-auditor`, `peer`, `red-team`, `security-reviewer`, `docs-writer` chỉ là ví dụ/preset mẫu, không phải role cố định của hệ thống.
 
 Plan này áp dụng các ghi chú/thảo luận của Demonthorn như **design input thực nghiệm**, không coi đó là specification chính thức. Những giả thuyết như authority gradient được dùng để định hướng hạ tầng prompt/role autonomy, không dùng để “đánh lừa” model.
 
@@ -34,24 +34,24 @@ Plan này áp dụng các ghi chú/thảo luận của Demonthorn như **design 
 
 ```text
 .vscode/acp-swarm/
-├── swarm.config.toml
+├── swarm.config.json
 ├── roles/
-│   ├── root.toml
-│   ├── architect.toml
-│   ├── builder.toml
-│   ├── reviewer.toml
-│   ├── proof.toml
-│   └── docs-writer.toml
+│   ├── root.json
+│   ├── architect.json
+│   ├── builder.json
+│   ├── reviewer.json
+│   ├── proof.json
+│   └── docs-writer.json
 └── workflows/
-    ├── feature-dev.toml
-    ├── review-only.toml
-    └── docs-update.toml
+    ├── feature-dev.json
+    ├── review-only.json
+    └── docs-update.json
 ```
 
-4. User chọn workflow khi gửi prompt, hoặc dùng workflow mặc định trong `swarm.config.toml`.
-5. Swarm Root đọc workflow config, spawn worker theo role/step đã cấu hình.
+4. User gửi prompt bình thường; configured `rootRole` chạy như một ACP Root agent thật và tự quyết định ẩn giữa DIRECT hoặc đúng một workflow.
+5. Nếu DIRECT, Root trả lời trực tiếp và không spawn worker. Nếu workflow, Swarm chạy workflow được Root chọn, không tự động chạy `defaultWorkflow` khi route lỗi.
 6. Monitor hiển thị worker status, lock status, evidence và live preview trong tool cards.
-7. Root tổng hợp kết quả theo output contract của workflow, không áp đặt một quy trình cố định.
+7. Sau workflow, Root tổng hợp evidence thành câu trả lời cuối; nếu tổng hợp rỗng/lỗi thì adapter fallback sang evidence summary.
 
 ## Current-state analysis
 
@@ -109,7 +109,7 @@ Core files chỉ được chứa integration nhỏ: import/register/config/dispa
 - Live worker cards trong chat qua ACP `tool_call`/`tool_call_update`.
 - Optional sample role/workflow templates để user tham khảo, không active mặc định.
 - Unit/integration tests cho config schema, workflow engine, state machine, locks, capability policy và agent catalog.
-- Build/package/install verification theo repo rules khi code implementation hoàn tất.
+- Run typecheck and compile-tests for autonomous routing changes; package/install only in a separate caller-verified release step.
 
 ### Out of scope for MVP
 
@@ -184,25 +184,27 @@ runProofAuditor();
 Thay vào đó:
 
 ```ts
-const workflow = loadWorkflow(config.defaultWorkflow);
+const route = await rootAgent.route(userPrompt, workflows);
+if (route.action === "direct") return rootAgent.answer(userPrompt);
+const workflow = loadWorkflow(route.workflowId);
 await workflowEngine.execute(workflow, userPrompt);
 ```
 
 Mọi role đều được resolve từ config:
 
-```toml
-# .vscode/acp-swarm/roles/security-reviewer.toml
-id = "security-reviewer"
-displayName = "Security Reviewer"
-agentId = "pi"
-mode = "review"
-promptFile = "./prompts/security-reviewer.md"
-
-[capabilities]
-read = true
-write = false
-terminal = "restricted"
-testLock = true
+```json
+{
+  "id": "security-reviewer",
+  "displayName": "Security Reviewer",
+  "agentId": "pi",
+  "promptFile": "./prompts/security-reviewer.md",
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "terminal": "restricted",
+    "testLock": true
+  }
+}
 ```
 
 ### 4. Dedicated worker sessions, không dùng sub-agent tool
@@ -221,39 +223,50 @@ Trong JavaScript runtime, “dedicated thread” được hiện thực bằng *
 
 Workflow là DAG hoặc step list có dependency rõ ràng:
 
-```toml
-# .vscode/acp-swarm/workflows/feature-dev.toml
-id = "feature-dev"
-displayName = "Feature Development"
-entry = "architecture"
-final = "summary"
+```json
+{
+  "id": "feature-dev",
+  "displayName": "Feature Development",
+  "entry": "architecture",
+  "final": "summary",
+  "steps": [
+    {
+      "id": "architecture",
+      "role": "architect",
+      "prompt": "Analyze the task and identify foundation risks.",
+      "produces": ["architecture-notes"]
+    }
+  ]
+}
+```
 
-[[steps]]
-id = "architecture"
-role = "architect"
-prompt = "Analyze the task and identify foundation risks."
-produces = ["architecture-notes"]
-
-[[steps]]
-id = "build"
-role = "builder"
-dependsOn = ["architecture"]
-prompt = "Implement according to architecture-notes and original task."
-requiresLocks = ["workspace_write"]
-produces = ["diff", "verification-log"]
-
-[[steps]]
-id = "review"
-role = "reviewer"
-dependsOn = ["build"]
-prompt = "Review diff and verification-log."
-produces = ["review-findings"]
-
-[[steps]]
-id = "summary"
-role = "root"
-dependsOn = ["review"]
-prompt = "Summarize outputs and unresolved risks."
+```json
+{
+  "id": "feature-dev",
+  "steps": [
+    {
+      "id": "build",
+      "role": "builder",
+      "dependsOn": ["architecture"],
+      "prompt": "Implement according to architecture-notes and original task.",
+      "requiresLocks": ["workspace_write"],
+      "produces": ["diff", "verification-log"]
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "dependsOn": ["build"],
+      "prompt": "Review diff and verification-log.",
+      "produces": ["review-findings"]
+    },
+    {
+      "id": "summary",
+      "role": "root",
+      "dependsOn": ["review"],
+      "prompt": "Summarize outputs and unresolved risks."
+    }
+  ]
+}
 ```
 
 Tên role và số lượng step là của user. MVP chỉ cần engine generic đủ chạy các step này.
@@ -335,11 +348,16 @@ MVP locks:
 
 Step có thể declare locks:
 
-```toml
-[[steps]]
-id = "integration-tests"
-role = "qa"
-requiresLocks = ["test_runner", "database"]
+```json
+{
+  "steps": [
+    {
+      "id": "integration-tests",
+      "role": "qa",
+      "requiresLocks": ["test_runner", "database"]
+    }
+  ]
+}
 ```
 
 Test lock có thể được acquire tự động bằng terminal command pattern matching trước khi forward `terminal/create` đến upstream client.
@@ -348,12 +366,15 @@ Test lock có thể được acquire tự động bằng terminal command patter
 
 Không hard-code reviewer/proof read-only. Read-only là capability policy của role hoặc step:
 
-```toml
-[capabilities]
-read = true
-write = false
-terminal = "restricted"
-allowFileDelete = false
+```json
+{
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "terminal": "restricted",
+    "allowFileDelete": false
+  }
+}
 ```
 
 Adapter enforce policy ở capability proxy:
@@ -375,9 +396,9 @@ Swarm hạ tầng không bắt buộc Foundation Gate. Thay vào đó ship optio
 ```text
 examples/acp-swarm/templates/
 ├── anti-patterns.md
-├── feature-dev.workflow.toml
-├── foundation-review.role.toml
-└── proof-auditor.role.toml
+├── feature-dev.workflow.json
+├── foundation-review.role.json
+└── proof-auditor.role.json
 ```
 
 User có thể copy vào workspace nếu muốn workflow có Foundation Gate, Balloon Pattern check, Lock Explosion check, v.v.
@@ -423,8 +444,8 @@ src/features/swarm-agent/
 
 examples/acp-swarm/
 ├── README.md
-├── roles/*.toml
-├── workflows/*.toml
+├── roles/*.json
+├── workflows/*.json
 └── templates/anti-patterns.md
 
 src/acp/agents.ts                   # add LiveToolOutputProfileId "bundled-swarm" and built-in Swarm config
@@ -979,7 +1000,7 @@ Needs coordination:
 
 ## Open questions
 
-- Config format MVP: TOML to match role config notes, or JSONC to avoid adding a TOML parser dependency?
+- Config format MVP: JSON/JSONC to avoid adding a TOML parser dependency?
 - Should missing `.vscode/acp-swarm/` show a setup error only, or offer bootstrap command automatically?
 - Should default workflow be selected by setting, command argument, or a lightweight prompt picker before first Swarm prompt?
 - Should each workflow step always spawn a fresh worker session, or allow reuse of a role session across multiple steps?
@@ -996,11 +1017,13 @@ Needs coordination:
 - [x] Test commands and file writes can be serialized through generic locks.
 - [x] Final summary reports workflow status, evidence, failures and blockers truthfully.
 - [x] Relevant automated tests pass.
-- [x] Production build, VSIX package and local install complete successfully.
+- [x] Production build, VSIX package and local install completed for the autonomous routing hardening.
 
 ## Implementation completion notes
 
 - Implemented the MVP with JSON config files (`swarm.config.json`, `roles/*.json`, `workflows/*.json`) instead of TOML to avoid adding a parser dependency.
 - Added the built-in `Swarm (Experimental)` agent behind `vscode-acp-chat.swarmAgent.enabled`; custom `id: "swarm"` agents still override it.
 - Added the bundled `dist/swarm-acp/index.mjs` build target, root orchestrator, generic DAG engine, dedicated worker ACP runtime, capability proxy, lock manager, monitor, prompt renderer, evidence summary, live output projection, tests, and example templates.
+- Added autonomous Root routing: configured `rootRole` decides DIRECT versus one configured workflow per prompt; malformed routing fails closed and never auto-runs `defaultWorkflow`.
+- Verified the latest hardening with `npm run check-types`, `npm run compile-tests`, 32 focused VS Code Swarm tests, `npm run lint` (0 errors; 3 pre-existing warnings), `npm run package`, `npx vsce package --no-dependencies`, and `code --install-extension ... --force`.
 - Deferred the optional bootstrap command and dedicated monitor panel; MVP progress is surfaced in existing chat tool cards.

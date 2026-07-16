@@ -35,9 +35,15 @@ export function runSwarmAcp(): void {
     )
     .connect(stream);
 
+  let shuttingDown = false;
   function shutdown(): void {
-    connection.close();
-    process.exit(0);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void (async () => {
+      await orchestrator.dispose();
+      connection.close();
+      process.exit(0);
+    })();
   }
 
   process.stdin.on("end", shutdown);

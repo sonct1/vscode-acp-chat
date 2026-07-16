@@ -28,6 +28,32 @@ async function updateConfig(key: string, value: unknown): Promise<void> {
   clearAgentsCacheForTest();
 }
 
+async function createMinimalConfigDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-config-"));
+  await fs.mkdir(path.join(dir, "roles"));
+  await fs.mkdir(path.join(dir, "workflows"));
+  await fs.writeFile(path.join(dir, "swarm.config.json"), JSON.stringify({ rootRole: "root", defaultWorkflow: "default" }));
+  await fs.writeFile(path.join(dir, "roles", "root.json"), JSON.stringify({ agentId: "pi" }));
+  await fs.writeFile(path.join(dir, "roles", "worker.json"), JSON.stringify({ agentId: "pi" }));
+  await fs.writeFile(
+    path.join(dir, "workflows", "default.json"),
+    JSON.stringify({ steps: [{ id: "step", role: "worker", prompt: "run" }] })
+  );
+  return dir;
+}
+
+async function materialize(dir: string) {
+  return createSwarmRuntimeConfig({
+    workspaceRoot: dir,
+    configDirectory: dir,
+    defaultWorkflow: "default",
+    maxWorkers: 4,
+    requireApprovalBeforeWrites: true,
+    testLockPatterns: ["npm test"],
+    agents: [{ id: "pi", name: "Pi", command: "pi", args: [] }],
+  });
+}
+
 suite("features/swarm-agent", () => {
   suite("agent catalog", () => {
     let originalEnabled: boolean | undefined;
@@ -89,12 +115,17 @@ suite("features/swarm-agent", () => {
       const base = {
         version: 1,
         workspaceRoot: process.cwd(),
+        rootRole: "root",
         defaultWorkflow: "feature-dev",
         maxWorkers: 2,
         requireApprovalBeforeWrites: true,
         testLockPatterns: ["npm test"],
         agents: [{ id: "pi", name: "Pi", command: "pi", args: ["acp"] }],
         roles: {
+          root: {
+            agentId: "pi",
+            capabilities: { read: true, write: false },
+          },
           "security-reviewer": {
             agentId: "pi",
             capabilities: { read: true, write: false },
@@ -115,6 +146,11 @@ suite("features/swarm-agent", () => {
       };
 
       assert.doesNotThrow(() => validateSwarmRuntimeConfig(base));
+
+      assert.throws(
+        () => validateSwarmRuntimeConfig({ ...base, rootRole: "missing" }),
+        SwarmConfigValidationError
+      );
 
       assert.throws(
         () =>
@@ -164,7 +200,11 @@ suite("features/swarm-agent", () => {
       await fs.mkdir(path.join(dir, "workflows"));
       await fs.writeFile(
         path.join(dir, "swarm.config.json"),
-        JSON.stringify({ defaultWorkflow: "review-only", locks: { named: ["database"] } })
+        JSON.stringify({ rootRole: "root", defaultWorkflow: "review-only", locks: { named: ["database"] } })
+      );
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", capabilities: { read: true, write: false } })
       );
       await fs.writeFile(
         path.join(dir, "roles", "peer.json"),
@@ -187,7 +227,9 @@ suite("features/swarm-agent", () => {
         agents: [{ id: "pi", name: "Pi", command: "pi", args: [], envKey: "ENV_KEY" }],
       });
 
+      assert.strictEqual(runtime.rootRole, "root");
       assert.strictEqual(runtime.defaultWorkflow, "review-only");
+      assert.ok(runtime.roles.root);
       assert.ok(runtime.roles.peer);
       assert.ok(runtime.workflows["review-only"]);
       assert.deepStrictEqual(runtime.locks.named, ["database"]);
@@ -198,6 +240,84 @@ suite("features/swarm-agent", () => {
       await fs.writeFile(file, JSON.stringify(runtime));
       const loaded = await loadSwarmRuntimeConfigFile(file);
       assert.strictEqual(loaded.workflows["review-only"].steps[0].role, "peer");
+    });
+
+    test("materializes promptFile relative to role file inside config directory", async () => {
+      const dir = await createMinimalConfigDir();
+      await fs.mkdir(path.join(dir, "prompts"));
+      await fs.writeFile(path.join(dir, "prompts", "root.md"), "Prompt from file");
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", promptFile: "../prompts/root.md" })
+      );
+
+      const runtime = await materialize(dir);
+
+      assert.strictEqual(runtime.roles.root.prompt, "Prompt from file");
+    });
+
+    test("inline prompt takes precedence over promptFile", async () => {
+      const dir = await createMinimalConfigDir();
+      await fs.mkdir(path.join(dir, "prompts"));
+      await fs.writeFile(path.join(dir, "prompts", "root.md"), "Prompt from file");
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", prompt: "Inline prompt", promptFile: "../prompts/root.md" })
+      );
+
+      const runtime = await materialize(dir);
+
+      assert.strictEqual(runtime.roles.root.prompt, "Inline prompt");
+    });
+
+    test("missing promptFile is rejected during materialization", async () => {
+      const dir = await createMinimalConfigDir();
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", promptFile: "missing.md" })
+      );
+
+      await assert.rejects(() => materialize(dir), /ENOENT|no such file/i);
+    });
+
+    test("promptFile escaping config directory is rejected", async () => {
+      const dir = await createMinimalConfigDir();
+      await fs.writeFile(path.join(path.dirname(dir), "outside.md"), "outside");
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", promptFile: "../../outside.md" })
+      );
+
+      await assert.rejects(() => materialize(dir), /escapes Swarm config directory/);
+    });
+
+    test("promptFile symlink escaping config directory is rejected", async () => {
+      const dir = await createMinimalConfigDir();
+      const outside = path.join(path.dirname(dir), "outside-symlink.md");
+      const link = path.join(dir, "prompts-link.md");
+      await fs.writeFile(outside, "outside");
+      await fs.symlink(outside, link);
+      await fs.writeFile(
+        path.join(dir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", promptFile: "../prompts-link.md" })
+      );
+
+      await assert.rejects(() => materialize(dir), /escapes Swarm config directory/);
+    });
+
+    test("promptFile works when config directory is addressed through a symlink", async () => {
+      const realDir = await createMinimalConfigDir();
+      await fs.writeFile(path.join(realDir, "prompt.md"), "symlink prompt");
+      await fs.writeFile(
+        path.join(realDir, "roles", "root.json"),
+        JSON.stringify({ agentId: "pi", promptFile: "../prompt.md" })
+      );
+      const linkedDir = `${realDir}-link`;
+      await fs.symlink(realDir, linkedDir, "dir");
+
+      const runtime = await materialize(linkedDir);
+
+      assert.strictEqual(runtime.roles.root.prompt, "symlink prompt");
     });
   });
 });

@@ -70,6 +70,9 @@ export class SwarmWorkerRuntime {
 
     await this.connect();
     await this.newSession();
+    if (this.options.role.mode) {
+      await this.setMode(this.options.role.mode);
+    }
 
     await this.options.monitor.worker({
       stepId: this.options.stepId,
@@ -95,12 +98,15 @@ export class SwarmWorkerRuntime {
   }
 
   async cancel(): Promise<void> {
-    if (this.agentContext && this.workerSessionId) {
-      await this.agentContext.notify(methods.agent.session.cancel, {
-        sessionId: this.workerSessionId,
-      });
+    try {
+      if (this.agentContext && this.workerSessionId) {
+        await this.agentContext.notify(methods.agent.session.cancel, {
+          sessionId: this.workerSessionId,
+        });
+      }
+    } finally {
+      this.dispose();
     }
-    this.dispose();
   }
 
   dispose(): void {
@@ -191,6 +197,21 @@ export class SwarmWorkerRuntime {
     });
     this.workerSessionId = response.sessionId;
     return response;
+  }
+
+  private async setMode(modeId: string): Promise<void> {
+    try {
+      await this.agentContext!.request(methods.agent.session.setConfigOption, {
+        sessionId: this.workerSessionId!,
+        configId: "mode",
+        value: modeId,
+      });
+    } catch {
+      await this.agentContext!.request(methods.agent.session.setMode, {
+        sessionId: this.workerSessionId!,
+        modeId,
+      });
+    }
   }
 
   private async handleSessionUpdate(
