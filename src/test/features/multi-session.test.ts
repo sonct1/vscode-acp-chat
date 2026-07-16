@@ -2141,7 +2141,7 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
-  test("activating existing session only focuses the view", async () => {
+  test("activating existing session requests input focus", async () => {
     const focusCalls: string[] = [];
     const { controller, messages } = createController(undefined, {
       onFocusChat: () => {
@@ -2157,13 +2157,14 @@ suite("multi-session feature", () => {
 
     controller.activateSession(firstSession, { focusChat: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await controller.handleMessage({ type: "feature.multi-session.ready" });
 
     assert.deepStrictEqual(focusCalls, ["focusView"]);
     assert.strictEqual(
       messages.some(
         (message) => message.type === "feature.multi-session.focusInput"
       ),
-      false
+      true
     );
     controller.dispose();
   });

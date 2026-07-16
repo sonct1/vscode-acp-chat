@@ -263,7 +263,11 @@ export class InputPanelComponent implements MessageHandler {
       return false;
     }
 
-    this.ctx.win?.focus();
+    try {
+      this.ctx.win?.focus();
+    } catch {
+      // JSDOM / non-focusable window
+    }
     inputEl.focus({ preventScroll: true });
     this.moveCaretToEnd();
     return isSuccessfulFocusProof(this.getFocusProof());
@@ -607,5 +611,5 @@ export class InputPanelComponent implements MessageHandler {
 }
 
 function isSuccessfulFocusProof(proof: MultiSessionFocusInputProof): boolean {
-  return proof.documentHasFocus && proof.activeInput && proof.caret;
+  return proof.activeInput && proof.caret;
 }

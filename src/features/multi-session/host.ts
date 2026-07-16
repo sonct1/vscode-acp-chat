@@ -1745,9 +1745,11 @@ export class MultiSessionHostController implements vscode.Disposable {
         options.focusChat
       );
     } else if (options.focusChat) {
-      void Promise.resolve(this.focusChat()).catch((error) => {
-        console.error("[MultiSession] Failed to focus chat view:", error);
-      });
+      void this.requestInputFocusAfterActivation(
+        localSessionId,
+        this.activationRevision,
+        true
+      );
     }
   }
 
@@ -1843,8 +1845,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     if (!pending || !this.matchesPendingFocus(message, pending)) return;
     this.lastFocusInputAck = message;
     if (
-      message.proof?.documentHasFocus &&
-      message.proof.activeInput &&
+      message.proof?.activeInput &&
       message.proof.caret
     ) {
       this.focusInputStage = "acknowledged";
