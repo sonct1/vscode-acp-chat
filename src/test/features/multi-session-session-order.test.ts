@@ -36,5 +36,6 @@ function createSession(
     createdAt,
     updatedAt,
     pendingPermissionCount,
+    pendingElicitationCount: 0,
   };
 }

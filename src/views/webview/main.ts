@@ -51,12 +51,17 @@ export class WebviewController implements MessageHandler {
   readonly auxiliaryPanels: AuxiliaryPanelsComponent;
   readonly chipRenderer: ChipRendererComponent;
 
+  getContext(): WebviewContext {
+    return this.ctx;
+  }
+
   private permissionDialog: PermissionDialog;
   private isConnected = false;
   private sessionTransitionLocked = false;
   private previousInputContentEditable: string | null = null;
   private previousSendDisabled: boolean | null = null;
   private previousAttachDisabled: boolean | null = null;
+  private restoreInputFocusAfterTransition = false;
 
   constructor(vscode: VsCodeApi, doc: Document, win: Window) {
     this.messageRouter = new MessageRouter();
@@ -149,6 +154,9 @@ export class WebviewController implements MessageHandler {
 
     const messageQueueResult = this.features?.messageQueue.handleMessage(msg);
     if (messageQueueResult === true) return true;
+
+    const elicitationResult = this.features?.acpElicitation.handleMessage(msg);
+    if (elicitationResult === true) return true;
 
     const multiSessionResult = this.features?.multiSession.handleMessage(msg);
     if (multiSessionResult === true) return true;
@@ -310,6 +318,11 @@ export class WebviewController implements MessageHandler {
   }
 
   resetChatState(): void {
+    this.features?.acpElicitation.handleMessage({
+      type: "feature.acp-elicitation.show",
+      ownerId: "",
+      pendingElicitations: [],
+    });
     this.messageList.clear();
     this.inputPanel.autocomplete.hide();
     this.auxiliaryPanels.hidePlan();
@@ -384,13 +397,20 @@ export class WebviewController implements MessageHandler {
     const messagesContainer = this.messageList.elements.containerEl;
     const inputContainer = this.ctx.doc.getElementById("input-container");
 
+    if (value) {
+      this.restoreInputFocusAfterTransition =
+        this.ctx.doc.activeElement === inputEl ||
+        inputEl.contains(this.ctx.doc.activeElement);
+    }
+
     messagesContainer.setAttribute("aria-busy", value ? "true" : "false");
     inputContainer?.setAttribute("aria-busy", value ? "true" : "false");
     inputContainer?.toggleAttribute("inert", value);
     messagesContainer.toggleAttribute("inert", value);
 
     if (value) {
-      this.previousInputContentEditable = inputEl.getAttribute("contenteditable");
+      this.previousInputContentEditable =
+        inputEl.getAttribute("contenteditable");
       this.previousSendDisabled = sendBtn.disabled;
       this.previousAttachDisabled = attachImageBtn.disabled;
       inputEl.setAttribute("contenteditable", "false");
@@ -408,9 +428,14 @@ export class WebviewController implements MessageHandler {
     sendBtn.disabled = this.previousSendDisabled ?? sendBtn.disabled;
     attachImageBtn.disabled = this.previousAttachDisabled ?? false;
     this.inputPanel.updateInputState();
+    const restoreInputFocus = this.restoreInputFocusAfterTransition;
+    this.restoreInputFocusAfterTransition = false;
     this.previousInputContentEditable = null;
     this.previousSendDisabled = null;
     this.previousAttachDisabled = null;
+    if (restoreInputFocus) {
+      this.inputPanel.focus();
+    }
   }
 
   setTurnGenerating(value: boolean): void {

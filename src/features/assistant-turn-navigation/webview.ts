@@ -5,6 +5,7 @@ import type {
 } from "./types";
 
 const LABEL_MAX_LENGTH = 80;
+const READING_ANCHOR_EPSILON_PX = 1;
 
 export class AssistantTurnNavigationWebviewFeature {
   private readonly doc: Document;
@@ -103,14 +104,7 @@ export class AssistantTurnNavigationWebviewFeature {
   navigate(direction: AssistantTurnNavigationDirection): boolean {
     if (this.entries.length === 0) return false;
 
-    const baseIndex = this.getNavigationBaseIndex(direction);
-    const offset = direction === "previous" ? -1 : 1;
-    const nextIndex = Math.max(
-      0,
-      Math.min(this.entries.length - 1, baseIndex + offset)
-    );
-
-    this.jumpTo(nextIndex);
+    this.jumpTo(this.resolveNavigationTargetIndex(direction));
     return true;
   }
 
@@ -285,12 +279,12 @@ export class AssistantTurnNavigationWebviewFeature {
     this.activeIndex = this.findNearestIndexFromScroll();
   }
 
-  private getNavigationBaseIndex(
+  private resolveNavigationTargetIndex(
     direction: AssistantTurnNavigationDirection
   ): number {
     const focusedAssistant = this.getFocusedAssistantElement();
     if (focusedAssistant) {
-      return this.getBaseIndexForAnchor(focusedAssistant, direction);
+      return this.resolveTargetFromAssistant(focusedAssistant, direction);
     }
 
     if (
@@ -298,39 +292,92 @@ export class AssistantTurnNavigationWebviewFeature {
       this.activeIndex >= 0 &&
       this.activeIndex < this.entries.length
     ) {
-      return this.activeIndex;
+      return this.clampIndex(
+        this.activeIndex + (direction === "previous" ? -1 : 1)
+      );
     }
 
-    const anchor = this.getNavigationAnchorElement();
-    if (anchor) return this.getBaseIndexForAnchor(anchor, direction);
+    const lastFocusedAssistant = this.getLastFocusedAssistantElement();
+    if (lastFocusedAssistant) {
+      return this.resolveTargetFromAssistant(lastFocusedAssistant, direction);
+    }
+
+    const directionalIndex =
+      this.findDirectionalIndexFromReadingAnchor(direction);
+    if (directionalIndex >= 0) return directionalIndex;
 
     this.ensureActiveIndex();
-    return this.activeIndex;
+    return this.clampIndex(
+      this.activeIndex + (direction === "previous" ? -1 : 1)
+    );
   }
 
-  private getBaseIndexForAnchor(
+  private resolveTargetFromAssistant(
     element: HTMLElement,
     direction: AssistantTurnNavigationDirection
   ): number {
     const index = this.findEntryIndexByElement(element);
     if (index >= 0) {
-      this.activeIndex = index;
-      return index;
+      return this.clampIndex(index + (direction === "previous" ? -1 : 1));
     }
 
     const insertionIndex = this.findEntryInsertionIndex(element);
     if (insertionIndex >= 0) {
-      return direction === "previous" ? insertionIndex : insertionIndex - 1;
+      return this.clampIndex(
+        direction === "previous" ? insertionIndex - 1 : insertionIndex
+      );
     }
 
     this.ensureActiveIndex();
-    return this.activeIndex;
+    return this.clampIndex(
+      this.activeIndex + (direction === "previous" ? -1 : 1)
+    );
   }
 
-  private getNavigationAnchorElement(): HTMLElement | null {
-    return (
-      this.getViewportAssistantElement() ?? this.getLastFocusedAssistantElement()
+  private findDirectionalIndexFromReadingAnchor(
+    direction: AssistantTurnNavigationDirection
+  ): number {
+    const containerRect = this.messagesEl.getBoundingClientRect();
+    if (containerRect.height <= 0) return -1;
+
+    const anchorY =
+      containerRect.top + Math.max(24, containerRect.height * 0.25);
+    const positions = this.entries.map(
+      (entry) => entry.scrollTarget.getBoundingClientRect().top
     );
+    if (positions.some((top) => !Number.isFinite(top))) return -1;
+
+    if (direction === "next") {
+      let nextIndex = -1;
+      let nearestTop = Number.POSITIVE_INFINITY;
+      positions.forEach((top, index) => {
+        if (
+          top > anchorY + READING_ANCHOR_EPSILON_PX &&
+          top < nearestTop
+        ) {
+          nearestTop = top;
+          nextIndex = index;
+        }
+      });
+      return nextIndex >= 0 ? nextIndex : this.entries.length - 1;
+    }
+
+    let previousIndex = -1;
+    let nearestTop = Number.NEGATIVE_INFINITY;
+    positions.forEach((top, index) => {
+      if (
+        top < anchorY - READING_ANCHOR_EPSILON_PX &&
+        top >= nearestTop
+      ) {
+        nearestTop = top;
+        previousIndex = index;
+      }
+    });
+    return previousIndex >= 0 ? previousIndex : 0;
+  }
+
+  private clampIndex(index: number): number {
+    return Math.max(0, Math.min(this.entries.length - 1, index));
   }
 
   private getFocusedAssistantElement(): HTMLElement | null {

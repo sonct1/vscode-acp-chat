@@ -10,6 +10,7 @@ export type MultiSessionStatus =
   | "loading_history"
   | "idle"
   | "running"
+  | "awaiting_input"
   | "awaiting_permission"
   | "cancelling"
   | "error"
@@ -36,6 +37,7 @@ export interface MultiSessionListItem {
   createdAt: number;
   updatedAt: number;
   pendingPermissionCount: number;
+  pendingElicitationCount: number;
   lastError?: string;
 }
 
@@ -66,6 +68,7 @@ export interface MultiSessionSnapshot {
     status: string;
   }>;
   pendingPermissions?: MultiSessionRenderMessage[];
+  pendingElicitations?: import("../acp-elicitation/types").ElicitationFormView[];
   isGenerating: boolean;
   scrollToBottom?: boolean;
 }
@@ -74,6 +77,7 @@ export interface MultiSessionAggregate {
   open: number;
   running: number;
   awaitingPermission: number;
+  awaitingInput: number;
 }
 
 export interface MultiSessionChatStateMessage {
@@ -149,6 +153,11 @@ export type MultiSessionHostMessage =
   | { type: "feature.multi-session.resync" }
   | {
       type: "feature.multi-session.reviewPermission";
+      localSessionId: string;
+      focusChat?: boolean;
+    }
+  | {
+      type: "feature.multi-session.reviewInput";
       localSessionId: string;
       focusChat?: boolean;
     }

@@ -66,6 +66,7 @@ function createSession(
     agentName: "Test Agent",
     updatedAt: overrides.createdAt,
     pendingPermissionCount: 0,
+    pendingElicitationCount: 0,
     ...overrides,
   };
 }

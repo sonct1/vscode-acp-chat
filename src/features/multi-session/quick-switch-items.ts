@@ -22,9 +22,11 @@ export function buildMultiSessionQuickSwitchItems(
       label: `${statusGlyph(session)} ${session.title}`,
       detail: [
         session.localSessionId === state.activeLocalSessionId ? "Active" : "",
-        session.pendingPermissionCount > 0
-          ? "Needs permission"
-          : formatStatus(session.status),
+        session.pendingElicitationCount > 0
+          ? "Needs input"
+          : session.pendingPermissionCount > 0
+            ? "Needs permission"
+            : formatStatus(session.status),
         session.agentName,
         session.acpSessionId,
       ]
@@ -35,6 +37,7 @@ export function buildMultiSessionQuickSwitchItems(
 }
 
 function statusGlyph(session: MultiSessionListItem): string {
+  if (session.pendingElicitationCount > 0) return "?";
   if (session.pendingPermissionCount > 0) return "!";
   if (isRunningStatus(session.status)) return "●";
   if (session.status === "draft") return "◌";

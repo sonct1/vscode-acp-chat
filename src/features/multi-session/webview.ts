@@ -33,6 +33,7 @@ interface ChatAggregate {
   open: number;
   running: number;
   awaitingPermission: number;
+  awaitingInput: number;
 }
 
 interface SnapshotReplay {
@@ -57,6 +58,7 @@ export class MultiSessionWebviewController {
     open: 0,
     running: 0,
     awaitingPermission: 0,
+    awaitingInput: 0,
   };
   private lastSeqBySession: Record<string, number> = {};
   private drafts: Record<string, string> = {};
@@ -160,6 +162,7 @@ export class MultiSessionWebviewController {
         open: msg.aggregate.open ?? msg.sessions.length,
         running: msg.aggregate.running,
         awaitingPermission: msg.aggregate.awaitingPermission,
+        awaitingInput: msg.aggregate.awaitingInput,
       },
     });
   }
@@ -195,7 +198,10 @@ export class MultiSessionWebviewController {
     this.active = msg.active ?? this.active;
     this.aggregate = msg.aggregate;
     if (activeChanged && msg.activeLocalSessionId) {
-      this.clearStaleFocusInput(msg.activeLocalSessionId, msg.activationRevision);
+      this.clearStaleFocusInput(
+        msg.activeLocalSessionId,
+        msg.activationRevision
+      );
       this.showOptimisticLoading("Opening chat…");
       this.bridge.setSurfaceInteractionLocked?.(true);
     } else {
@@ -209,7 +215,9 @@ export class MultiSessionWebviewController {
   }
 
   private async applySnapshot(msg: MultiSessionSnapshot): Promise<void> {
-    if (!this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+    if (
+      !this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)
+    ) {
       return;
     }
 
@@ -290,6 +298,11 @@ export class MultiSessionWebviewController {
         type: "diffSummary",
         changes: msg.diffChanges ?? [],
       });
+      await this.bridge.dispatch({
+        type: "feature.acp-elicitation.show",
+        ownerId: msg.activeLocalSessionId,
+        pendingElicitations: msg.pendingElicitations ?? [],
+      });
       for (const permission of msg.pendingPermissions ?? []) {
         await this.bridge.dispatch(permission as ExtensionMessage);
       }
@@ -308,7 +321,9 @@ export class MultiSessionWebviewController {
       this.persistState();
       this.hasRenderedSnapshot = true;
     } catch (error) {
-      if (this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+      if (
+        this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)
+      ) {
         this.optimisticLoadingText = undefined;
         this.renderLoading();
         this.vscode.postMessage({ type: "feature.multi-session.resync" });
@@ -321,7 +336,9 @@ export class MultiSessionWebviewController {
       if (this.snapshotReplay === replay) {
         this.snapshotReplay = undefined;
       }
-      if (this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)) {
+      if (
+        this.isCurrentTarget(msg.activeLocalSessionId, msg.activationRevision)
+      ) {
         this.bridge.setSurfaceInteractionLocked?.(false);
         this.flushPendingFocusInput();
       }
@@ -505,6 +522,7 @@ export class MultiSessionWebviewController {
       active.status === "draft" ||
       active.status === "idle" ||
       active.status === "running" ||
+      active.status === "awaiting_input" ||
       active.status === "awaiting_permission" ||
       active.status === "error" ||
       active.status === "closed"

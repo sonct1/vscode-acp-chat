@@ -271,6 +271,10 @@ export interface ExtensionMessage {
   used?: number | null;
   size?: number | null;
   cost?: { amount: number; currency: string } | null;
+  ownerId?: string;
+  pendingElicitations?: unknown[];
+  errors?: Record<string, string>;
+  interactionId?: string;
   action?: string;
   actionLabel?: string;
   payloads?: unknown[];

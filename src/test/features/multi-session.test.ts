@@ -101,6 +101,11 @@ class FakeClient {
   sessionUpdate?: (update: unknown) => void;
   stateChange?: (state: string) => void;
   permissionRequest?: (params: unknown) => Promise<unknown>;
+  elicitationRequest?: (context: {
+    params: unknown;
+    requestId: string | number;
+    signal: AbortSignal;
+  }) => Promise<unknown>;
 
   async connect(): Promise<void> {
     this.connectCalls += 1;
@@ -177,6 +182,16 @@ class FakeClient {
   ): () => void {
     this.permissionRequest = callback;
     return () => {};
+  }
+
+  setOnElicitationRequest(
+    callback: (context: {
+      params: unknown;
+      requestId: string | number;
+      signal: AbortSignal;
+    }) => Promise<unknown>
+  ): void {
+    this.elicitationRequest = callback;
   }
 
   async sendMessage(): Promise<{ stopReason: string }> {
@@ -701,6 +716,7 @@ suite("multi-session feature", () => {
         open: 1,
         running: 1,
         awaitingPermission: 0,
+        awaitingInput: 0,
       });
     } finally {
       clients[0].resolvePrompt();
@@ -1061,6 +1077,113 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
+  test("background elicitation is routed to its owner and Stop cancels it", async () => {
+    const focusCalls: string[] = [];
+    const { controller, messages, clients } = createController(undefined, {
+      onFocusChat: () => {
+        focusCalls.push("focus");
+      },
+    });
+    const promptA = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const sessionA = controller.getStateForTest().activeLocalSessionId!;
+    await controller.newChat();
+
+    const pending = clients[0].elicitationRequest!({
+      params: {
+        mode: "form",
+        sessionId: "acp-1",
+        message: "Choose environment",
+        requestedSchema: {
+          type: "object",
+          required: ["environment"],
+          properties: {
+            environment: {
+              type: "string",
+              enum: ["Development", "Staging", "Production"],
+            },
+          },
+        },
+      },
+      requestId: "elicitation-1",
+      signal: new AbortController().signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const background = controller.getChatStateSnapshot().activeLocalSessionId;
+    assert.notStrictEqual(background, sessionA);
+    const ownerState = controller
+      .getManagerStateSnapshot()
+      .sessions.find((session) => session.localSessionId === sessionA);
+    assert.strictEqual(ownerState?.status, "awaiting_input");
+    assert.strictEqual(ownerState?.pendingElicitationCount, 1);
+    assert.strictEqual(
+      controller.getManagerStateSnapshot().aggregate.awaitingInput,
+      1
+    );
+    assert.ok(
+      !messages.some(
+        (message) =>
+          message.type === "feature.acp-elicitation.show" &&
+          message.ownerId === sessionA
+      )
+    );
+
+    const focusCountBeforeReview = focusCalls.length;
+    await controller.handleMessage({
+      type: "feature.multi-session.reviewInput",
+      localSessionId: sessionA,
+      focusChat: true,
+    });
+    assert.strictEqual(focusCalls.length, focusCountBeforeReview + 1);
+    const snapshot = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.multi-session.snapshot" &&
+          message.activeLocalSessionId === sessionA
+      ) as {
+      pendingElicitations?: Array<{ interactionId: string }>;
+    };
+    assert.strictEqual(snapshot.pendingElicitations?.length, 1);
+
+    const interactionId = snapshot.pendingElicitations![0].interactionId;
+    assert.strictEqual(
+      await controller.handleMessage({
+        type: "feature.acp-elicitation.respond",
+        ownerId: sessionA,
+        interactionId,
+        action: "accept",
+        content: { environment: "Staging" },
+      } as never),
+      true
+    );
+    assert.deepStrictEqual(await pending, {
+      action: "accept",
+      content: { environment: "Staging" },
+    });
+
+    const pendingStop = clients[0].elicitationRequest!({
+      params: {
+        mode: "form",
+        requestId: "before-session",
+        message: "Confirm",
+        requestedSchema: {
+          type: "object",
+          properties: { confirmed: { type: "boolean" } },
+        },
+      },
+      requestId: "elicitation-2",
+      signal: new AbortController().signal,
+    });
+    await controller.stop(sessionA);
+    assert.deepStrictEqual(await pendingStop, { action: "cancel" });
+
+    clients[0].resolvePrompt();
+    await promptA;
+    controller.dispose();
+  });
+
   test("addMention posts path-only file and folder mentions", () => {
     const { controller, messages } = createController();
 
@@ -1323,9 +1446,13 @@ suite("multi-session feature", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // Draft is created but no ACP session yet
-    let active = controller.getStateForTest().sessions.find(
-      (session) => session.localSessionId === controller.getStateForTest().activeLocalSessionId
-    );
+    let active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
+      );
     assert.strictEqual(active?.acpSessionId, undefined);
     assert.strictEqual(active?.title, "Untitled chat");
 
@@ -1333,9 +1460,13 @@ suite("multi-session feature", () => {
     const prompt = controller.sendActiveMessage("hello");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    active = controller.getStateForTest().sessions.find(
-      (session) => session.localSessionId === controller.getStateForTest().activeLocalSessionId
-    );
+    active = controller
+      .getStateForTest()
+      .sessions.find(
+        (session) =>
+          session.localSessionId ===
+          controller.getStateForTest().activeLocalSessionId
+      );
     assert.strictEqual(active?.acpSessionId, fullSessionId);
     assert.strictEqual(active?.title, `Pi ${fullSessionId}`);
 
@@ -1598,7 +1729,8 @@ suite("multi-session feature", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     messages.length = 0;
     focusCalls.length = 0;
-    const firstSession = controller.getStateForTest().sessions[0].localSessionId;
+    const firstSession =
+      controller.getStateForTest().sessions[0].localSessionId;
 
     controller.activateSession(firstSession, { focusChat: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1635,9 +1767,7 @@ suite("multi-session feature", () => {
       (message) => message.type === "feature.multi-session.focusInput"
     );
     assert.ok(
-      focusMessages.every(
-        (message) => message.localSessionId !== staleSession
-      )
+      focusMessages.every((message) => message.localSessionId !== staleSession)
     );
     assert.strictEqual(focusMessages.length, 1);
     assert.strictEqual(

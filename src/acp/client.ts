@@ -8,6 +8,9 @@ import {
   type SessionNotification,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
+  type JsonRpcId,
   type ReadTextFileRequest,
   type ReadTextFileResponse,
   type WriteTextFileRequest,
@@ -255,6 +258,11 @@ type ReleaseTerminalCallback = (
 type PermissionCallback = (
   params: RequestPermissionRequest
 ) => Promise<RequestPermissionResponse | null>;
+export type ElicitationCallback = (context: {
+  params: CreateElicitationRequest;
+  requestId: JsonRpcId;
+  signal: AbortSignal;
+}) => Promise<CreateElicitationResponse>;
 
 const MCP_SERVER_NAME_INVALID_CHARS = /[^a-zA-Z0-9_-]+/g;
 
@@ -316,6 +324,7 @@ export class ACPClient {
   private killTerminalCommandHandler: KillTerminalCommandCallback | null = null;
   private releaseTerminalHandler: ReleaseTerminalCallback | null = null;
   private permissionRequestListeners: Set<PermissionCallback> = new Set();
+  private elicitationHandler: ElicitationCallback | null = null;
   private agentConfig: AgentConfig;
   private spawnFn: SpawnFunction;
   private skipAvailabilityCheck: boolean;
@@ -401,6 +410,10 @@ export class ACPClient {
   setOnPermissionRequest(callback: PermissionCallback): () => void {
     this.permissionRequestListeners.add(callback);
     return () => this.permissionRequestListeners.delete(callback);
+  }
+
+  setOnElicitationRequest(callback: ElicitationCallback | null): void {
+    this.elicitationHandler = callback;
   }
 
   async reloadMcpServers(opts: { forceRefresh?: boolean } = {}): Promise<void> {
@@ -683,6 +696,9 @@ export class ACPClient {
           (ctx: { params: RequestPermissionRequest }) =>
             this.handleRequestPermission(ctx.params)
         )
+        .onRequest(acp.methods.client.elicitation.create, (ctx) =>
+          this.handleCreateElicitation(ctx)
+        )
         .onNotification(
           acp.methods.client.session.update,
           (ctx: { params: SessionNotification }) =>
@@ -738,6 +754,7 @@ export class ACPClient {
               writeTextFile: true,
             },
             terminal: true,
+            ...(this.elicitationHandler ? { elicitation: { form: {} } } : {}),
           },
           clientInfo: {
             name: "vscode-acp-chat",
@@ -882,6 +899,19 @@ export class ACPClient {
     };
 
     return this.agentCtx.request(acp.methods.agent.session.delete, request);
+  }
+
+  async handleCreateElicitation(context: {
+    params: CreateElicitationRequest;
+    requestId: JsonRpcId;
+    signal: AbortSignal;
+  }): Promise<CreateElicitationResponse> {
+    if (!this.elicitationHandler) return { action: "cancel" };
+    try {
+      return await this.elicitationHandler(context);
+    } catch {
+      return { action: "cancel" };
+    }
   }
 
   async handleRequestPermission(

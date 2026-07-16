@@ -221,6 +221,109 @@ suite("ACPClient with Mock Server", () => {
     });
   });
 
+  suite("elicitation", () => {
+    test("advertises form capability only when a handler is registered", async () => {
+      const initializeRequests: Record<string, unknown>[] = [];
+      const capabilitySpawn: SpawnFunction = () =>
+        createMockProcess({
+          onInitialize: (params) => initializeRequests.push(params ?? {}),
+        }) as unknown as ChildProcess;
+      const withoutHandler = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: capabilitySpawn,
+        skipAvailabilityCheck: true,
+      });
+      const withHandler = new ACPClient({
+        agentConfig: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          command: "mock",
+          args: [],
+        },
+        spawn: capabilitySpawn,
+        skipAvailabilityCheck: true,
+      });
+      withHandler.setOnElicitationRequest(async () => ({ action: "cancel" }));
+
+      try {
+        await withoutHandler.connect();
+        await withHandler.connect();
+        assert.strictEqual(
+          (
+            initializeRequests[0]?.clientCapabilities as
+              { elicitation?: unknown } | undefined
+          )?.elicitation,
+          undefined
+        );
+        assert.deepStrictEqual(
+          (
+            initializeRequests[1]?.clientCapabilities as
+              { elicitation?: unknown } | undefined
+          )?.elicitation,
+          { form: {} }
+        );
+      } finally {
+        withoutHandler.dispose();
+        withHandler.dispose();
+      }
+    });
+
+    test("forwards request context and fails closed", async () => {
+      const controller = new AbortController();
+      const params = {
+        mode: "form" as const,
+        requestId: "request-scope",
+        message: "Need input",
+        requestedSchema: { type: "object" as const },
+      };
+      let received: unknown;
+      client.setOnElicitationRequest(async (context) => {
+        received = context;
+        return { action: "decline" };
+      });
+
+      assert.deepStrictEqual(
+        await client.handleCreateElicitation({
+          params,
+          requestId: "rpc-1",
+          signal: controller.signal,
+        }),
+        { action: "decline" }
+      );
+      assert.deepStrictEqual(received, {
+        params,
+        requestId: "rpc-1",
+        signal: controller.signal,
+      });
+
+      client.setOnElicitationRequest(null);
+      assert.deepStrictEqual(
+        await client.handleCreateElicitation({
+          params,
+          requestId: "rpc-2",
+          signal: controller.signal,
+        }),
+        { action: "cancel" }
+      );
+      client.setOnElicitationRequest(async () => {
+        throw new Error("handler failed");
+      });
+      assert.deepStrictEqual(
+        await client.handleCreateElicitation({
+          params,
+          requestId: "rpc-3",
+          signal: controller.signal,
+        }),
+        { action: "cancel" }
+      );
+    });
+  });
+
   suite("newSession", () => {
     test("should create a new session", async () => {
       await client.connect();

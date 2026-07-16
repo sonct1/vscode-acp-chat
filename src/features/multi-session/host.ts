@@ -59,6 +59,11 @@ import type {
   MultiSessionManagerStateMessage,
   MultiSessionStatus,
 } from "./contracts";
+import {
+  registerAcpElicitationHostFeature,
+  type AcpElicitationHostFeature,
+  type AcpElicitationOwner,
+} from "../acp-elicitation/host";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
 const AGENT_PREFS_KEY = "vscode-acp-chat.agentPreferences.v1";
@@ -95,6 +100,7 @@ export interface MultiSessionHostOptions {
     agent: AgentConfig
   ) => ACPClient | MultiSessionClientFactoryResult;
   messageQueueFactory?: ReturnType<typeof registerMessageQueueHostFeature>;
+  elicitationFeature?: AcpElicitationHostFeature;
 }
 
 interface AgentPreference {
@@ -141,6 +147,7 @@ interface ManagedSession {
   metadata: Partial<SessionMetadata> | null;
   contextUsage: ContextUsageUpdate | null;
   permissionQueue: PermissionPending[];
+  elicitationOwner?: AcpElicitationOwner;
   conflictedDiffPaths?: Set<string>;
   stderrBuffer: string;
   isGenerating: boolean;
@@ -191,6 +198,8 @@ export class MultiSessionHostController implements vscode.Disposable {
   private readonly messageQueueFactory: ReturnType<
     typeof registerMessageQueueHostFeature
   >;
+  private readonly elicitationFeature: AcpElicitationHostFeature;
+  private readonly ownsElicitationFeature: boolean;
 
   constructor(
     globalStateOrOptions: vscode.Memento | MultiSessionHostOptions,
@@ -210,6 +219,10 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.messageQueueFactory =
         globalStateOrOptions.messageQueueFactory ??
         registerMessageQueueHostFeature();
+      this.elicitationFeature =
+        globalStateOrOptions.elicitationFeature ??
+        registerAcpElicitationHostFeature();
+      this.ownsElicitationFeature = !globalStateOrOptions.elicitationFeature;
     } else {
       this.globalState = globalStateOrOptions;
       this.post = postMessage ?? (() => {});
@@ -219,6 +232,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.quickSwitch = () => {};
       this.clientFactory = (agent) => new ACPClient({ agentConfig: agent });
       this.messageQueueFactory = registerMessageQueueHostFeature();
+      this.elicitationFeature = registerAcpElicitationHostFeature();
+      this.ownsElicitationFeature = true;
     }
 
     const savedAgentId = this.globalState.get<string>(SELECTED_AGENT_KEY);
@@ -259,6 +274,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   async handleMessage(message: MultiSessionHostMessage): Promise<boolean> {
+    if (await this.elicitationFeature.handleMessage(message)) return true;
     if (!message.type.startsWith("feature.multi-session.")) return false;
 
     switch (message.type) {
@@ -298,6 +314,11 @@ export class MultiSessionHostController implements vscode.Disposable {
         this.sendSnapshot();
         return true;
       case "feature.multi-session.reviewPermission":
+        this.activate(message.localSessionId, {
+          focusChat: message.focusChat ?? true,
+        });
+        return true;
+      case "feature.multi-session.reviewInput":
         this.activate(message.localSessionId, {
           focusChat: message.focusChat ?? true,
         });
@@ -637,7 +658,13 @@ export class MultiSessionHostController implements vscode.Disposable {
         ...session.messageQueue!.restoreQueuedWithoutAbort()
       );
     }
-    if (!session.client || !session.isGenerating) return;
+    session.elicitationOwner?.cancelAll();
+    if (!session.client || !session.isGenerating) {
+      this.sendState();
+      if (session.localSessionId === this.activeLocalSessionId)
+        this.sendSnapshot();
+      return;
+    }
     session.status = "cancelling";
     this.sendState();
     await session.client.cancel();
@@ -879,7 +906,10 @@ export class MultiSessionHostController implements vscode.Disposable {
     await this.globalState.update(SELECTED_AGENT_KEY, agentId);
 
     const session = this.createDraftForAgent(agent);
-    this.activate(session.localSessionId, { focusChat: true, focusInput: true });
+    this.activate(session.localSessionId, {
+      focusChat: true,
+      focusInput: true,
+    });
 
     try {
       await this.ensureRuntime(session, true);
@@ -920,6 +950,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.documentSync = undefined;
     for (const session of this.sessions.values()) this.disposeSession(session);
     this.sessions.clear();
+    if (this.ownsElicitationFeature) this.elicitationFeature.dispose();
     this.catalog.dispose();
   }
 
@@ -953,6 +984,25 @@ export class MultiSessionHostController implements vscode.Disposable {
       sendInFlight: false,
       recoveryPayloads: [],
     };
+    session.elicitationOwner = this.elicitationFeature.createOwner({
+      ownerId: session.localSessionId,
+      postMessage: (message) => this.post(message),
+      postState: (state) => {
+        if (session.localSessionId === this.activeLocalSessionId) {
+          this.post({
+            type: "feature.acp-elicitation.show",
+            ownerId: state.ownerId,
+            pendingElicitations: state.pendingElicitations,
+          });
+        }
+      },
+      onPendingChanged: () => {
+        this.touch(session);
+        this.sendState();
+        if (session.localSessionId === this.activeLocalSessionId)
+          this.sendSnapshot();
+      },
+    });
     session.messageQueue = this.messageQueueFactory.createController({
       sessionId: session.localSessionId,
       isBusy: () => session.isGenerating || session.sendInFlight,
@@ -1200,9 +1250,15 @@ export class MultiSessionHostController implements vscode.Disposable {
     client.setOnPermissionRequest((params) =>
       this.handlePermissionRequest(session, params)
     );
+    client.setOnElicitationRequest((context) =>
+      session.elicitationOwner
+        ? session.elicitationOwner.handleRequest(context)
+        : Promise.resolve({ action: "cancel" })
+    );
     client.setOnStateChange((state) => {
       this.append(session, { type: "connectionState", state });
       if (state === "error" || state === "disconnected") {
+        session.elicitationOwner?.cancelAll();
         if (session.isGenerating) session.status = "error";
         if (session.stderrBuffer.trim()) {
           this.append(session, {
@@ -1438,6 +1494,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       pendingPermissions: session.permissionQueue.map((pending) =>
         this.permissionMessage(pending.id, pending.params)
       ),
+      pendingElicitations: session.elicitationOwner?.getPendingViews(),
       isGenerating: session.messageQueue!.getSnapshot().processing,
       scrollToBottom: options.scrollToBottom,
     });
@@ -1538,7 +1595,15 @@ export class MultiSessionHostController implements vscode.Disposable {
     const awaitingPermission = sessions.filter(
       (session) => session.status === "awaiting_permission"
     ).length;
-    return { open: sessions.length, running, awaitingPermission };
+    const awaitingInput = sessions.filter(
+      (session) => session.status === "awaiting_input"
+    ).length;
+    return {
+      open: sessions.length,
+      running,
+      awaitingPermission,
+      awaitingInput,
+    };
   }
 
   private getAgentOptions(): Array<{ id: string; name: string }> {
@@ -1551,13 +1616,17 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private buildStatusSummary(aggregate: MultiSessionAggregate): string {
-    return aggregate.running || aggregate.awaitingPermission
-      ? `ACP: ${aggregate.running} running${aggregate.awaitingPermission ? `, ${aggregate.awaitingPermission} waiting` : ""}`
+    return aggregate.running ||
+      aggregate.awaitingPermission ||
+      aggregate.awaitingInput
+      ? `ACP: ${aggregate.running} running${aggregate.awaitingPermission ? `, ${aggregate.awaitingPermission} permission` : ""}${aggregate.awaitingInput ? `, ${aggregate.awaitingInput} input` : ""}`
       : "ACP: Idle";
   }
 
   private effectiveStatus(session: ManagedSession): MultiSessionStatus {
     if (session.status === "error") return "error";
+    if ((session.elicitationOwner?.getPendingViews().length ?? 0) > 0)
+      return "awaiting_input";
     if (session.permissionQueue.length > 0) return "awaiting_permission";
     if (session.messageQueue!.isDrainActive()) return "running";
     if (session.isGenerating) return "running";
@@ -1577,6 +1646,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       pendingPermissionCount: session.permissionQueue.length,
+      pendingElicitationCount:
+        session.elicitationOwner?.getPendingViews().length ?? 0,
       lastError: session.lastError,
     };
   }
@@ -2096,6 +2167,7 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.documentSync = undefined;
       this.activeDocumentSyncSessionId = undefined;
     }
+    session.elicitationOwner?.cancelAll();
     session.queue?.dispose();
     session.output?.dispose();
     session.client?.dispose();
@@ -2113,6 +2185,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       pending.resolver({ outcome: { outcome: "cancelled" } });
     }
     session.permissionQueue = [];
+    session.elicitationOwner?.dispose();
+    session.elicitationOwner = undefined;
     this.disposeRuntime(session);
     session.resources?.diffManager.dispose();
     session.resources?.fileHandler.dispose();

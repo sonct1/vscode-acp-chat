@@ -1318,9 +1318,8 @@ suite("Webview", () => {
         const details = elements.messagesEl.querySelector(
           ".tool-details-content"
         );
-        const historyBox = details?.querySelector<HTMLElement>(
-          ".tool-history-box"
-        );
+        const historyBox =
+          details?.querySelector<HTMLElement>(".tool-history-box");
         assert.ok(historyBox);
         assert.strictEqual(historyBox.classList.contains("tool-output"), false);
         assert.ok(historyBox.querySelector(".tool-history-list"));
@@ -1409,9 +1408,8 @@ suite("Webview", () => {
             },
           });
 
-          const historyBox = elements.messagesEl.querySelector<HTMLElement>(
-            ".tool-history-box"
-          );
+          const historyBox =
+            elements.messagesEl.querySelector<HTMLElement>(".tool-history-box");
           assert.ok(historyBox);
           historyBox.scrollTop = 250;
 
@@ -1435,9 +1433,7 @@ suite("Webview", () => {
           });
 
           const updatedHistoryBox =
-            elements.messagesEl.querySelector<HTMLElement>(
-              ".tool-history-box"
-            );
+            elements.messagesEl.querySelector<HTMLElement>(".tool-history-box");
           assert.ok(updatedHistoryBox);
           assert.strictEqual(updatedHistoryBox.scrollTop, 250);
         } finally {
@@ -4229,6 +4225,7 @@ suite("Webview", () => {
         "sessionMetadata",
         "contextUsage",
         "diffSummary",
+        "feature.acp-elicitation.show",
         "streamChunk:B",
       ]);
       assert.strictEqual(
@@ -4704,7 +4701,9 @@ suite("Webview", () => {
           updatedAt: 1,
           pendingPermissionCount: 0,
         },
-        transcript: [{ seq: 1, createdAt: 1, message: { type: "streamStart" } }],
+        transcript: [
+          { seq: 1, createdAt: 1, message: { type: "streamStart" } },
+        ],
         lastSeq: 1,
         metadata: null,
         contextUsage: null,
@@ -4755,6 +4754,34 @@ suite("Webview", () => {
         document.getElementById("attach-image")?.hasAttribute("disabled"),
         false
       );
+    });
+
+    test("restores composer focus after a later session transition unlock", () => {
+      const input = document.getElementById("input") as HTMLElement;
+      const other = document.createElement("button");
+      document.body.append(other);
+      input.focus();
+
+      controller.setSessionTransitionLocked(true);
+      other.focus();
+      assert.strictEqual(document.activeElement, other);
+
+      controller.setSessionTransitionLocked(false);
+
+      assert.strictEqual(document.activeElement, input);
+    });
+
+    test("does not steal focus after a transition when composer was not focused", () => {
+      const input = document.getElementById("input") as HTMLElement;
+      const other = document.createElement("button");
+      document.body.append(other);
+      other.focus();
+
+      controller.setSessionTransitionLocked(true);
+      controller.setSessionTransitionLocked(false);
+
+      assert.strictEqual(document.activeElement, other);
+      assert.notStrictEqual(document.activeElement, input);
     });
   });
 

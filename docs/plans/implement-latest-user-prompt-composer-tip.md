@@ -5,7 +5,7 @@
 | Status | Implemented |
 | Owner | Extension maintainers |
 | Phase | Completed, packaged and installed locally |
-| Scope | Transcript viewport tracking, active user-turn selection, composer tip UI, streaming stability, multi-session replay, tests, documentation |
+| Scope | Transcript viewport tracking, active user-turn selection, composer tip UI with previous/next turn navigation, streaming stability, multi-session replay, tests, documentation |
 | References | `src/features/latest-user-prompt-tip/webview.ts`, `src/views/webview/component/message-list.ts`, `src/features/assistant-turn-navigation/webview.ts`, `src/features/multi-session/webview.ts`, `docs/architecture/acp-chat-layout.md` |
 
 ## Mục tiêu
@@ -38,7 +38,7 @@ Target layout:
 │ messages viewport                                                     │
 │   user is reading an earlier conversation turn                        │
 ├──────────────────────────────────────────────────────────────────────┤
-│ Tip: <prompt associated with the currently viewed turn>               │
+│ Tip: <prompt associated with the currently viewed turn>        ↑  ↓   │
 ├──────────────────────────────────────────────────────────────────────┤
 │ [prompt contenteditable]                                     [send]   │
 └──────────────────────────────────────────────────────────────────────┘
@@ -197,8 +197,9 @@ Boundary behavior:
 - Assistant streaming bên dưới vị trí hiện tại không làm đổi tip.
 - Chat clear hoặc transcript không có textual user turn: tip ẩn.
 - Session switch/history replay: tip được rebuild từ transcript active và tính lại sau khi restore `scrollTop`.
-- Preview mặc định một dòng và ellipsis; keyboard focus mở rộng full text như implementation hiện tại.
-- Không thêm click-to-jump, setting hoặc host message trong iteration này.
+- Preview mặc định một dòng và ellipsis; keyboard focus trên root tip mở rộng full text, nhưng focus vào navigation button không làm preview bung dòng.
+- Hai icon button `chevron-up` / `chevron-down` ở mép phải cho phép scroll tới textual user prompt cũ hơn/mới hơn dựa trên active index hiện tại, không load nội dung vào composer và không wrap qua biên.
+- Không thêm click-to-jump trên preview, setting hoặc host message trong iteration này.
 
 ## Kiến trúc đề xuất
 
@@ -239,7 +240,7 @@ Nếu muốn giữ API boolean hiện tại cho compatibility, có thể thêm g
 
 ```ts
 private entries: UserTurnEntry[] = [];
-private activeIndex = -1;
+private activeIndex: number | null = null;
 private isNearBottom = true;
 private updateFrame: number | null = null;
 ```
@@ -251,10 +252,11 @@ Feature responsibilities:
 3. Subscribe mọi transcript scroll position update.
 4. Coalesce `updateActivePrompt()` vào một animation frame.
 5. Tính reading anchor và active user turn từ geometry hiện tại.
-6. Render prompt khi active index thay đổi.
-7. Rebuild entries khi user-message DOM được add/remove.
-8. Recalculate sau window/container resize.
-9. Cleanup observer, listener và pending frame khi dispose.
+6. Render prompt khi active index hoặc preview thay đổi để hỗ trợ duplicate prompt text.
+7. Disable previous/next controls tại textual-prompt boundaries và skip non-text targets.
+8. Rebuild entries khi user-message DOM được add/remove.
+9. Recalculate sau window/container resize.
+10. Cleanup observer, listener và pending frame khi dispose.
 
 ### Mutation strategy
 
@@ -381,9 +383,31 @@ Viewport anchor phụ thuộc `messagesEl.getBoundingClientRect().height`, nên 
 - [x] Không rebuild entries nếu chỉ kích thước viewport đổi.
 - [x] Dispose cleanup resize observer/listener.
 
-### Phase 5 — Documentation
+### Phase 5 — Prompt turn navigation controls
 
-#### Task 8: Update durable behavior docs after implementation
+#### Task 8: Add previous/next navigation buttons to the tip row
+
+**Files:**
+
+- `src/features/latest-user-prompt-tip/webview.ts`
+- `src/features/latest-user-prompt-tip/styles.ts`
+- `src/test/features/latest-user-prompt-tip.test.ts`
+
+**Acceptance criteria:**
+
+- [x] Visible row is `Tip: <viewport-contextual user prompt> [up] [down]`.
+- [x] Buttons are `type="button"`, use `codicon-chevron-up` / `codicon-chevron-down`, have `aria-label` and `acp-title`, and live in a semantic action group.
+- [x] Click handlers prevent default/stop propagation.
+- [x] Navigation uses the feature-level viewport-derived active index, not prompt-history state, and never writes to the composer.
+- [x] `disableAutoScroll()` is called before smooth `scrollIntoView({ block: "start" })`.
+- [x] No wrap-around; boundary buttons are disabled.
+- [x] Non-text user turns are hidden when active and skipped as navigation targets.
+- [x] Duplicate textual prompts are tracked by index plus preview.
+- [x] Styles keep preview flexible with ellipsis and controls fixed on the right; button focus does not expand the preview.
+
+### Phase 6 — Documentation
+
+#### Task 9: Update durable behavior docs after implementation
 
 **Files:**
 
@@ -398,9 +422,9 @@ Viewport anchor phụ thuộc `messagesEl.getBoundingClientRect().height`, nên 
 - [x] Feature catalog mô tả scroll lên/xuống đổi prompt theo turn đang đọc.
 - [x] Completion notes ghi đúng tests và package/install outcome.
 
-### Phase 6 — Verification, package and install
+### Phase 7 — Verification
 
-#### Task 9: Quality gates
+#### Task 10: Quality gates
 
 ```bash
 npm run check-types
@@ -416,16 +440,9 @@ Nếu full project vẫn bị block bởi lỗi ngoài phạm vi, phải:
 - bundle webview entry trực tiếp;
 - báo chính xác blocker, không claim production package pass.
 
-#### Task 10: Package and local install
+#### Task 11: Package and local install
 
-Sau khi `npm run package` pass:
-
-```bash
-npx vsce package --out /tmp/vscode-acp-chat-user-prompt-tip.vsix
-code --install-extension /tmp/vscode-acp-chat-user-prompt-tip.vsix --force
-```
-
-Xóa VSIX tạm nếu an toàn và yêu cầu chạy `Developer: Reload Window`.
+Completed for this iteration with a temporary VSIX, forced local installation, and cleanup after success.
 
 ## Test matrix
 
@@ -440,6 +457,9 @@ Xóa VSIX tạm nếu an toàn và yêu cầu chạy `Developer: Reload Window`.
 | Assistant streams below current position | Unchanged until user scrolls |
 | User message itself crosses anchor | Switch to that user prompt |
 | Active turn has no text | Hidden; no stale fallback |
+| Previous/next tip navigation | Smooth-scrolls to older/newer textual user prompts, skipping non-text turns |
+| First/last textual prompt | Boundary button disabled; no wrap-around |
+| Duplicate prompt text | Navigation state remains tied to active index, not preview string only |
 | Chat clear | Hidden |
 | History replay | Prompt derived from restored viewport turn |
 | Multi-session switch | Prompt derived only from active session |
@@ -470,27 +490,30 @@ Xóa VSIX tạm nếu an toàn và yêu cầu chạy `Developer: Reload Window`.
 
 ## Completion notes
 
-Implemented on 2026-07-15:
+Implemented on 2026-07-15, extended on 2026-07-16:
 
 - Refactored `MessageListComponent.onScrollPositionChange()` to emit `{ isNearBottom, scrollTop }` for every transcript scroll, explicit scroll restore, and auto-scroll-to-bottom.
 - Replaced fixed latest-prompt lookup with ordered user-turn entries and viewport reading-anchor selection.
 - Active entry lookup uses binary search over DOM-ordered user messages and rAF-coalesced layout reads.
 - User-message mutations rebuild the index; assistant-only streaming mutations do not.
 - Added resize handling that refreshes near-bottom state and recalculates the active turn without rebuilding entries.
-- Preserved single-line ellipsis, keyboard-focus expansion and contextual ARIA text.
-- Added 11 focused JSDOM tests for three-turn bidirectional scrolling, boundary behavior, near-bottom visibility, streaming stability, non-text turns, clear/replay, resize and subscription lifecycle.
-- Reviewer verdict: Approve, no blocking findings.
+- Preserved single-line ellipsis, root keyboard-focus expansion and contextual ARIA text.
+- Added right-aligned previous/next prompt navigation controls using `chevron-up` / `chevron-down`; navigation disables auto-scroll before smooth-scrolling to older/newer textual user prompts, skips non-text targets, does not wrap, and keeps composer prompt-history behavior separate.
+- Rendering/state now tracks both active index and preview so duplicate textual prompts remain navigable.
+- Added focused JSDOM coverage for three-turn bidirectional scrolling, DOM order/accessibility, previous/next scrolling, auto-scroll disabling, rapid repeated navigation during intermediate smooth-scroll events, session-transition locking, disabled boundaries/no wrap, duplicate preview indices, skipping non-text navigation targets, near-bottom visibility, streaming stability, non-text active turns, clear/replay, resize and subscription lifecycle.
+- Reviewer findings were addressed by preserving a pending navigation anchor during smooth scrolling, disabling/inerting controls while the multi-session surface is locked, and limiting full-preview expansion to root `:focus-visible`.
+- Packaged and installed the updated extension locally; temporary VSIX and temporary worktree were removed afterward.
 
 Verification:
 
-- `npx eslint src/views/webview/component/message-list.ts src/views/webview/types.ts src/features/latest-user-prompt-tip/styles.ts src/features/latest-user-prompt-tip/webview.ts src/test/features/latest-user-prompt-tip.test.ts` — passed.
-- `npm run check-types` — passed, including Antigravity adapter typecheck.
+- `npx eslint src/features/latest-user-prompt-tip/styles.ts src/features/latest-user-prompt-tip/webview.ts src/test/features/latest-user-prompt-tip.test.ts` — passed.
+- `npm run check-types` — passed before unrelated concurrent ACP elicitation edits changed again.
 - `npm run compile-tests` — passed.
-- `npx mocha --ui tdd out/test/features/latest-user-prompt-tip.test.js` — 11 passing.
-- `npm run package` — passed.
-- `npx vsce package --out /tmp/vscode-acp-chat-user-prompt-tip.vsix` — packaged 126 files, 1.95 MB.
-- `code --install-extension /tmp/vscode-acp-chat-user-prompt-tip.vsix --force` — installed successfully.
-- Temporary VSIX was removed after installation.
+- `xvfb-run -a node_modules/.bin/vscode-test --run out/test/features/latest-user-prompt-tip.test.js --timeout 20000` — 17 passing.
+- `npm run package` — passed before packaging.
+- Packaging from a detached temporary worktree containing the captured complete workspace state: `pnpm exec vsce package --no-dependencies --out /tmp/vscode-acp-chat-user-prompt-navigation.vsix` — packaged 143 files, 2.24 MB. The temporary worktree avoided racing with concurrent edits in the primary workspace.
+- `code --install-extension /tmp/vscode-acp-chat-user-prompt-navigation.vsix --force` — installed successfully.
+- Temporary VSIX and temporary worktree were removed after installation.
 
 ## Superseded implementation note
 

@@ -16,7 +16,12 @@ export class MultiSessionManagerWebview {
   private readonly sessions = new Map<string, MultiSessionListItem>();
   private activeLocalSessionId: string | undefined;
   private pendingActivation: PendingActivation | undefined;
-  private aggregate = { open: 0, running: 0, awaitingPermission: 0 };
+  private aggregate = {
+    open: 0,
+    running: 0,
+    awaitingPermission: 0,
+    awaitingInput: 0,
+  };
   private filter = "all";
   private query = "";
   private summaryEl!: HTMLElement;
@@ -38,11 +43,15 @@ export class MultiSessionManagerWebview {
   }
 
   private renderShell(): void {
-    this.doc.body.innerHTML = `<main class="manager-shell"><header class="manager-header"><div class="manager-title"><h1>ACP Sessions</h1><div class="manager-summary" aria-live="polite"></div></div><div class="manager-actions"><button type="button" class="manager-button manager-button-icon manager-button-primary" data-action="new" aria-label="New chat" title="New chat"><span class="codicon codicon-add" aria-hidden="true"></span></button><button type="button" class="manager-button manager-button-icon manager-button-secondary" data-action="refresh" aria-label="Refresh sessions" title="Refresh sessions"><span class="codicon codicon-refresh" aria-hidden="true"></span></button></div></header><section class="manager-filters" aria-label="Session filters"><select class="manager-select" aria-label="Status filter"><option value="all">All</option><option value="running">Running</option><option value="awaiting_permission">Waiting</option><option value="idle">Idle</option><option value="draft">Draft</option><option value="error">Error</option></select><input class="manager-search" type="search" placeholder="Search title, agent, status, session id…" aria-label="Search sessions"></section><section class="manager-list" role="list" aria-label="ACP sessions"></section></main>`;
+    this.doc.body.innerHTML = `<main class="manager-shell"><header class="manager-header"><div class="manager-title"><h1>ACP Sessions</h1><div class="manager-summary" aria-live="polite"></div></div><div class="manager-actions"><button type="button" class="manager-button manager-button-icon manager-button-primary" data-action="new" aria-label="New chat" title="New chat"><span class="codicon codicon-add" aria-hidden="true"></span></button><button type="button" class="manager-button manager-button-icon manager-button-secondary" data-action="refresh" aria-label="Refresh sessions" title="Refresh sessions"><span class="codicon codicon-refresh" aria-hidden="true"></span></button></div></header><section class="manager-filters" aria-label="Session filters"><select class="manager-select" aria-label="Status filter"><option value="all">All</option><option value="running">Running</option><option value="awaiting_input">Needs input</option><option value="awaiting_permission">Waiting</option><option value="idle">Idle</option><option value="draft">Draft</option><option value="error">Error</option></select><input class="manager-search" type="search" placeholder="Search title, agent, status, session id…" aria-label="Search sessions"></section><section class="manager-list" role="list" aria-label="ACP sessions"></section></main>`;
     this.summaryEl = this.doc.querySelector(".manager-summary") as HTMLElement;
     this.listEl = this.doc.querySelector(".manager-list") as HTMLElement;
-    this.filterEl = this.doc.querySelector(".manager-select") as HTMLSelectElement;
-    this.searchEl = this.doc.querySelector(".manager-search") as HTMLInputElement;
+    this.filterEl = this.doc.querySelector(
+      ".manager-select"
+    ) as HTMLSelectElement;
+    this.searchEl = this.doc.querySelector(
+      ".manager-search"
+    ) as HTMLInputElement;
 
     this.doc
       .querySelector('[data-action="new"]')
@@ -91,7 +100,7 @@ export class MultiSessionManagerWebview {
   }
 
   private renderSummary(): void {
-    this.summaryEl.textContent = `Running ${this.aggregate.running} · Waiting ${this.aggregate.awaitingPermission} · Open ${this.aggregate.open}`;
+    this.summaryEl.textContent = `Running ${this.aggregate.running} · Permission ${this.aggregate.awaitingPermission} · Input ${this.aggregate.awaitingInput} · Open ${this.aggregate.open}`;
   }
 
   private renderList(): void {
@@ -110,8 +119,12 @@ export class MultiSessionManagerWebview {
       return;
     }
 
-    const visibleIds = new Set(sessions.map((session) => session.localSessionId));
-    for (const row of [...this.listEl.querySelectorAll<HTMLElement>(".session-row")]) {
+    const visibleIds = new Set(
+      sessions.map((session) => session.localSessionId)
+    );
+    for (const row of [
+      ...this.listEl.querySelectorAll<HTMLElement>(".session-row"),
+    ]) {
       if (!row.dataset.sessionId || !visibleIds.has(row.dataset.sessionId)) {
         row.remove();
       }
@@ -137,7 +150,8 @@ export class MultiSessionManagerWebview {
   }
 
   private matchesFilter(session: MultiSessionListItem): boolean {
-    if (this.filter === "running" && !isRunningStatus(session.status)) return false;
+    if (this.filter === "running" && !isRunningStatus(session.status))
+      return false;
     if (
       this.filter !== "all" &&
       this.filter !== "running" &&
@@ -171,7 +185,10 @@ export class MultiSessionManagerWebview {
 
     const main = this.doc.createElement("div");
     main.className = "row-main";
-    main.append(statusIcon(this.doc, session.status), this.createContent(session, isActive));
+    main.append(
+      statusIcon(this.doc, session.status),
+      this.createContent(session, isActive)
+    );
 
     const actions = this.doc.createElement("div");
     actions.className = "row-actions";
@@ -181,13 +198,29 @@ export class MultiSessionManagerWebview {
     const isReviewing =
       this.pendingActivation?.localSessionId === session.localSessionId &&
       this.pendingActivation.action === "review";
+    if (session.pendingElicitationCount > 0) {
+      actions.append(
+        this.button(
+          isReviewing ? "Opening input review" : "Review input",
+          isReviewing
+            ? "codicon-loading codicon-modifier-spin"
+            : "codicon-comment-discussion",
+          "secondary",
+          () =>
+            this.activateSession("review", session.localSessionId, {
+              type: "feature.multi-session.reviewInput",
+              localSessionId: session.localSessionId,
+              focusChat: true,
+            }),
+          { busy: isReviewing }
+        )
+      );
+    }
     if (session.pendingPermissionCount > 0) {
       actions.append(
         this.button(
           isReviewing ? "Opening permission review" : "Review permission",
-          isReviewing
-            ? "codicon-loading codicon-modifier-spin"
-            : "codicon-eye",
+          isReviewing ? "codicon-loading codicon-modifier-spin" : "codicon-eye",
           "secondary",
           () =>
             this.activateSession("review", session.localSessionId, {
@@ -286,7 +319,18 @@ export class MultiSessionManagerWebview {
     const badges = this.doc.createElement("div");
     badges.className = "badges";
     if (session.pendingPermissionCount > 0) {
-      badges.append(badge(this.doc, `${session.pendingPermissionCount} permission`, "permission"));
+      badges.append(
+        badge(
+          this.doc,
+          `${session.pendingPermissionCount} permission`,
+          "permission"
+        )
+      );
+    }
+    if (session.pendingElicitationCount > 0) {
+      badges.append(
+        badge(this.doc, `${session.pendingElicitationCount} input`, "input")
+      );
     }
     return badges;
   }
@@ -335,14 +379,16 @@ function statusIcon(doc: Document, status: MultiSessionStatus): HTMLElement {
   icon.setAttribute("aria-hidden", "true");
   if (isRunningStatus(status)) {
     icon.classList.add("codicon", "codicon-loading", "codicon-modifier-spin");
-  } else if (status === "awaiting_permission") {
+  } else if (status === "awaiting_permission" || status === "awaiting_input") {
     icon.classList.add("codicon", "codicon-warning");
   } else if (status === "error") {
     icon.classList.add("codicon", "codicon-error");
   } else {
     icon.classList.add(
       "codicon",
-      status === "draft" ? "codicon-circle-large-outline" : "codicon-circle-filled"
+      status === "draft"
+        ? "codicon-circle-large-outline"
+        : "codicon-circle-filled"
     );
   }
   return icon;
@@ -392,7 +438,11 @@ function isRunningStatus(status: string): boolean {
 }
 
 function isStoppableStatus(status: string): boolean {
-  return isRunningStatus(status) || status === "awaiting_permission";
+  return (
+    isRunningStatus(status) ||
+    status === "awaiting_permission" ||
+    status === "awaiting_input"
+  );
 }
 
 function formatStatus(status: string): string {

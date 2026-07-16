@@ -13,8 +13,10 @@ import {
   type AgentSelectionTarget,
 } from "./agent-selection/host";
 import { registerMessageQueueHostFeature } from "./message-queue/host";
+import { registerAcpElicitationHostFeature } from "./acp-elicitation/host";
 
 export interface HostFeatureRegistry {
+  acpElicitation?: ReturnType<typeof registerAcpElicitationHostFeature>;
   addToChat?: ReturnType<typeof registerAddToChatHostFeature>;
   agentSelection?: ReturnType<typeof registerAgentSelectionHostFeature>;
   chatAutoScroll?: ReturnType<typeof registerChatAutoScrollHostFeature>;
@@ -36,6 +38,7 @@ export function registerHostFeatures(options: {
   onQuickSwitch?: () => Thenable<void> | void;
 }): HostFeatureRegistry {
   const features: HostFeatureRegistry = {
+    acpElicitation: registerAcpElicitationHostFeature(),
     chatAutoScroll: registerChatAutoScrollHostFeature({
       postMessage: options.postMessage,
     }),
@@ -55,6 +58,7 @@ export function registerHostFeatures(options: {
       onFocusChat: options.onFocusChat,
       onQuickSwitch: options.onQuickSwitch,
       messageQueueFactory: features.messageQueue,
+      elicitationFeature: features.acpElicitation,
     });
   }
 

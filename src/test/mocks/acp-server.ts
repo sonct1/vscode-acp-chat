@@ -16,6 +16,7 @@ export interface MockACPServerOptions {
   enableDeleteSession?: boolean;
   useConfigOptions?: boolean;
   emitUsageUpdate?: UsageUpdatePayload | null;
+  onInitialize?: (params: Record<string, unknown> | undefined) => void;
 }
 
 interface MockSession {
@@ -34,6 +35,7 @@ export class MockACPServer {
   private enableDeleteSession: boolean;
   private useConfigOptions: boolean;
   private emitUsageUpdate: UsageUpdatePayload | null;
+  private onInitialize?: (params: Record<string, unknown> | undefined) => void;
 
   readonly stdin: Writable;
   readonly stdout: Readable;
@@ -48,6 +50,7 @@ export class MockACPServer {
     this.enableDeleteSession = options.enableDeleteSession ?? false;
     this.useConfigOptions = options.useConfigOptions ?? false;
     this.emitUsageUpdate = options.emitUsageUpdate ?? null;
+    this.onInitialize = options.onInitialize;
 
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -90,6 +93,7 @@ export class MockACPServer {
   }): void {
     switch (request.method) {
       case "initialize":
+        this.onInitialize?.(request.params);
         this.sendResponse(request.id, {
           protocolVersion: acp.PROTOCOL_VERSION,
           agentCapabilities: {

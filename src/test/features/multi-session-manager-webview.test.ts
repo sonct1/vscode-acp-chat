@@ -32,7 +32,12 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 2, running: 1, awaitingPermission: 1 },
+          aggregate: {
+            open: 2,
+            running: 1,
+            awaitingPermission: 1,
+            awaitingInput: 0,
+          },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -46,6 +51,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 2,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
             {
               localSessionId: "local-b",
@@ -56,6 +62,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 3,
               pendingPermissionCount: 1,
+              pendingElicitationCount: 0,
             },
           ],
         },
@@ -65,7 +72,8 @@ suite("multi-session manager webview", () => {
     const summary =
       dom.window.document.querySelector(".manager-summary")?.textContent ?? "";
     assert.ok(summary.includes("Running 1"));
-    assert.ok(summary.includes("Waiting 1"));
+    assert.ok(summary.includes("Permission 1"));
+    assert.ok(summary.includes("Input 0"));
     assert.ok(summary.includes("Open 2"));
     assert.ok(!summary.includes("Unread"));
     assert.strictEqual(
@@ -87,7 +95,12 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 2, running: 1, awaitingPermission: 0 },
+          aggregate: {
+            open: 2,
+            running: 1,
+            awaitingPermission: 0,
+            awaitingInput: 0,
+          },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -100,6 +113,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 2,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
             {
               localSessionId: "local-b",
@@ -110,6 +124,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 1,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
           ],
         },
@@ -155,7 +170,12 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 1, running: 0, awaitingPermission: 1 },
+          aggregate: {
+            open: 1,
+            running: 0,
+            awaitingPermission: 1,
+            awaitingInput: 0,
+          },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -168,6 +188,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 1,
               pendingPermissionCount: 1,
+              pendingElicitationCount: 0,
             },
           ],
         },
@@ -212,6 +233,57 @@ suite("multi-session manager webview", () => {
     );
   });
 
+  test("input-waiting rows expose review input and stop actions", () => {
+    new MultiSessionManagerWebview(dom.window.document);
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: {
+          type: "feature.multi-session.managerState",
+          revision: 1,
+          activeLocalSessionId: "local-b",
+          aggregate: {
+            open: 1,
+            running: 0,
+            awaitingPermission: 0,
+            awaitingInput: 1,
+          },
+          agents: [],
+          selectedAgentId: "test-agent",
+          sessions: [
+            {
+              localSessionId: "local-a",
+              agentId: "test-agent",
+              agentName: "Test Agent",
+              title: "Needs input",
+              status: "awaiting_input",
+              createdAt: 1,
+              updatedAt: 1,
+              pendingPermissionCount: 0,
+              pendingElicitationCount: 1,
+            },
+          ],
+        },
+      })
+    );
+
+    assert.ok(dom.window.document.querySelector(".badge-input"));
+    const reviewButton = dom.window.document.querySelector(
+      'button[aria-label="Review input"]'
+    ) as HTMLButtonElement;
+    reviewButton.click();
+    assert.ok(
+      messages.some(
+        (message: any) =>
+          message.type === "feature.multi-session.reviewInput" &&
+          message.localSessionId === "local-a" &&
+          message.focusChat === true
+      )
+    );
+    assert.ok(
+      dom.window.document.querySelector('button[aria-label="Stop chat"]')
+    );
+  });
+
   test("orders all sessions by creation time regardless of status or activity", () => {
     new MultiSessionManagerWebview(dom.window.document);
     dom.window.dispatchEvent(
@@ -220,7 +292,12 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-b",
-          aggregate: { open: 3, running: 1, awaitingPermission: 1 },
+          aggregate: {
+            open: 3,
+            running: 1,
+            awaitingPermission: 1,
+            awaitingInput: 0,
+          },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -233,6 +310,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 100,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
             {
               localSessionId: "local-b",
@@ -243,6 +321,7 @@ suite("multi-session manager webview", () => {
               createdAt: 2,
               updatedAt: 10,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
             {
               localSessionId: "local-c",
@@ -253,6 +332,7 @@ suite("multi-session manager webview", () => {
               createdAt: 0,
               updatedAt: 200,
               pendingPermissionCount: 1,
+              pendingElicitationCount: 0,
             },
           ],
         },
@@ -273,7 +353,12 @@ suite("multi-session manager webview", () => {
           type: "feature.multi-session.managerState",
           revision: 1,
           activeLocalSessionId: "local-a",
-          aggregate: { open: 1, running: 0, awaitingPermission: 0 },
+          aggregate: {
+            open: 1,
+            running: 0,
+            awaitingPermission: 0,
+            awaitingInput: 0,
+          },
           agents: [],
           selectedAgentId: "test-agent",
           sessions: [
@@ -286,6 +371,7 @@ suite("multi-session manager webview", () => {
               createdAt: 1,
               updatedAt: 1,
               pendingPermissionCount: 0,
+              pendingElicitationCount: 0,
             },
           ],
         },

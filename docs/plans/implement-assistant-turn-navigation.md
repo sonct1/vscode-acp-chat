@@ -361,3 +361,192 @@ Updated on 2026-07-15:
 - Navigation no longer focuses or highlights the assistant response, removing the blue border.
 - Regression tests cover single-response visibility/enabled state, first/last clamping, and textless-turn filtering.
 - Targeted verification passed in a clean detached worktree: typecheck, test compilation, 6 assistant-turn tests, production package, VSIX packaging, and forced local installation. Full `npm test` reached 725 passing with one unrelated environment-sensitive home-relative-path assertion failure.
+
+## Kế hoạch điều chỉnh: điều hướng theo hướng từ reading anchor
+
+**Trạng thái:** Completed — triển khai ngày 2026-07-16.
+
+**Yêu cầu bổ sung ngày 2026-07-16:** Khi người dùng đang đọc tại reading anchor, `Previous` và `Next` phải chọn assistant response gần nhất theo đúng hướng, thay vì chọn response gần anchor nhất làm “current” rồi cộng/trừ một index.
+
+Ví dụ với reading anchor `y = 200` và các answer-text target theo thứ tự DOM:
+
+```text
+100, 180, [anchor 200], 210, 300
+```
+
+Hành vi bắt buộc:
+
+```text
+Next     → 210 → 300
+Previous → 180 → 100
+```
+
+Logic hiện tại không bảo đảm điều này vì fallback `findNearestIndexFromScroll()` dùng khoảng cách tuyệt đối. Nếu `210` gần anchor hơn `180`, `210` bị xem là response hiện tại và lần bấm `Next` đầu tiên có thể nhảy thẳng đến `300`.
+
+### Semantics mới
+
+- Reading anchor vẫn là `messagesRect.top + max(24px, messagesRect.height * 0.25)`.
+- Vị trí của một navigable response được lấy từ `getBoundingClientRect().top` của `.block-text` không rỗng đầu tiên.
+- Khi chưa có button-navigation anchor và focus không nằm trong assistant message:
+  - `Next` chọn response đầu tiên có text target nằm sau reading anchor.
+  - `Previous` chọn response cuối cùng có text target nằm trước reading anchor.
+  - Không dùng response có khoảng cách tuyệt đối gần anchor nhất làm base index cho lần bấm đầu tiên.
+- Nếu text target nằm đúng reading anchor trong sai số layout nhỏ, target đó được xem là response hiện tại:
+  - `Next` chọn response kế tiếp.
+  - `Previous` chọn response trước đó.
+- Dùng epsilon cố định nhỏ, khuyến nghị `1px`, để tránh sai lệch số thực khi so sánh `targetTop` với `anchorY`.
+- Nếu không còn response theo hướng yêu cầu, giữ behavior clamp hiện tại:
+  - `Next` sau response cuối re-scroll response cuối.
+  - `Previous` trước response đầu re-scroll response đầu.
+- Sau lần bấm đầu tiên, `hasButtonNavigationAnchor` và `activeIndex` tiếp tục điều khiển chuỗi bấm kế tiếp. Smooth-scroll event không được làm thay đổi chuỗi `210 → 300` hoặc `180 → 100`.
+- Focus vẫn có độ ưu tiên cao nhất:
+  - Focus trong navigable assistant response: di chuyển response liền trước/liền sau response đó.
+  - Focus trong tool-only/textless assistant response: dùng vị trí chèn DOM hiện có để chọn response text gần nhất theo hướng.
+- Manual interaction (`wheel`, `pointerdown`, `touchstart`, `keydown`, hoặc focus assistant khác) xóa button-navigation anchor; lần bấm tiếp theo phải tính lại theo reading anchor/focus mới.
+- Counter có thể tiếp tục phản ánh response gần reading anchor nhất để mô tả trạng thái đọc, nhưng giá trị counter không được dùng làm base cho lần bấm directional đầu tiên sau manual scroll.
+- Tool-only/textless response tiếp tục bị loại khỏi destination index và không được phép chặn response text gần nhất theo hướng.
+
+### Thiết kế logic đề xuất
+
+Thay `getNavigationBaseIndex(direction)` cho viewport path bằng resolver trả thẳng target index:
+
+```ts
+resolveNavigationTargetIndex(direction): number {
+  if (focusedAssistant) {
+    return resolveFromFocusedAssistant(focusedAssistant, direction);
+  }
+
+  if (hasButtonNavigationAnchor) {
+    return clamp(activeIndex + directionOffset);
+  }
+
+  return findDirectionalIndexFromReadingAnchor(direction);
+}
+```
+
+`findDirectionalIndexFromReadingAnchor()` nên hoạt động trên `entries` đã lọc và giữ nguyên thứ tự DOM:
+
+```ts
+const anchorY = getReadingAnchorY();
+const positions = entries.map((entry) => entry.scrollTarget.getBoundingClientRect().top);
+
+const atAnchorIndex = positions.findIndex(
+  (top) => Math.abs(top - anchorY) <= READING_ANCHOR_EPSILON_PX
+);
+
+if (atAnchorIndex >= 0) {
+  return clamp(atAnchorIndex + directionOffset);
+}
+
+if (direction === "next") {
+  return firstIndexWhere(top > anchorY + epsilon) ?? lastIndex;
+}
+
+return lastIndexWhere(top < anchorY - epsilon) ?? 0;
+```
+
+Không nên biểu diễn directional destination bằng “base index giả” rồi cộng offset, vì cách đó khó đọc và dễ tạo lỗi off-by-one với tool-only turn hoặc anchor nằm giữa hai response.
+
+### Task A: Khóa directional semantics bằng test đỏ
+
+**Mô tả:** Thêm regression tests mô phỏng layout với reading anchor `y = 200` và text target tại `100`, `180`, `210`, `300`.
+
+**Acceptance criteria:**
+
+- [ ] Khi không có focused assistant và chưa có button-navigation anchor, lần bấm `Next` đầu tiên scroll tới `210`, lần tiếp theo tới `300`.
+- [ ] Trong một test độc lập hoặc sau manual interaction reset, lần bấm `Previous` đầu tiên scroll tới `180`, lần tiếp theo tới `100`.
+- [ ] Test chứng minh response gần anchor nhất theo khoảng cách tuyệt đối không được làm skip destination theo hướng.
+- [ ] Test assert trực tiếp `scrollIntoView()` target là `.block-text` tương ứng, không chỉ assert counter.
+
+**Files likely touched:**
+
+- `src/test/features/assistant-turn-navigation.test.ts`
+
+### Task B: Tách current-state khỏi directional target resolution
+
+**Mô tả:** Refactor navigation để `activeIndex` dùng cho UI/button sequence, còn lần bấm đầu tiên sau manual scroll dùng directional geometry resolver.
+
+**Acceptance criteria:**
+
+- [ ] Focus path vẫn có độ ưu tiên cao nhất.
+- [ ] Button-navigation anchor path vẫn dùng `activeIndex ± 1` và clamp.
+- [ ] Viewport path trả thẳng target index gần nhất theo hướng.
+- [ ] `findNearestIndexFromScroll()` chỉ còn dùng để cập nhật counter/current reading state, không quyết định directional destination đầu tiên.
+- [ ] Không thêm ACP message, host state hoặc session-specific state.
+
+**Files likely touched:**
+
+- `src/features/assistant-turn-navigation/webview.ts`
+
+### Task C: Xử lý equality, boundary và textless turns
+
+**Mô tả:** Làm rõ các trường hợp anchor trùng target, không có candidate theo hướng và tool-only response nằm quanh anchor.
+
+**Acceptance criteria:**
+
+- [ ] Target nằm trong `±1px` quanh anchor được xem là current; Previous/Next đi sang response liền kề.
+- [ ] Next khi anchor ở sau tất cả response re-scroll response cuối.
+- [ ] Previous khi anchor ở trước tất cả response re-scroll response đầu.
+- [ ] Tool-only response tại hoặc gần anchor không được chọn làm destination.
+- [ ] Focus trong tool-only response vẫn giữ insertion-index behavior đúng cho cả hai hướng.
+- [ ] Một response duy nhất vẫn được cả hai nút re-scroll.
+
+**Files likely touched:**
+
+- `src/features/assistant-turn-navigation/webview.ts`
+- `src/test/features/assistant-turn-navigation.test.ts`
+
+### Task D: Giữ ổn định chuỗi bấm và manual reset
+
+**Mô tả:** Verify smooth scrolling không làm viewport observer đổi active response giữa chuỗi bấm, nhưng manual interaction phải bắt đầu lại directional resolution.
+
+**Acceptance criteria:**
+
+- [ ] `Next → Next` từ anchor `200` cho kết quả `210 → 300`, kể cả khi phát sinh scroll event giữa hai lần bấm.
+- [ ] `Previous → Previous` cho kết quả `180 → 100`.
+- [ ] Sau `wheel`/`pointerdown`/`touchstart`/`keydown`, lần bấm mới tính lại từ geometry hiện tại.
+- [ ] Focus vào assistant khác xóa button anchor và dùng focused response làm base.
+- [ ] Counter update do manual scroll không làm thay đổi directional target mong đợi.
+
+**Files likely touched:**
+
+- `src/features/assistant-turn-navigation/webview.ts`
+- `src/test/features/assistant-turn-navigation.test.ts`
+
+### Task E: Regression, tài liệu và cài local
+
+**Acceptance criteria:**
+
+- [ ] Existing tests cho single response, no-wrap/clamp, tool-before-text, tool-only filtering, focus anchor, clear và multi-session replay vẫn pass.
+- [ ] Cập nhật phần assistant-turn navigation trong `docs/features/feature-catalog.md` để ghi rõ directional reading-anchor semantics.
+- [ ] Sau khi triển khai code, cập nhật trạng thái section này thành Completed và ghi completion notes thực tế.
+- [ ] Build production, package VSIX và cài local theo repository rules.
+
+**Verification:**
+
+```bash
+npm run check-types
+npm run compile-tests
+npx vscode-test --run 'out/test/features/assistant-turn-navigation.test.js' --grep 'assistant-turn-navigation feature'
+npm test
+npm run package
+npx vsce package --no-dependencies --out .tmp/vscode-acp-chat-assistant-turn-navigation.vsix
+code --install-extension .tmp/vscode-acp-chat-assistant-turn-navigation.vsix --force
+```
+
+### Definition of Done cho điều chỉnh này
+
+- Từ reading anchor nằm giữa hai response, lần bấm đầu tiên luôn chọn response gần nhất theo đúng hướng.
+- Ví dụ `100, 180, [200], 210, 300` luôn cho `Next → 210 → 300` và `Previous → 180 → 100`.
+- Focus navigation, tool-only insertion handling, boundary clamp, single-response behavior, multi-session replay và auto-scroll control không regress.
+- Target vẫn là `.block-text` không rỗng đầu tiên; navigation không focus/highlight assistant root.
+- Tests, production build, VSIX packaging và local installation hoàn tất.
+
+### Completion notes ngày 2026-07-16
+
+- Navigation resolver trả thẳng destination index thay vì chọn response gần anchor nhất rồi cộng/trừ một index.
+- Lần bấm đầu tiên sau manual scroll chọn `.block-text` gần reading anchor nhất theo đúng hướng hình học; không phụ thuộc khoảng cách tuyệt đối hoặc giả định DOM order luôn khớp tọa độ.
+- Response nằm trong `±1px` quanh reading anchor bị loại khỏi candidate của cả hai hướng; Previous/Next vẫn chọn target gần nhất theo hình học ở phía trên/dưới, kể cả khi DOM order và tọa độ tạm thời khác nhau.
+- Focused navigable response, focused tool-only response, button-navigation anchor, single-response và boundary clamp giữ nguyên semantics trước đó.
+- Thêm regression coverage cho `Next → 210 → 300`, `Previous → 180 → 100`, geometry khác DOM order, equality epsilon, boundary clamp và smooth-scroll event giữa chuỗi bấm.
+- Targeted assistant-turn suite pass 15 tests, gồm cả focus chuyển từ assistant sang header button, focused tool-only turn và exact-anchor geometry với DOM order không tuần tự. Repo-wide type/test/package gates hiện bị chặn bởi các thay đổi ACP elicitation ngoài phạm vi đang thiếu `awaitingInput`, `pendingElicitationCount` và `ExtensionMessage.ownerId` compatibility; các file đó không bị sửa hoặc revert trong task này.

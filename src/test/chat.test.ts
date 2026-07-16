@@ -31,6 +31,7 @@ interface MockACPClient {
   setOnKillTerminalCommand: (callback: unknown) => void;
   setOnReleaseTerminal: (callback: unknown) => void;
   setOnPermissionRequest: (callback: unknown) => void;
+  setOnElicitationRequest: (callback: unknown) => void;
   isConnected: () => boolean;
   connect: () => Promise<void>;
   newSession: (dir: string) => Promise<{ sessionId: string }>;
@@ -77,6 +78,7 @@ class TestACPClient implements MockACPClient {
   public lastSetModelId: string | null = null;
   public lastSetConfigOptionId: string | null = null;
   public lastSetConfigOptionValue: string | null = null;
+  public elicitationRequest?: (context: unknown) => Promise<unknown>;
 
   setAgent(config: any): void {
     if (config && config.id) {
@@ -127,6 +129,11 @@ class TestACPClient implements MockACPClient {
   setOnKillTerminalCommand(): void {}
   setOnReleaseTerminal(): void {}
   setOnPermissionRequest(): void {}
+  setOnElicitationRequest(callback: unknown): void {
+    this.elicitationRequest = callback as (
+      context: unknown
+    ) => Promise<unknown>;
+  }
   isConnected(): boolean {
     return this.isConnectedValue;
   }
@@ -2079,6 +2086,42 @@ suite("ChatViewProvider", () => {
       provider.dispose();
     });
 
+    test("legacy ready replays a pending elicitation", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const pending = acpClient.elicitationRequest!({
+        params: {
+          mode: "form",
+          requestId: "request-scope",
+          message: "Choose",
+          requestedSchema: {
+            type: "object",
+            properties: { answer: { type: "string" } },
+          },
+        },
+        requestId: "rpc-1",
+        signal: new AbortController().signal,
+      });
+      const { messageHandler } = resolveView(provider);
+      messages.length = 0;
+
+      await messageHandler({ type: "ready" });
+
+      const replay = messages.find(
+        (message) => message.type === "feature.acp-elicitation.show"
+      );
+      assert.strictEqual(replay.ownerId, "legacy");
+      assert.strictEqual(replay.pendingElicitations.length, 1);
+      (provider as any).legacyElicitationOwner.cancelAll();
+      assert.deepStrictEqual(await pending, { action: "cancel" });
+      provider.dispose();
+    });
+
     test("legacy agent selection resets chat and creates exactly one session", async () => {
       const provider = new ChatViewProvider(
         vscode.Uri.file("/test"),
@@ -2123,9 +2166,9 @@ suite("ChatViewProvider", () => {
         events.push(message.type);
       };
       (provider as any).webviewReady = true;
-      const originalNewSession = (provider as any).sessionManager.newSession.bind(
-        (provider as any).sessionManager
-      );
+      const originalNewSession = (
+        provider as any
+      ).sessionManager.newSession.bind((provider as any).sessionManager);
       (provider as any).sessionManager.newSession = async (...args: any[]) => {
         events.push("newSession");
         return originalNewSession(...args);

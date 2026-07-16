@@ -43,6 +43,8 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
+import { ACP_ELICITATION_OWNER_LEGACY } from "../features/acp-elicitation/types";
+import type { AcpElicitationOwner } from "../features/acp-elicitation/host";
 
 const SELECTED_AGENT_KEY = "vscode-acp-chat.selectedAgent";
 const AGENT_PREFS_KEY = "vscode-acp-chat.agentPreferences.v1";
@@ -180,6 +182,7 @@ export class ChatViewProvider
   // Flag to track if the agent is currently generating a response
   private isGenerating = false;
   private legacyMessageQueue?: MessageQueueController;
+  private legacyElicitationOwner?: AcpElicitationOwner;
   private webviewReady = false;
   private legacyInputFocusPending = false;
 
@@ -204,6 +207,18 @@ export class ChatViewProvider
         vscode.commands.executeCommand("vscode-acp-chat.chatView.focus"),
       onQuickSwitch: () => this.switchSession(),
     });
+    if (!this.features.multiSession && this.features.acpElicitation) {
+      this.legacyElicitationOwner = this.features.acpElicitation.createOwner({
+        ownerId: ACP_ELICITATION_OWNER_LEGACY,
+        postMessage: (message) => this.postMessage(message),
+        postState: (state) =>
+          this.postMessage({
+            type: "feature.acp-elicitation.show",
+            ownerId: state.ownerId,
+            pendingElicitations: state.pendingElicitations,
+          }),
+      });
+    }
     if (this.features.multiSession) {
       this.multiSessionManagerView = new MultiSessionManagerViewProvider(
         this.extensionUri,
@@ -273,6 +288,7 @@ export class ChatViewProvider
     this.acpClient.setOnStateChange((state) => {
       this.postMessage({ type: "connectionState", state });
       if (state === "disconnected" || state === "error") {
+        this.legacyElicitationOwner?.cancelAll();
         this.postMessage({ type: "streamEnd", stopReason: "error" });
         if (this.stderrBuffer.trim().length > 0) {
           const lastLines = this.stderrBuffer
@@ -328,6 +344,11 @@ export class ChatViewProvider
     this.acpClient.setOnPermissionRequest(
       this.handlePermissionRequest.bind(this)
     );
+    this.acpClient.setOnElicitationRequest((context) =>
+      this.legacyElicitationOwner
+        ? this.legacyElicitationOwner.handleRequest(context)
+        : Promise.resolve({ action: "cancel" })
+    );
 
     this.diffManager.onDidChange(() => this.emitDiffSummary());
   }
@@ -382,6 +403,9 @@ export class ChatViewProvider
     }
 
     webviewView.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
+      if (await this.features.acpElicitation?.handleMessage(message)) {
+        return;
+      }
       if (await this.features.multiSession?.handleMessage(message as never)) {
         return;
       }
@@ -636,6 +660,7 @@ export class ChatViewProvider
           if (this.features.multiSession) {
             await this.features.multiSession.stop();
           } else {
+            this.legacyElicitationOwner?.cancelAll();
             await this.acpClient.cancel();
           }
           break;
@@ -720,6 +745,12 @@ export class ChatViewProvider
           });
           this.sendSessionMetadata();
           this.sendContextUsage();
+          this.postMessage({
+            type: "feature.acp-elicitation.show",
+            ownerId: ACP_ELICITATION_OWNER_LEGACY,
+            pendingElicitations:
+              this.legacyElicitationOwner?.getPendingViews() ?? [],
+          });
           this.flushLegacyInputFocus();
           break;
       }
@@ -1100,6 +1131,8 @@ export class ChatViewProvider
     this.features.chatFontSize?.dispose();
     this.multiSessionManagerView?.dispose();
     this.features.multiSession?.dispose();
+    this.legacyElicitationOwner?.dispose();
+    this.features.acpElicitation?.dispose();
     this.legacyInputFocusPending = false;
     this.webviewReady = false;
     this.sessionUpdateNotifier.dispose();
@@ -1421,6 +1454,7 @@ export class ChatViewProvider
       if (!ok) return;
     }
 
+    this.legacyElicitationOwner?.cancelAll();
     this.resetLegacyChatSurface();
     await this.requestLegacyInputFocus();
 
@@ -1450,6 +1484,7 @@ export class ChatViewProvider
       if (!ok) return;
     }
 
+    this.legacyElicitationOwner?.cancelAll();
     this.resetLegacyChatSurface();
     this.acpClient.setAgent(agent);
     this.outputPipeline.setLiveToolOutputProfile(agent.liveToolOutputProfile);
@@ -1485,7 +1520,9 @@ export class ChatViewProvider
   private async requestLegacyInputFocus(): Promise<void> {
     this.legacyInputFocusPending = true;
     try {
-      await vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
+      await vscode.commands.executeCommand(
+        `${ChatViewProvider.viewType}.focus`
+      );
     } catch (error) {
       console.error("[Chat] Failed to focus chat view:", error);
     }

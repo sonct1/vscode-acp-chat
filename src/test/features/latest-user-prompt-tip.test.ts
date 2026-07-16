@@ -54,6 +54,9 @@ suite("latest user prompt tip feature", () => {
   let scrollTop: number;
   let containerTop: number;
   let containerHeight: number;
+  let disableAutoScrollCount: number;
+  let scrolledElements: HTMLElement[];
+  let scrollIntoViewOptions: ScrollIntoViewOptions[];
   let frames: Map<number, FrameRequestCallback>;
   let nextFrameId: number;
 
@@ -84,6 +87,9 @@ suite("latest user prompt tip feature", () => {
     scrollTop = 800;
     containerTop = 0;
     containerHeight = 200;
+    disableAutoScrollCount = 0;
+    scrolledElements = [];
+    scrollIntoViewOptions = [];
     Object.defineProperty(messagesEl, "scrollHeight", {
       configurable: true,
       get: () => scrollHeight,
@@ -117,6 +123,12 @@ suite("latest user prompt tip feature", () => {
       document,
       window as unknown as Window
     );
+    const originalDisableAutoScroll =
+      controller.messageList.disableAutoScroll.bind(controller.messageList);
+    controller.messageList.disableAutoScroll = () => {
+      disableAutoScrollCount++;
+      originalDisableAutoScroll();
+    };
   });
 
   teardown(() => {
@@ -148,6 +160,18 @@ suite("latest user prompt tip feature", () => {
     )!;
   }
 
+  function getPreviousButton(): HTMLButtonElement {
+    return document.querySelector<HTMLButtonElement>(
+      ".latest-user-prompt-tip-action-previous"
+    )!;
+  }
+
+  function getNextButton(): HTMLButtonElement {
+    return document.querySelector<HTMLButtonElement>(
+      ".latest-user-prompt-tip-action-next"
+    )!;
+  }
+
   function setDocumentOffset(element: HTMLElement, offsetTop: number): void {
     element.getBoundingClientRect = () =>
       ({
@@ -161,6 +185,12 @@ suite("latest user prompt tip feature", () => {
         y: offsetTop - scrollTop,
         toJSON: () => ({}),
       }) as DOMRect;
+    element.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
+      scrolledElements.push(element);
+      scrollIntoViewOptions.push(
+        typeof options === "object" && options !== null ? options : {}
+      );
+    };
   }
 
   function appendUserMessage(text: string, offsetTop: number): HTMLElement {
@@ -212,16 +242,63 @@ suite("latest user prompt tip feature", () => {
     await settle();
   }
 
-  test("inserts a hidden tip above the prompt input", () => {
+  test("inserts a hidden accessible tip row above the prompt input", () => {
     const tip = getTip();
     const inputContainer = document.getElementById("input-container")!;
+    const children = Array.from(tip.children);
 
     assert.strictEqual(tip.hidden, true);
     assert.strictEqual(tip.tabIndex, 0);
-    assert.strictEqual(tip.nextElementSibling, inputContainer);
+    assert.strictEqual(tip.getAttribute("role"), "note");
+    assert.strictEqual(tip.parentElement, inputContainer.parentElement);
+    assert.strictEqual(
+      Array.from(inputContainer.parentElement?.children ?? []).indexOf(tip) <
+        Array.from(inputContainer.parentElement?.children ?? []).indexOf(
+          inputContainer
+        ),
+      true
+    );
+    assert.strictEqual(children[0]?.className, "latest-user-prompt-tip-label");
+    assert.strictEqual(children[1]?.className, "latest-user-prompt-tip-preview");
+    assert.strictEqual(children[2]?.className, "latest-user-prompt-tip-actions");
     assert.strictEqual(
       tip.querySelector(".latest-user-prompt-tip-label")?.textContent,
       "Tip:"
+    );
+
+    const actions = tip.querySelector<HTMLElement>(
+      ".latest-user-prompt-tip-actions"
+    )!;
+    assert.strictEqual(actions.getAttribute("role"), "group");
+    assert.strictEqual(
+      actions.getAttribute("aria-label"),
+      "Navigate user prompts"
+    );
+    assert.strictEqual(getPreviousButton().type, "button");
+    assert.strictEqual(
+      getPreviousButton().getAttribute("aria-label"),
+      "Navigate to previous user prompt"
+    );
+    assert.strictEqual(
+      getPreviousButton().getAttribute("acp-title"),
+      "Navigate to previous user prompt"
+    );
+    assert.strictEqual(
+      getPreviousButton().querySelector(".codicon-chevron-up") !== null,
+      true
+    );
+    assert.strictEqual(getNextButton().type, "button");
+    assert.strictEqual(
+      getNextButton().getAttribute("aria-label"),
+      "Navigate to next user prompt"
+    );
+    assert.strictEqual(
+      getNextButton().getAttribute("acp-title"),
+      "Navigate to next user prompt"
+    );
+    assert.strictEqual(
+      getNextButton().querySelector(".codicon-chevron-down") !== null,
+      true
     );
   });
 
@@ -256,6 +333,160 @@ suite("latest user prompt tip feature", () => {
     assert.strictEqual(getPreview().textContent, "Prompt two");
 
     await scrollTo(249);
+    assert.strictEqual(getPreview().textContent, "Prompt one");
+  });
+
+  test("navigates to previous and next textual prompts with smooth scrolling", async () => {
+    await appendThreeTurns();
+    await scrollTo(320);
+    let bubbledClicks = 0;
+    getTip().addEventListener("click", () => {
+      bubbledClicks++;
+    });
+
+    const previousClickResult = getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(previousClickResult, false);
+    assert.strictEqual(bubbledClicks, 0);
+    assert.strictEqual(disableAutoScrollCount, 1);
+    assert.strictEqual(scrolledElements[0].textContent, "Prompt one");
+    assert.deepStrictEqual(scrollIntoViewOptions[0], {
+      behavior: "smooth",
+      block: "start",
+    });
+    assert.strictEqual(getPreview().textContent, "Prompt one");
+
+    const nextClickResult = getNextButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(nextClickResult, false);
+    assert.strictEqual(bubbledClicks, 0);
+    assert.strictEqual(disableAutoScrollCount, 2);
+    assert.strictEqual(scrolledElements[1].textContent, "Prompt two");
+    assert.deepStrictEqual(scrollIntoViewOptions[1], {
+      behavior: "smooth",
+      block: "start",
+    });
+    assert.strictEqual(getPreview().textContent, "Prompt two");
+  });
+
+  test("keeps repeated navigation anchored during intermediate smooth-scroll events", async () => {
+    await appendThreeTurns();
+    await scrollTo(550);
+
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(getPreview().textContent, "Prompt two");
+    assert.strictEqual(scrolledElements[0].textContent, "Prompt two");
+
+    await scrollTo(500);
+    assert.strictEqual(getPreview().textContent, "Prompt two");
+
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements[1].textContent, "Prompt one");
+    assert.strictEqual(getPreview().textContent, "Prompt one");
+  });
+
+  test("disables prompt navigation while the session surface is locked", async () => {
+    await appendThreeTurns();
+    await scrollTo(320);
+
+    controller.setSessionTransitionLocked(true);
+    await settle();
+    assert.strictEqual(getTip().hasAttribute("inert"), true);
+    assert.strictEqual(getTip().getAttribute("aria-busy"), "true");
+    assert.strictEqual(getPreviousButton().disabled, true);
+    assert.strictEqual(getNextButton().disabled, true);
+
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements.length, 0);
+    assert.strictEqual(disableAutoScrollCount, 0);
+
+    controller.setSessionTransitionLocked(false);
+    await settle();
+    assert.strictEqual(getTip().hasAttribute("inert"), false);
+    assert.strictEqual(getTip().getAttribute("aria-busy"), "false");
+    assert.strictEqual(getPreviousButton().disabled, false);
+    assert.strictEqual(getNextButton().disabled, false);
+  });
+
+  test("disables navigation at boundaries without wrap-around", async () => {
+    await appendThreeTurns();
+
+    await scrollTo(80);
+    assert.strictEqual(getPreviousButton().disabled, true);
+    assert.strictEqual(getNextButton().disabled, false);
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(disableAutoScrollCount, 0);
+    assert.strictEqual(scrolledElements.length, 0);
+    assert.strictEqual(getPreview().textContent, "Prompt one");
+
+    await scrollTo(550);
+    assert.strictEqual(getPreviousButton().disabled, false);
+    assert.strictEqual(getNextButton().disabled, true);
+    getNextButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(disableAutoScrollCount, 0);
+    assert.strictEqual(scrolledElements.length, 0);
+    assert.strictEqual(getPreview().textContent, "Prompt three");
+  });
+
+  test("tracks duplicate prompt text by active index", async () => {
+    const first = appendUserMessage("Repeat prompt", 0);
+    appendAssistantMessage("Response one");
+    const second = appendUserMessage("Repeat prompt", 300);
+    appendAssistantMessage("Response two");
+    await settle();
+
+    await scrollTo(320);
+    assert.strictEqual(getPreview().textContent, "Repeat prompt");
+    assert.strictEqual(getNextButton().disabled, true);
+    assert.strictEqual(getPreviousButton().disabled, false);
+
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements[0], first);
+    assert.strictEqual(getPreview().textContent, "Repeat prompt");
+    assert.strictEqual(getPreviousButton().disabled, true);
+    assert.strictEqual(getNextButton().disabled, false);
+
+    getNextButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements[1], second);
+    assert.strictEqual(getPreviousButton().disabled, false);
+    assert.strictEqual(getNextButton().disabled, true);
+  });
+
+  test("skips non-text user turns as navigation targets", async () => {
+    appendUserMessage("Prompt one", 0);
+    appendAssistantMessage("Response one");
+    appendImageOnlyUserMessage(300);
+    appendAssistantMessage("Image response");
+    appendUserMessage("Prompt three", 600);
+    await settle();
+
+    await scrollTo(80);
+    getNextButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements[0].textContent, "Prompt three");
+    assert.strictEqual(getPreview().textContent, "Prompt three");
+
+    getPreviousButton().dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    assert.strictEqual(scrolledElements[1].textContent, "Prompt one");
     assert.strictEqual(getPreview().textContent, "Prompt one");
   });
 

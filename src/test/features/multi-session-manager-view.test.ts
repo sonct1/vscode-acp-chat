@@ -124,7 +124,7 @@ function makeState(revision: number): MultiSessionManagerStateMessage {
     type: "feature.multi-session.managerState",
     revision,
     sessions: [],
-    aggregate: { open: 0, running: 0, awaitingPermission: 0 },
+    aggregate: { open: 0, running: 0, awaitingPermission: 0, awaitingInput: 0 },
     agents: [],
     selectedAgentId: "test-agent",
   };

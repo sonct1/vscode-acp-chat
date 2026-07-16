@@ -1,35 +1,72 @@
-# Implementation Plan: Generic ACP Elicitation
+# Kế hoạch triển khai: Luồng ACP Elicitation dùng chung
 
-| Attribute            | Value                                                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Status               | Proposed                                                                                                                                                                             |
-| Scope                | ACP `elicitation/create`, structured form UI, legacy and multi-session routing, background-session review, validation, tests, documentation, packaging                               |
-| Primary feature path | `src/features/acp-elicitation/`                                                                                                                                                      |
-| Protocol             | `@agentclientprotocol/sdk@1.2.1`; unstable ACP elicitation surface                                                                                                                   |
-| References           | `src/acp/client.ts`, `src/views/chat.ts`, `src/features/multi-session/`, `src/features/register-host.ts`, `src/features/register-webview.ts`, `docs/architecture/acp-chat-layout.md` |
+| Thuộc tính    | Giá trị                                                                                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Trạng thái    | Hoàn tất giai đoạn 1; chờ smoke test agent thực tế sau khi reload VS Code                                                                                                            |
+| Phạm vi       | ACP `elicitation/create`, form nhập liệu có cấu trúc, legacy và multi-session, background session, validation, test, tài liệu và đóng gói                                            |
+| Feature chính | `src/features/acp-elicitation/`                                                                                                                                                      |
+| Protocol      | `@agentclientprotocol/sdk@1.2.1`; ACP elicitation hiện là unstable/experimental                                                                                                      |
+| Tham chiếu    | `src/acp/client.ts`, `src/views/chat.ts`, `src/features/multi-session/`, `src/features/register-host.ts`, `src/features/register-webview.ts`, `docs/architecture/acp-chat-layout.md` |
 
-## Objective
+## 1. Mục tiêu
 
-Add a generic ACP client-side elicitation flow so an ACP agent can request structured input from the user and continue the same turn after receiving the response.
+Triển khai **một luồng elicitation dùng chung ở tầng ACP** để mọi ACP agent tương thích có thể yêu cầu người dùng cung cấp dữ liệu có cấu trúc và tiếp tục xử lý trong cùng một turn.
 
-Primary use case:
+Luồng mục tiêu:
 
 ```text
-Claude Code AskUserQuestion
-  -> ACP elicitation/create (form)
-  -> VS Code ACP Chat renders a structured form
-  -> user answers / declines / cancels
-  -> CreateElicitationResponse returns to Claude
-  -> Claude continues the same prompt turn
+ACP agent bất kỳ
+  → ACP elicitation/create
+  → ACPClient
+  → feature ACP elicitation dùng chung
+  → webview hiển thị form
+  → user Accept / Decline / Cancel
+  → Extension Host kiểm tra dữ liệu
+  → CreateElicitationResponse
+  → agent tiếp tục cùng turn
 ```
 
-The implementation must be agent-neutral. It must not branch on `agentId === "claude-code"` or parse Claude-specific payloads.
+Claude Code `AskUserQuestion` là use case đầu tiên để kiểm chứng, **không phải kiến trúc riêng cho Claude Code**.
 
-## Scope decision
+Không được triển khai logic theo agent ID:
 
-### Phase 1: form elicitation MVP
+```ts
+// Không làm như vậy
+if (agentId === "claude-code") {
+  // render AskUserQuestion
+}
+```
 
-Implement and advertise:
+Thay vào đó, mọi agent phát đúng ACP `elicitation/create` phải đi qua cùng transport, queue, validation, UI và response lifecycle.
+
+## 2. Phân biệt elicitation và permission
+
+Hai luồng có mục đích khác nhau và phải được giữ tách biệt:
+
+```text
+session/requestPermission
+  → user cho phép hoặc từ chối một hành động nhạy cảm
+
+elicitation/create
+  → agent hỏi và thu thập dữ liệu có cấu trúc từ user
+```
+
+| Nội dung                  | Permission                              | Elicitation                                            |
+| ------------------------- | --------------------------------------- | ------------------------------------------------------ |
+| Mục đích                  | Cho phép chạy tool, ghi file, chạy lệnh | Thu thập lựa chọn, text, số, boolean hoặc dữ liệu form |
+| Request                   | `session/requestPermission`             | `elicitation/create`                                   |
+| Response                  | `selected` hoặc `cancelled`             | `accept`, `decline` hoặc `cancel`                      |
+| Dữ liệu trả về            | `optionId`                              | `content` theo schema                                  |
+| UI                        | Permission dialog                       | Form nhập liệu riêng                                   |
+| Có thể tiếp tục cùng turn | Có                                      | Có                                                     |
+
+Không tái sử dụng permission dialog để giả lập elicitation. Việc đó sẽ làm mất semantics của `decline`, free-text, multi-select và validation theo schema.
+
+## 3. Quyết định phạm vi
+
+### 3.1. Giai đoạn 1: form elicitation
+
+Chỉ quảng bá capability khi toàn bộ host handler và webview UI đã sẵn sàng:
 
 ```ts
 clientCapabilities: {
@@ -39,45 +76,63 @@ clientCapabilities: {
 }
 ```
 
-Support:
+Phạm vi hỗ trợ:
 
-- session-scoped forms;
-- tool-call-scoped forms;
-- request-scoped forms that may occur before an ACP session exists;
-- single-select, multi-select, text, number, integer and boolean fields;
-- `email`, `uri`, `date` and `date-time` string formats;
-- `accept`, `decline` and `cancel` responses;
-- active and background multi-session requests;
-- agent cancellation, session stop/close and extension disposal.
+- form gắn với ACP session;
+- form gắn với một tool call;
+- form gắn với JSON-RPC request trước khi ACP session được tạo;
+- text và free-text;
+- single-select;
+- multi-select;
+- number và integer;
+- boolean;
+- `email`, `uri`, `date`, `date-time`;
+- response `accept`, `decline`, `cancel`;
+- legacy single-session;
+- multi-session active và background;
+- agent hủy JSON-RPC request;
+- user Stop, đóng session hoặc dispose extension.
 
-### Phase 2: URL elicitation
+### 3.2. Giai đoạn 2: URL elicitation
 
-Do not advertise `url: {}` in Phase 1.
+Không quảng bá `url: {}` trong giai đoạn 1.
 
-URL elicitation needs a separate lifecycle:
+URL elicitation có lifecycle riêng:
 
 ```text
 elicitation/create(mode=url)
-  -> user explicitly opens validated URL
-  -> external browser flow
-  -> agent sends elicitation/complete
-  -> extension closes waiting UI
+  → extension hiển thị yêu cầu mở URL
+  → user chủ động mở browser
+  → user hoàn thành flow ngoài extension
+  → agent gửi elicitation/complete
+  → extension đóng trạng thái chờ
 ```
 
-It also requires URL security rules, `elicitationId` correlation and completion notification handling. Advertising URL support before all of those exist would expose an incomplete capability.
+Giai đoạn này cần thêm:
 
-### Non-goals for Phase 1
+- validate URL và protocol;
+- chỉ mở URL khi user chủ động;
+- correlation bằng `elicitationId`;
+- handler cho notification `elicitation/complete`;
+- trạng thái chờ external flow;
+- xử lý completion trùng hoặc đến sai thứ tự;
+- chính sách riêng cho OAuth và URL có dữ liệu nhạy cảm.
 
-- Supporting vendor-specific question methods such as `opencode/question`, `gemini/requestUserInput` or `cursor/ask_question`.
-- Refactoring the existing permission system into the elicitation feature.
-- Persisting answers or forms across VS Code restart.
-- Treating elicitation answers as ordinary chat prompts.
-- Rendering custom/unknown elicitation modes or custom field types heuristically.
-- Executing arbitrary agent-provided regular expressions.
+### 3.3. Ngoài phạm vi giai đoạn 1
 
-## Current state
+- Custom method như `opencode/question`.
+- Custom method như `gemini/requestUserInput`.
+- Custom method như `cursor/ask_question`.
+- Refactor permission và elicitation thành một hệ thống duy nhất.
+- Lưu form hoặc câu trả lời qua lần restart VS Code.
+- Chuyển câu trả lời elicitation thành user prompt thông thường.
+- Render custom/unknown elicitation mode theo suy đoán.
+- Render custom/unknown property type theo suy đoán.
+- Chạy tùy ý regular expression từ trường `pattern` do agent cung cấp.
 
-`ACPClient.connect()` currently advertises only filesystem and terminal capabilities:
+## 4. Hiện trạng extension
+
+`ACPClient.connect()` hiện chỉ quảng bá filesystem và terminal:
 
 ```ts
 clientCapabilities: {
@@ -89,28 +144,37 @@ clientCapabilities: {
 }
 ```
 
-It registers request handlers for permission, filesystem and terminal operations, but not:
+Extension chưa có:
 
-- `elicitation/create`;
-- `elicitation/complete`.
+- `clientCapabilities.elicitation.form`;
+- request handler cho `elicitation/create`;
+- notification handler cho `elicitation/complete`;
+- host queue dành cho elicitation;
+- webview form renderer;
+- validation câu trả lời theo schema;
+- routing elicitation theo multi-session.
 
-Consequences:
+Hệ quả với Claude Code hiện tại:
 
-- `@agentclientprotocol/claude-agent-acp` sees no `elicitation.form` capability.
-- Claude's adapter adds `AskUserQuestion` to its disabled tools.
-- The model reports that `AskUserQuestion` is unavailable.
-- No request reaches the Extension Host or webview.
-
-## Protocol contract
-
-SDK `1.2.1` exposes:
-
-```ts
-acp.methods.client.elicitation.create; // request
-acp.methods.client.elicitation.complete; // notification
+```text
+VS Code ACP Chat không quảng bá elicitation.form
+  → claude-agent-acp disable AskUserQuestion
+  → Claude báo tool không có trong environment
+  → không có request nào tới Extension Host
 ```
 
-Form request:
+Đây là thiếu capability ở ACP client, không phải lỗi riêng của model hoặc permission mode.
+
+## 5. Contract ACP cần hỗ trợ
+
+SDK `1.2.1` có:
+
+```ts
+acp.methods.client.elicitation.create;
+acp.methods.client.elicitation.complete;
+```
+
+### 5.1. Form request
 
 ```ts
 {
@@ -129,7 +193,21 @@ Form request:
 }
 ```
 
-Response:
+Request có hai loại scope:
+
+```text
+Session scope
+  → có sessionId
+  → có thể có toolCallId
+
+Request scope
+  → có requestId
+  → có thể xảy ra trước session/new
+```
+
+Vì vậy không được route chỉ dựa trên `params.sessionId`.
+
+### 5.2. Response
 
 ```ts
 { action: "accept", content?: Record<string, ElicitationContentValue> | null }
@@ -137,60 +215,102 @@ Response:
 { action: "cancel" }
 ```
 
-Allowed accepted content values are:
+Giá trị hợp lệ trong `content`:
 
 ```ts
 string | number | boolean | string[]
 ```
 
-The feature must fail closed. It must never fabricate accepted content or copy the current permission fallback that auto-selects an allow option.
+### 5.3. Nguyên tắc fail-closed
 
-## Target architecture
+Nếu handler chưa được đăng ký, schema không hợp lệ hoặc mode không được hỗ trợ:
 
-```text
-ACP agent / adapter
-  │ elicitation/create
-  ▼
-ACPClient
-  │ typed transport callback with params + requestId + AbortSignal
-  ▼
-src/features/acp-elicitation/host.ts
-  │ owner-scoped pending interaction
-  ├─ legacy owner
-  └─ multi-session localSessionId owner
-  ▼
-Chat webview
-  │ feature.acp-elicitation.state
-  ▼
-src/features/acp-elicitation/webview.ts
-  │ normalized schema-driven form
-  ▼
-User Accept / Decline / Cancel
-  │ feature.acp-elicitation.respond
-  ▼
-Host-side authoritative validation
-  ▼
-CreateElicitationResponse
-  ▼
-ACP agent continues the same turn
+```ts
+{
+  action: "cancel";
+}
 ```
 
-### Ownership rule
+Không được tự điền dữ liệu hoặc tự `accept`. Không sao chép hành vi fallback hiện tại của permission là tự chọn allow option đầu tiên.
 
-Route by the `ACPClient` runtime owner, not only by `params.sessionId`.
+## 6. Kiến trúc mục tiêu
 
-Reason: request-scoped elicitation may occur before `session/new`, so there may be no ACP session ID yet.
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ ACP agent / adapter                                          │
+│ Claude, Codex, Goose, Kimi hoặc custom ACP agent            │
+└───────────────────────────┬──────────────────────────────────┘
+                            │ elicitation/create
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ src/acp/client.ts                                            │
+│ - ACP transport                                              │
+│ - capability negotiation                                     │
+│ - chuyển params + requestId + AbortSignal                   │
+└───────────────────────────┬──────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ src/features/acp-elicitation/host.ts                         │
+│ - owner registry                                             │
+│ - pending FIFO                                               │
+│ - lifecycle/cancellation                                     │
+│ - host-side validation                                       │
+└──────────────────────┬───────────────────────┬───────────────┘
+                       │                       │
+                       ▼                       ▼
+                Legacy owner         Multi-session owner
+                   legacy              localSessionId
+                       │                       │
+                       └──────────────┬────────┘
+                                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│ src/features/acp-elicitation/webview.ts                      │
+│ - form UI dùng chung                                         │
+│ - validation UX                                              │
+│ - Accept / Decline / Cancel                                  │
+└───────────────────────────┬──────────────────────────────────┘
+                            │ feature.acp-elicitation.respond
+                            ▼
+                  Host validate lần cuối
+                            │
+                            ▼
+                  CreateElicitationResponse
+```
 
-Owner mapping:
+### 6.1. Quy tắc ownership
 
-| Runtime                     | Owner ID                        |
-| --------------------------- | ------------------------------- |
-| Legacy singleton ACP client | `legacy`                        |
-| Multi-session ACP client    | `ManagedSession.localSessionId` |
+Mỗi `ACPClient` phải được bind với đúng owner ngay khi runtime được tạo:
 
-## Feature organization
+| Runtime                  | Owner                           |
+| ------------------------ | ------------------------------- |
+| Legacy ACP client        | `legacy`                        |
+| Multi-session ACP client | `ManagedSession.localSessionId` |
 
-Create:
+Cách này hỗ trợ cả request-scoped elicitation chưa có `sessionId`.
+
+### 6.2. Phân chia trách nhiệm
+
+`src/acp/client.ts` chỉ chịu trách nhiệm:
+
+- đăng ký ACP request handler;
+- quảng bá capability;
+- chuyển request context đầy đủ;
+- fallback `cancel` khi không có handler.
+
+`src/features/acp-elicitation/` chịu trách nhiệm:
+
+- normalize schema;
+- queue và owner routing;
+- lifecycle pending request;
+- validation;
+- form UI;
+- response routing;
+- multi-session snapshot;
+- cancellation và cleanup.
+
+## 7. Tổ chức feature
+
+Tạo mới:
 
 ```text
 src/features/acp-elicitation/
@@ -204,29 +324,27 @@ src/features/acp-elicitation/
 src/test/features/acp-elicitation.test.ts
 ```
 
-Responsibilities:
+| File             | Trách nhiệm                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| `types.ts`       | DTO an toàn cho browser và message contract `feature.acp-elicitation.*`; không import `vscode`. |
+| `form-schema.ts` | Chuyển ACP schema thành model nội bộ và validate response; ưu tiên pure functions.              |
+| `host.ts`        | Owner registry, pending request, response routing, cancellation, snapshot projection.           |
+| `webview.ts`     | Render form, thu thập dữ liệu, báo lỗi, focus management, gửi response.                         |
+| `styles.ts`      | CSS riêng của feature.                                                                          |
+| `index.ts`       | Export public cần thiết, không trộn host và browser dependency.                                 |
 
-| File             | Responsibility                                                                                                               |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`       | Browser-safe DTOs and `feature.acp-elicitation.*` message contracts. Do not import `vscode` or ACP SDK runtime code.         |
-| `form-schema.ts` | Convert SDK form schemas into a strict normalized model and validate submitted answers. Pure functions.                      |
-| `host.ts`        | Owner registry, pending request lifecycle, response routing, cancellation and snapshot projection. May import ACP SDK types. |
-| `webview.ts`     | Render the active form, collect values, show errors, manage focus and post responses. Must not import `vscode`.              |
-| `styles.ts`      | Feature-local styles injected by `webview.ts`.                                                                               |
-| `index.ts`       | Optional type-safe public exports without crossing host/browser environments.                                                |
-
-Register through:
+Đăng ký qua:
 
 - `src/features/register-host.ts`;
 - `src/features/register-webview.ts`.
 
-Core files must contain only stable transport/dispatch integration points.
+Core files chỉ thêm integration point nhỏ, ổn định.
 
-## Normalized form model
+## 8. DTO giữa host và webview
 
-Do not send raw `_meta`, custom payloads or arbitrary JSON Schema into the webview.
+Không gửi raw `_meta`, custom payload hoặc toàn bộ ACP schema trực tiếp sang webview.
 
-Suggested DTO:
+### 8.1. Form DTO
 
 ```ts
 interface ElicitationFormView {
@@ -239,7 +357,11 @@ interface ElicitationFormView {
   fields: ElicitationFieldView[];
   createdAt: number;
 }
+```
 
+Field đã normalize:
+
+```ts
 type ElicitationFieldView =
   | TextFieldView
   | SingleSelectFieldView
@@ -248,16 +370,17 @@ type ElicitationFieldView =
   | BooleanFieldView;
 ```
 
-Each field includes:
+Mỗi field chứa:
 
-- stable property key;
-- human-readable label;
-- optional description;
+- property key;
+- label;
+- description nếu có;
 - required flag;
-- safe default value;
-- normalized constraints relevant to the field type.
+- default value hợp lệ;
+- constraints cần thiết;
+- danh sách options đã sanitize nếu có.
 
-Webview-to-host response:
+### 8.2. Response message
 
 ```ts
 interface ElicitationRespondMessage {
@@ -269,58 +392,63 @@ interface ElicitationRespondMessage {
 }
 ```
 
-Never use ACP JSON-RPC request IDs as public webview correlation IDs. Generate opaque local IDs with `crypto.randomUUID()`.
+Không dùng ACP JSON-RPC request ID làm ID public trong webview. Dùng `crypto.randomUUID()` để tạo `interactionId` nội bộ.
 
-## Form field mapping
+## 9. Mapping schema sang UI
 
-| ACP schema                             | UI control                                                  |
-| -------------------------------------- | ----------------------------------------------------------- |
-| `string`                               | text input or textarea                                      |
-| `string` + `enum`                      | single-select radio/listbox                                 |
-| `string` + `oneOf`                     | titled single-select with descriptions                      |
-| `string`, format `email`               | email input                                                 |
-| `string`, format `uri`                 | URL text input; value is returned, not opened automatically |
-| `string`, format `date`                | date input                                                  |
-| `string`, format `date-time`           | datetime-local input with ISO conversion on submit          |
-| `number`                               | number input                                                |
-| `integer`                              | number input with integer validation                        |
-| `boolean`                              | checkbox                                                    |
-| `array` with string enum/`anyOf` items | multi-select checkboxes                                     |
+| ACP schema                                 | UI                                                    |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `string`                                   | Text input hoặc textarea                              |
+| `string` + `enum`                          | Single-select                                         |
+| `string` + `oneOf`                         | Single-select có title và description                 |
+| `string`, format `email`                   | Email input                                           |
+| `string`, format `uri`                     | URL text input; không tự mở URL                       |
+| `string`, format `date`                    | Date input                                            |
+| `string`, format `date-time`               | Datetime input; chuyển về định dạng hợp lệ khi submit |
+| `number`                                   | Number input                                          |
+| `integer`                                  | Number input kèm integer validation                   |
+| `boolean`                                  | Checkbox                                              |
+| `array` với enum hoặc `anyOf` string items | Multi-select checkboxes                               |
 
-Rendering policy:
+Quy tắc render:
 
-- use radio controls for small single-select sets;
-- use a listbox/select for long sets;
-- use checkboxes for multi-select;
-- render all agent text through `textContent`;
-- do not use unsanitized `innerHTML`.
+- dùng radio cho single-select có ít options;
+- dùng listbox/select cho danh sách dài;
+- dùng checkbox group cho multi-select;
+- mọi text từ agent phải gán bằng `textContent`;
+- không render agent content bằng `innerHTML`;
+- custom field không nhận diện được phải fail closed.
 
-Claude's current `AskUserQuestion` adapter emits ordinary form fields, including separate custom-answer string fields. The generic renderer must support those without Claude-specific code.
+Claude adapter hiện biểu diễn custom answer bằng field string riêng. Generic renderer sẽ xử lý được mà không cần biết payload đến từ Claude.
 
-## Schema validation
+## 10. Schema compiler và validation
 
-### Host-side normalization
+### 10.1. Dùng type guard của SDK
 
-Use SDK type guards where available:
+Ưu tiên các guard public:
 
 - `CreateElicitationRequest.isForm()`;
 - `ElicitationPropertySchema` guards;
 - `MultiSelectItems` guards.
 
-Do not import private SDK Zod modules and do not add a general JSON Schema engine.
+Không import private Zod module của SDK và không thêm dependency JSON Schema tổng quát.
 
-Reject or cancel schemas that contain:
+### 10.2. Schema phải bị từ chối nếu
 
-- an unknown form field type;
-- malformed enum definitions;
-- both `enum` and `oneOf` on one string field;
-- required keys absent from `properties`;
-- invalid defaults;
-- contradictory constraints;
-- unsafe or unsupported `pattern` constraints;
-- resource limits exceeding configured constants.
+- field type không được hỗ trợ;
+- `required` trỏ tới property không tồn tại;
+- string field đồng thời có `enum` và `oneOf`;
+- enum có giá trị trùng;
+- default value không hợp lệ;
+- `minimum > maximum`;
+- `minLength > maxLength`;
+- `minItems > maxItems`;
+- multi-select items không phải string enum/`anyOf`;
+- schema vượt resource limits;
+- có `pattern` trong giai đoạn 1;
+- mode là custom/unknown.
 
-### Suggested defensive limits
+### 10.3. Giới hạn phòng vệ đề xuất
 
 ```ts
 MAX_PENDING_PER_OWNER = 8;
@@ -332,30 +460,32 @@ MAX_STRING_ANSWER_CHARS = 16_000;
 MAX_RESPONSE_BYTES = 64 * 1024;
 ```
 
-The exact constants may be tuned during implementation, but explicit limits must exist before capability advertisement.
+Các giá trị có thể được điều chỉnh khi triển khai, nhưng phải có giới hạn rõ ràng trước khi quảng bá capability.
 
-### Submission validation
+### 10.4. Validate hai lần
 
-Validate twice:
+1. Webview validate để phản hồi UX ngay.
+2. Extension Host validate lại vì webview message không đáng tin cậy.
 
-1. Webview validation for immediate UX.
-2. Host validation as the authority because webview messages are untrusted.
+Host phải kiểm tra:
 
-Host rules:
+- chỉ có property key đã khai báo;
+- required property có mặt;
+- đúng primitive type;
+- array chỉ chứa string hợp lệ;
+- enum membership;
+- min/max length;
+- min/max number;
+- min/max selection count;
+- integer là safe integer;
+- optional field không có giá trị thì bỏ khỏi content, không gửi `null`;
+- tổng response không vượt giới hạn.
 
-- accept only known property keys;
-- enforce required property presence;
-- enforce primitive type and array type;
-- enforce enum membership;
-- enforce lengths, ranges and selection counts;
-- require integers to be safe integers;
-- omit absent optional fields rather than sending `null`;
-- reject oversized response payloads;
-- do not resolve the ACP request on invalid input; return field errors to the webview.
+Nếu dữ liệu sai, không resolve ACP request. Host trả field errors về webview để user sửa.
 
-## Host coordinator lifecycle
+## 11. Host coordinator
 
-Suggested API shape:
+API dự kiến:
 
 ```ts
 interface AcpElicitationHostFeature {
@@ -379,7 +509,7 @@ interface AcpElicitationOwner {
 }
 ```
 
-A pending record contains:
+Pending record:
 
 ```ts
 interface PendingElicitation {
@@ -395,20 +525,21 @@ interface PendingElicitation {
 }
 ```
 
-Rules:
+Quy tắc:
 
-- one pending request is resolved exactly once;
-- duplicate webview responses are ignored;
-- owner mismatch is rejected;
-- unknown interaction IDs are ignored and logged without content values;
-- only the oldest pending request is rendered as active; later requests remain FIFO queued;
-- pending content is memory-only and not stored in global state.
+- mỗi request chỉ được settle đúng một lần;
+- response trùng bị bỏ qua;
+- owner không khớp bị từ chối;
+- interaction ID không tồn tại bị bỏ qua và log không chứa answer values;
+- chỉ render request pending cũ nhất;
+- các request tiếp theo xếp FIFO;
+- toàn bộ pending content chỉ tồn tại trong memory.
 
-## ACPClient changes
+## 12. Thay đổi tại `ACPClient`
 
-Modify `src/acp/client.ts` minimally.
+Chỉ sửa tối thiểu trong `src/acp/client.ts`.
 
-### Add typed callback
+### 12.1. Callback mới
 
 ```ts
 type ElicitationCallback = (context: {
@@ -418,9 +549,9 @@ type ElicitationCallback = (context: {
 }) => Promise<CreateElicitationResponse>;
 ```
 
-Use a single handler rather than a listener set because one inbound request must have one response owner.
+Dùng một handler duy nhất, không dùng listener set, vì mỗi inbound request phải có đúng một owner trả lời.
 
-### Register request handler
+### 12.2. Đăng ký request handler
 
 ```ts
 .onRequest(acp.methods.client.elicitation.create, (ctx) =>
@@ -428,7 +559,7 @@ Use a single handler rather than a listener set because one inbound request must
 )
 ```
 
-Safe fallback when no feature handler exists:
+Fallback:
 
 ```ts
 {
@@ -436,11 +567,9 @@ Safe fallback when no feature handler exists:
 }
 ```
 
-Never auto-accept.
+### 12.3. Quảng bá capability có điều kiện
 
-### Advertise capability conditionally
-
-The handler must be bound before `connect()`.
+Handler phải được bind trước `connect()`:
 
 ```ts
 clientCapabilities: {
@@ -452,114 +581,126 @@ clientCapabilities: {
 }
 ```
 
-Do not advertise `url` in Phase 1.
+Không quảng bá `url` trong giai đoạn 1.
 
-### Preserve request cancellation
+### 12.4. Giữ cancellation context
 
-Pass the SDK handler's `AbortSignal` into the feature. Do not reduce the callback to `params` only.
+Không chỉ chuyển `ctx.params`. Phải chuyển cả:
 
-## Legacy integration
+- `ctx.requestId`;
+- `ctx.signal`.
 
-In `ChatViewProvider`:
+Khi agent gửi `$/cancel_request`, UI pending phải được gỡ và request không được hiểu nhầm là user decline.
 
-1. Create the legacy elicitation owner after host feature registration.
-2. Bind `acpClient.setOnElicitationRequest(...)` before auto-connect.
-3. Route `feature.acp-elicitation.respond` through the feature before the core switch.
-4. Post owner state to the webview whenever the queue changes.
-5. Cancel pending requests on:
-   - stop;
-   - new chat/agent replacement when the old runtime is disposed;
-   - provider disposal;
-   - connection error/disconnect.
+## 13. Tích hợp legacy
 
-Do not add a second queue directly to `ChatViewProvider`.
+Trong `ChatViewProvider`:
 
-## Multi-session integration
+1. Tạo owner `legacy` từ feature dùng chung.
+2. Bind `acpClient.setOnElicitationRequest(...)` trước khi auto-connect.
+3. Route `feature.acp-elicitation.respond` qua feature trước core switch.
+4. Post owner state sang webview khi pending queue thay đổi.
+5. Cancel pending request khi:
+   - user Stop;
+   - tạo chat mới và dispose runtime cũ;
+   - đổi agent và dispose runtime cũ;
+   - provider dispose;
+   - connection error hoặc disconnect.
 
-### Managed session state
+Không thêm elicitation queue riêng trực tiếp vào `ChatViewProvider`.
 
-Add one elicitation owner handle per `ManagedSession`, or maintain owner state in the central feature keyed by `localSessionId`.
+## 14. Tích hợp multi-session
 
-Add summary fields:
+### 14.1. Session state
+
+Mỗi `ManagedSession` có owner trong feature dùng chung hoặc tham chiếu đến owner được quản lý tập trung bằng `localSessionId`.
+
+Thêm vào list item:
 
 ```ts
 pendingElicitationCount: number;
 ```
 
-Add status:
+Thêm status:
 
 ```ts
 "awaiting_input";
 ```
 
-Add aggregate:
+Thêm aggregate:
 
 ```ts
 awaitingInput: number;
 ```
 
-Status priority:
+Ưu tiên status:
 
 ```text
 error
   > awaiting_input
   > awaiting_permission
-  > running/loading/cancelling
-  > idle/draft
+  > running / loading / cancelling
+  > idle / draft
 ```
 
-### Active session
+Nếu permission và elicitation cùng pending, UI phải hiển thị cả hai badge. Không tự resolve loại nào.
 
-When an active session receives an elicitation:
+### 14.2. Active session
 
-- render the form immediately;
-- preserve the current composer draft;
-- keep Stop available;
-- do not mutate `isGenerating` merely to show the form;
-- do not insert the form into transcript history.
+Khi active session nhận elicitation:
 
-### Background session
+- render form ngay;
+- giữ nguyên composer draft;
+- tiếp tục cho phép Stop;
+- không thay đổi `isGenerating` chỉ để hiện form;
+- không đưa form vào transcript;
+- không đưa answer vào transcript hoặc persisted state.
 
-When a background session receives an elicitation:
+### 14.3. Background session
 
-- queue it under the correct `localSessionId`;
-- do not steal focus;
-- update Session Manager status and count;
-- show `Review input` action;
-- activate and focus the owner session only when the user requests review.
+Khi background session nhận elicitation:
 
-### Snapshot contract
+- queue đúng owner session;
+- không tự chuyển session;
+- không mở modal đè lên session đang đọc;
+- Session Manager hiện `Needs input`;
+- thêm action `Review input`;
+- chỉ activate/focus session khi user chọn Review.
 
-Extend active snapshot:
+### 14.4. Snapshot
+
+Mở rộng active snapshot:
 
 ```ts
 pendingElicitations?: ElicitationFormView[]
 ```
 
-Pending elicitation state must be outside `transcript` to avoid duplicate replay.
+Không append elicitation vào transcript. Pending state chỉ có một nguồn là `pendingElicitations`.
 
-During `applySnapshot()`:
+Thứ tự `applySnapshot()`:
 
-1. reset the old active elicitation UI;
+1. gỡ elicitation UI của session cũ;
 2. replay transcript;
-3. apply metadata/context/diff;
-4. replace elicitation state from `pendingElicitations`;
-5. restore composer draft and scroll state.
+3. apply metadata, context và diff;
+4. replace elicitation state từ `pendingElicitations`;
+5. restore composer draft và scroll state.
 
-### Session Manager
+Cách này tránh render trùng khi snapshot replay.
 
-Extend `MultiSessionListItem` and manager UI:
+### 14.5. Session Manager
 
-- badge: `N input`;
-- action: `Review input`;
-- summary: `Input N` or include it in a generic waiting count;
-- filter support for `awaiting_input`.
+Bổ sung:
 
-If both permission and elicitation are pending, show both badges and route each review action to the same owner session without resolving either automatically.
+- badge `N input`;
+- action `Review input`;
+- filter `awaiting_input`;
+- aggregate `Input N` hoặc tổng waiting có phân loại rõ ràng.
 
-## Webview UX
+Action Review chỉ activate đúng owner session và focus chat. Không gửi answer thay user.
 
-Place a dedicated interaction panel above the composer, outside the transcript.
+## 15. Webview UX
+
+Dùng một panel riêng phía trên composer, ngoài transcript:
 
 ```text
 ┌──────────────────────────────────────────────────────┐
@@ -573,56 +714,68 @@ Place a dedicated interaction panel above the composer, outside the transcript.
 │                                                      │
 │ [Cancel] [Decline]                         [Submit]  │
 └──────────────────────────────────────────────────────┘
-│ Existing composer draft remains preserved            │
+│ Composer draft vẫn được giữ nguyên                    │
 ```
 
-Behavior:
+Quy tắc UX:
 
-- first invalid field receives focus after submit;
-- errors are summarized in an `aria-live` region;
-- successful submit removes the form and restores focus appropriately;
-- `Escape` maps to `cancel` only when focus is inside the elicitation panel and no inner popup is active;
-- `Decline` is semantically different from `Cancel`;
-- no automatic submission on ordinary Enter in multiline text;
-- labels and descriptions are associated through `for`, `aria-describedby`, `fieldset` and `legend`;
-- do not use the permission dialog's `setGenerating(true)` behavior.
+- `Submit` chỉ gửi khi host có thể validate thành công;
+- field lỗi đầu tiên được focus;
+- error summary dùng `aria-live`;
+- `Decline` và `Cancel` là hai hành động khác nhau;
+- Enter trong multiline text không tự submit;
+- Escape chỉ cancel khi focus nằm trong elicitation panel và không có popup con đang mở;
+- submit thành công gỡ form và restore focus hợp lý;
+- không gọi permission dialog hoặc dùng `setGenerating(true)`;
+- không làm sai message queue processing state;
+- Stop button vẫn khả dụng.
 
-Add a small generic composer interaction-lock API if needed. It must preserve draft HTML and keep Stop usable; it must not alter message-queue processing state.
+Accessibility:
 
-## Cancellation and error semantics
+- label gắn đúng input qua `for`;
+- option group dùng `fieldset` và `legend`;
+- help/error text nối bằng `aria-describedby`;
+- required state được thông báo;
+- keyboard thao tác được toàn bộ;
+- responsive trong sidebar hẹp và font size lớn.
 
-| Event                             | Result                                                                  |
-| --------------------------------- | ----------------------------------------------------------------------- |
-| User submits valid form           | `{ action: "accept", content }`                                         |
-| User explicitly declines          | `{ action: "decline" }`                                                 |
-| User cancels/dismisses            | `{ action: "cancel" }`                                                  |
-| Session stop                      | cancel every pending elicitation owned by that session                  |
-| Session close/dispose             | cancel every pending elicitation owned by that session                  |
-| Extension/provider disposal       | cancel all pending requests where transport is still available          |
-| Agent sends JSON-RPC cancellation | remove UI and settle as request-cancelled; do not report user decline   |
-| Connection loss                   | clear local pending UI/state; response delivery is no longer guaranteed |
-| Invalid/unsupported schema        | fail closed with `cancel` and show a non-sensitive user-visible error   |
-| Unknown elicitation mode          | preserve only for diagnostics, do not render, return `cancel`           |
+## 16. Cancellation và error semantics
 
-Do not add a 60-second timeout. Elicitations may belong to background sessions and are explicitly designed to wait for user input. A timeout can be considered later as an opt-in policy.
+| Sự kiện                         | Kết quả                                                             |
+| ------------------------------- | ------------------------------------------------------------------- |
+| User submit form hợp lệ         | `{ action: "accept", content }`                                     |
+| User chủ động từ chối           | `{ action: "decline" }`                                             |
+| User đóng/hủy form              | `{ action: "cancel" }`                                              |
+| User Stop session               | Cancel toàn bộ elicitation của owner session                        |
+| Đóng/dispose session            | Cancel toàn bộ elicitation của owner session                        |
+| Dispose extension/provider      | Cancel pending request khi transport còn khả dụng                   |
+| Agent gửi JSON-RPC cancellation | Gỡ UI, settle theo request cancellation; không báo là user decline  |
+| Connection mất                  | Xóa local pending state; không đảm bảo gửi được response            |
+| Schema invalid/unsupported      | Fail closed bằng `cancel`, hiển thị lỗi không chứa dữ liệu nhạy cảm |
+| Mode unknown/custom             | Không render, trả `cancel`                                          |
 
-## Security and privacy
+Không đặt timeout 60 giây trong giai đoạn 1. Background elicitation có thể cần user quay lại sau một khoảng thời gian; timeout cố định dễ làm agent bị cancel ngoài ý muốn.
 
-- Treat all agent schema text and all webview responses as untrusted.
-- Render labels/messages with `textContent`.
-- Never log accepted field values.
-- Never store submitted values in transcript, `globalState`, webview persisted state or telemetry.
-- Do not send ACP `_meta` to the webview.
-- Do not render unknown custom field types.
-- Do not evaluate arbitrary `pattern` in Phase 1.
-- Cap fields, options, text lengths, response size and pending requests.
-- Preserve the current restrictive webview CSP.
-- Use opaque local interaction IDs.
-- Validate owner and interaction identity on every response.
+## 17. Security và privacy
 
-## Phase 2: URL elicitation design
+- Xem mọi schema từ agent là untrusted input.
+- Xem mọi message từ webview là untrusted input.
+- Render text bằng `textContent`.
+- Không log answer values.
+- Không lưu answer trong transcript.
+- Không lưu answer trong `globalState`.
+- Không lưu answer trong webview persisted state.
+- Không gửi `_meta` sang webview.
+- Không render unknown custom field.
+- Không chạy `pattern` trong giai đoạn 1.
+- Giới hạn số field, option, text length, response size và pending count.
+- Giữ CSP hiện tại của webview.
+- Dùng opaque `interactionId`.
+- Validate owner và interaction trên mọi response.
 
-After form mode is stable, add:
+## 18. Giai đoạn 2: URL elicitation
+
+Chỉ quảng bá sau khi hoàn thành toàn bộ lifecycle:
 
 ```ts
 elicitation: {
@@ -631,99 +784,135 @@ elicitation: {
 }
 ```
 
-Required behavior:
+Yêu cầu:
 
-- explicit user click; never auto-open;
-- allow `https:` by default;
-- optionally allow `http:` only for loopback hosts;
-- reject embedded URL credentials;
-- reject `javascript:`, `command:`, `vscode:`, `data:`, `file:` and unknown schemes;
-- display origin without exposing sensitive query parameters in logs;
-- open through Extension Host using a tightened reusable external-link validator;
-- correlate by `(ownerId, elicitationId)`;
-- wait for `elicitation/complete` notification;
-- handle duplicate/out-of-order completion idempotently;
-- clear URL waiting UI on decline, cancel, completion, close and disconnect.
+- không tự mở URL;
+- mặc định chỉ cho `https:`;
+- có thể cho `http:` với loopback nếu có use case xác nhận;
+- từ chối URL chứa username/password;
+- từ chối `javascript:`, `command:`, `vscode:`, `data:`, `file:` và scheme không hỗ trợ;
+- hiển thị origin rõ ràng;
+- không log query string nhạy cảm;
+- mở URL qua Extension Host;
+- tái sử dụng và siết chặt validator của clickable resource links;
+- correlation bằng `(ownerId, elicitationId)`;
+- xử lý `elicitation/complete` idempotent;
+- cleanup khi decline, cancel, complete, close hoặc disconnect.
 
-Files added/extended in Phase 2:
+## 19. Khả năng áp dụng cho các built-in agent
 
-- `src/acp/client.ts` notification handler;
-- `src/features/acp-elicitation/host.ts` URL state machine;
-- `src/features/acp-elicitation/webview.ts` URL waiting UI;
-- shared safe URL opening from `src/features/clickable-resource-links/host.ts`.
+Feature này là **ACP capability dùng chung**. Agent nào đã phát standard `elicitation/create` sẽ tự sử dụng được sau khi extension quảng bá capability.
 
-## Applicability to built-in agents
+Đánh giá theo public source và adapter hiện tại tại thời điểm lập kế hoạch:
 
-Adding generic ACP form elicitation support is necessary for all agents, but it only activates automatically when the agent already emits standard `elicitation/create` requests.
+| Built-in agent      | Standard ACP elicitation                                              | Kết quả sau giai đoạn 1                                                                      |
+| ------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Claude Code         | Đã xác nhận form và URL                                               | `AskUserQuestion` và form-based MCP elicitation hoạt động tự động; URL chờ giai đoạn 2.      |
+| Codex CLI           | Đã xác nhận generic elicitation trong adapter hiện tại                | Form hoạt động tự động khi adapter phát request.                                             |
+| Goose               | Đã xác nhận form elicitation                                          | Form hoạt động tự động khi agent yêu cầu input.                                              |
+| Kimi CLI            | Có elicitation trên unstable ACP surface                              | Dự kiến hoạt động nếu schema tương thích SDK `1.2.1`; cần integration test.                  |
+| Amp                 | Chưa xác nhận, phụ thuộc phiên bản                                    | Extension sẵn sàng nhận form nhưng cần test agent thực tế.                                   |
+| Augment Code        | Chưa xác nhận, phụ thuộc phiên bản                                    | Extension sẵn sàng nhận form nhưng cần test agent thực tế.                                   |
+| Mistral Vibe        | Chưa xác nhận, phụ thuộc phiên bản                                    | Extension sẵn sàng nhận form nhưng cần test agent thực tế.                                   |
+| OpenHands           | Chưa xác nhận khi chạy như ACP agent                                  | Client capability chưa đảm bảo agent sẽ phát form.                                           |
+| CodeBuddy Code      | Chưa xác nhận do implementation không công khai đầy đủ                | Có thể hoạt động nếu agent phát standard request.                                            |
+| OpenCode            | Hiện dùng custom question extension                                   | Không tự hoạt động; cần upstream chuyển sang ACP elicitation hoặc adapter bridge.            |
+| Gemini CLI          | Hiện dùng custom `gemini/requestUserInput`                            | Không tự hoạt động; cần custom compatibility hoặc upstream migration.                        |
+| Cursor              | Hiện dùng custom question method                                      | Không tự hoạt động; cần custom compatibility hoặc upstream migration.                        |
+| Aider               | Chưa xác nhận standard elicitation                                    | Không có hiệu lực tự động.                                                                   |
+| Qwen Code           | SDK/version mới có nhắc elicitation nhưng agent-side emission chưa rõ | Không đảm bảo tự hoạt động; cần test theo phiên bản.                                         |
+| Kiro CLI            | Chưa xác nhận standard elicitation                                    | Không có hiệu lực tự động.                                                                   |
+| Bundled Pi          | `select/confirm` đang đi qua permission; `input/editor` bị cancel     | Không tự hoạt động, nhưng có thể sửa adapter trong repo để chuyển sang standard elicitation. |
+| Bundled Antigravity | Chưa có elicitation bridge                                            | Không tự hoạt động.                                                                          |
+| Bundled Swarm       | Hiện chỉ proxy permission                                             | Cần bổ sung proxy elicitation và worker correlation.                                         |
 
-Current public-source assessment as of July 2026:
+### 19.1. Kết luận áp dụng
 
-| Built-in agent      | Standard ACP elicitation                                                               | Effect after Phase 1                                                                                    |
-| ------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Claude Code         | Confirmed form and URL support                                                         | `AskUserQuestion` and form-based MCP elicitation become available automatically. URL waits for Phase 2. |
-| Codex CLI           | Confirmed current adapter support for generic elicitation                              | Form requests work automatically when emitted. URL waits for Phase 2.                                   |
-| Goose               | Confirmed form support in current ACP implementation                                   | Form requests work automatically when emitted.                                                          |
-| Kimi CLI            | Elicitation exists on its unstable ACP surface                                         | Expected to work when its emitted schema matches SDK `1.2.1`; verify with integration test.             |
-| Amp                 | Unknown/version-dependent                                                              | Client support becomes available, but agent behavior must be tested.                                    |
-| Augment Code        | Unknown/version-dependent                                                              | Client support becomes available, but agent behavior must be tested.                                    |
-| Mistral Vibe        | Unknown/version-dependent                                                              | Client support becomes available, but agent behavior must be tested.                                    |
-| OpenHands           | Unknown as an ACP agent                                                                | Client support alone may not cause it to emit forms.                                                    |
-| CodeBuddy Code      | Unknown/proprietary behavior                                                           | Client support alone may or may not enable forms.                                                       |
-| OpenCode            | Uses a custom question extension in current public implementation                      | No automatic effect; needs an adapter bridge to standard elicitation.                                   |
-| Gemini CLI          | Uses custom `gemini/requestUserInput` flow                                             | No automatic effect; needs custom-method support or upstream migration to ACP elicitation.              |
-| Cursor              | Uses custom question methods                                                           | No automatic effect; needs custom-method support or upstream migration.                                 |
-| Aider               | No confirmed standard elicitation support                                              | No automatic effect.                                                                                    |
-| Qwen Code           | SDK/version work mentions elicitation, but agent-side emission is not confirmed        | No guaranteed automatic effect; test after agent upgrade.                                               |
-| Kiro CLI            | No confirmed standard elicitation support                                              | No automatic effect.                                                                                    |
-| Bundled Pi          | Current adapter supports select/confirm through permission; input/editor are cancelled | No automatic effect, but this repository can add a direct Pi-to-ACP elicitation bridge.                 |
-| Bundled Antigravity | No confirmed standard elicitation support                                              | No automatic effect.                                                                                    |
-| Bundled Swarm       | Currently proxies permissions, not elicitation                                         | Worker elicitation needs explicit proxy forwarding and owner correlation.                               |
+```text
+Extension hỗ trợ ACP elicitation chung
+  ├─ Agent đã dùng elicitation/create → hoạt động tự động
+  ├─ Agent chưa phát elicitation       → chưa có thay đổi hành vi
+  └─ Agent dùng custom method          → cần adapter/compatibility riêng
+```
 
-### Recommended adapter follow-ups
+Không thêm custom agent method vào feature generic. Mỗi compatibility bridge, nếu cần, phải nằm trong feature/adapter của chính agent đó rồi chuyển về standard ACP elicitation.
 
-After generic Phase 1:
+## 20. Follow-up cho bundled adapter
 
-1. **Bundled Pi**
-   - map Pi `extension_ui_request` `select`, `confirm`, `input` and `editor` into form elicitation;
-   - stop overloading permission for non-permission questions;
-   - preserve cancellation semantics back to Pi RPC.
+### 20.1. Bundled Pi
 
-2. **Bundled Swarm**
-   - proxy worker `elicitation/create` to the root client;
-   - attach workflow/step/role metadata only on the host side;
-   - route responses back to the exact worker session;
-   - apply existing worker/session cleanup rules.
+Sau khi generic feature hoàn thành, chuyển Pi UI request:
 
-3. **Custom-protocol agents**
-   - consider separate compatibility features only if upstream agents do not migrate to standard ACP elicitation;
-   - do not place vendor-specific methods inside the generic feature.
+```text
+Pi extension_ui_request
+  ├─ select
+  ├─ confirm
+  ├─ input
+  └─ editor
+       ↓
+ACP elicitation/create
+       ↓
+Generic VS Code form
+       ↓
+Pi extension_ui_response
+```
 
-## Implementation tasks
+Lợi ích:
 
-### Task 1 — Protocol seam in `ACPClient`
+- `select/confirm` không còn bị giả lập bằng permission;
+- `input/editor` không còn bị cancel;
+- đúng semantics giữa permission và user input;
+- dùng chung UI/validation với các agent khác.
+
+Phần này là follow-up riêng trong `src/features/pi-agent/`, không đưa Pi-specific mapping vào `src/features/acp-elicitation/`.
+
+### 20.2. Bundled Swarm
+
+Bổ sung proxy:
+
+```text
+Worker elicitation/create
+  → Swarm capability proxy
+  → Root ACP client
+  → Generic elicitation feature
+  → User response
+  → đúng worker session
+```
+
+Yêu cầu:
+
+- correlation theo worker session;
+- giữ workflow/step/role context ở adapter/host;
+- response không được trả nhầm worker;
+- close/stop worker phải cleanup pending request;
+- metadata Swarm không được làm generic webview phụ thuộc Swarm.
+
+## 21. Các task triển khai
+
+### Task 1 — Thêm protocol seam vào `ACPClient`
 
 Files:
 
 - `src/acp/client.ts`
-- `src/test/client.test.ts` or a new focused client test
+- test ACP client phù hợp
 
-Changes:
+Thực hiện:
 
-- add typed elicitation callback;
-- register `elicitation/create`;
-- propagate request ID and abort signal;
-- advertise `elicitation.form` only when handler is installed;
-- return `cancel` when no handler exists;
-- add capability and dispatch tests.
+- thêm typed elicitation callback;
+- đăng ký `elicitation/create`;
+- chuyển `params`, `requestId`, `AbortSignal`;
+- quảng bá `elicitation.form` có điều kiện;
+- fallback `cancel`;
+- test capability negotiation và dispatch.
 
-Acceptance:
+Tiêu chí:
 
-- Claude adapter sees form capability during initialize;
-- a mocked agent request reaches the callback;
-- cancellation signal reaches the callback;
-- no handler never causes acceptance.
+- mocked agent nhìn thấy form capability;
+- request tới đúng callback;
+- cancellation signal tới callback;
+- không handler không bao giờ dẫn tới accept.
 
-### Task 2 — Form schema compiler and validator
+### Task 2 — Xây schema compiler và validator
 
 Files:
 
@@ -731,21 +920,21 @@ Files:
 - `src/features/acp-elicitation/types.ts`
 - `src/test/features/acp-elicitation.test.ts`
 
-Changes:
+Thực hiện:
 
-- normalize all supported field kinds;
-- validate defaults and constraints;
-- enforce limits;
+- normalize mọi field type được hỗ trợ;
+- validate defaults và constraints;
+- áp dụng resource limits;
 - validate submitted content;
-- produce field-level error DTOs.
+- sinh field-level errors.
 
-Acceptance:
+Tiêu chí:
 
-- valid SDK form schemas normalize deterministically;
-- malformed/custom/oversized schemas fail closed;
-- tampered responses cannot resolve requests.
+- schema hợp lệ normalize ổn định;
+- schema invalid/custom/oversized bị cancel;
+- response bị sửa/tamper không resolve request.
 
-### Task 3 — Host coordinator
+### Task 3 — Xây host coordinator dùng chung
 
 Files:
 
@@ -753,67 +942,68 @@ Files:
 - `src/features/acp-elicitation/index.ts`
 - `src/features/register-host.ts`
 
-Changes:
+Thực hiện:
 
 - owner registry;
-- pending FIFO state;
+- pending FIFO;
 - response routing;
 - abort handling;
-- cancel/dispose handling;
-- snapshot DTO projection.
+- cancel/dispose;
+- snapshot DTO.
 
-Acceptance:
+Tiêu chí:
 
-- each request resolves exactly once;
-- owner mismatch and duplicate response are rejected;
-- no answer values are logged or persisted.
+- mỗi request settle đúng một lần;
+- owner sai và duplicate response bị từ chối;
+- không log hoặc persist answer values.
 
-### Task 4 — Webview form UI
+### Task 4 — Xây webview form UI dùng chung
 
 Files:
 
 - `src/features/acp-elicitation/webview.ts`
 - `src/features/acp-elicitation/styles.ts`
 - `src/features/register-webview.ts`
-- minimal stable integration in `src/views/webview/main.ts` if required
+- integration nhỏ trong `src/views/webview/main.ts` nếu cần
 
-Changes:
+Thực hiện:
 
-- render normalized fields;
-- client-side validation;
-- submit/decline/cancel;
-- focus management and accessibility;
-- interaction state replacement on session switch;
-- feature-local styles.
+- render form từ normalized DTO;
+- validation UX;
+- Submit/Decline/Cancel;
+- focus management;
+- accessibility;
+- replace state khi switch session;
+- inject feature-local styles.
 
-Acceptance:
+Tiêu chí:
 
-- keyboard-only operation works;
-- all labels/errors are accessible;
-- draft is preserved;
-- `isGenerating` and message queue state are not corrupted.
+- thao tác hoàn toàn bằng keyboard;
+- label/error accessibility đúng;
+- composer draft không mất;
+- không làm sai `isGenerating` và message queue.
 
-### Task 5 — Legacy binding
+### Task 5 — Bind legacy flow
 
 Files:
 
 - `src/views/chat.ts`
-- focused legacy tests
+- legacy tests
 
-Changes:
+Thực hiện:
 
-- create legacy owner;
-- bind client callback before connect;
-- dispatch response messages through feature;
-- cancel on stop/dispose/runtime replacement;
-- remove form UI when request settles.
+- tạo owner `legacy`;
+- bind trước connect;
+- dispatch response qua feature;
+- cancel khi Stop/dispose/runtime replacement;
+- gỡ UI khi request settle.
 
-Acceptance:
+Tiêu chí:
 
-- a form request blocks and resumes the same turn;
-- new chat/stop/dispose leaves no unresolved promise.
+- form chặn và tiếp tục đúng cùng turn;
+- Stop/New Chat/agent switch/dispose không để promise pending.
 
-### Task 6 — Multi-session binding and manager state
+### Task 6 — Bind multi-session và Session Manager
 
 Files:
 
@@ -821,29 +1011,30 @@ Files:
 - `src/features/multi-session/contracts.ts`
 - `src/features/multi-session/webview.ts`
 - `src/features/multi-session/manager-webview.ts`
-- `src/features/multi-session/manager-styles.ts` if needed
+- `src/features/multi-session/manager-styles.ts` nếu cần
 - `src/test/features/multi-session.test.ts`
 
-Changes:
+Thực hiện:
 
-- owner per local session;
-- `awaiting_input` status and counts;
-- active immediate display;
-- background queue without focus stealing;
+- owner theo `localSessionId`;
+- status `awaiting_input`;
+- pending count và aggregate;
+- active session render ngay;
+- background session không cướp focus;
 - snapshot `pendingElicitations`;
-- Review input action and badges;
-- cancel on session stop/close/dispose.
+- Review input action;
+- cancel khi Stop/close/dispose.
 
-Acceptance:
+Tiêu chí:
 
-- background requests never render in another session;
-- Review opens the correct owner session;
-- response resolves the correct ACP runtime;
-- snapshot replay displays each pending form once.
+- background form không xuất hiện trong session khác;
+- Review mở đúng owner;
+- response về đúng ACP runtime;
+- snapshot chỉ render mỗi pending form một lần.
 
-### Task 7 — Real-agent smoke tests
+### Task 7 — Smoke test agent thực tế
 
-Claude Code test prompt:
+Claude Code prompt:
 
 ```text
 Before doing anything, use AskUserQuestion.
@@ -854,146 +1045,170 @@ Do not continue until the tool returns an answer.
 After receiving the answer, repeat the selected value.
 ```
 
-Expected:
+Kỳ vọng:
 
-- form appears in the extension;
-- user selects `Staging`;
-- no permission dialog is used;
-- Claude continues in the same turn and repeats `Staging`.
+- extension hiện form;
+- user chọn `Staging`;
+- không dùng permission dialog;
+- Claude tiếp tục trong cùng turn;
+- Claude trả lại `Staging`.
 
-Additional smoke tests:
+Test thêm:
 
-- multi-select plus custom text with Claude;
-- background session AskUserQuestion;
-- cancel and decline paths;
-- Codex/Goose/Kimi where installed and authenticated;
-- request-scoped form fixture before `session/new`.
+- Claude multi-select và custom text;
+- background Claude session;
+- decline và cancel;
+- Codex, Goose, Kimi nếu đã cài và authenticated;
+- fixture request-scoped trước `session/new`.
 
-### Task 8 — Documentation and release verification
+### Task 8 — Tài liệu, build, package và cài extension
 
-Update after implementation:
+Cập nhật sau implementation:
 
 - `docs/features/feature-catalog.md`;
 - `docs/architecture/acp-chat-layout.md`;
-- this plan's status and completion notes;
-- `README.md` only if user-facing feature summary needs updating.
+- trạng thái và completion notes trong plan này;
+- `README.md` nếu cần cập nhật feature user-facing.
 
-Run:
+Verification:
 
 ```bash
 npm run check-types
 npx eslint <changed-typescript-files>
 npm run compile-tests
-# smallest focused tests first, then full relevant suite
+# chạy focused tests trước, sau đó relevant/full suite
 npm run package
 npx vsce package --out .tmp/vscode-acp-chat-elicitation.vsix
 code --install-extension .tmp/vscode-acp-chat-elicitation.vsix --force
 ```
 
-Remove the temporary VSIX after successful installation and run `Developer: Reload Window` before real-agent smoke tests.
+Sau khi cài:
 
-## Test matrix
+- xóa VSIX tạm nếu an toàn;
+- chạy `Developer: Reload Window`;
+- thực hiện smoke test agent thực tế.
 
-### Protocol
+## 22. Test matrix
 
-- capability omitted when handler absent;
-- `form: {}` advertised when handler exists;
-- request handler receives params, request ID and signal;
-- unsupported/custom mode returns cancel;
-- agent cancellation removes pending UI.
+### 22.1. Protocol
 
-### Schema
+- Không có handler thì không quảng bá capability.
+- Có handler thì quảng bá `form: {}`.
+- Request handler nhận đủ params, request ID và signal.
+- Custom mode trả cancel.
+- Agent cancellation gỡ pending UI.
 
-- required/optional text;
-- enum and titled `oneOf`;
-- multi-select enum and titled `anyOf`;
-- number boundaries;
-- safe integer validation;
-- boolean default;
-- email/URI/date/date-time;
-- invalid defaults;
-- duplicate enum values;
-- contradictory ranges;
-- unknown property type;
-- unsupported pattern;
-- resource limits.
+### 22.2. Schema
 
-### Responses
+- Required và optional text.
+- Enum và titled `oneOf`.
+- Multi-select enum và titled `anyOf`.
+- Number boundaries.
+- Safe integer validation.
+- Boolean default.
+- Email, URI, date, date-time.
+- Invalid default.
+- Duplicate enum values.
+- Contradictory ranges.
+- Unknown property type.
+- Unsupported pattern.
+- Resource limits.
 
-- accept with validated content;
-- decline without content;
-- cancel without content;
-- duplicate response;
-- wrong owner;
-- wrong field type;
-- extra property injection;
-- oversized payload.
+### 22.3. Response
 
-### Lifecycle
+- Accept với content hợp lệ.
+- Decline không có content.
+- Cancel không có content.
+- Duplicate response.
+- Sai owner.
+- Sai field type.
+- Chèn extra property.
+- Oversized payload.
 
-- active legacy request;
-- legacy stop/dispose;
-- active multi-session request;
-- background multi-session request;
-- activation and snapshot replay;
-- multiple FIFO requests;
-- session close/dispose;
-- connection loss;
-- request before ACP session creation.
+### 22.4. Lifecycle
 
-### Webview/accessibility
+- Active legacy request.
+- Legacy Stop/dispose.
+- Active multi-session request.
+- Background multi-session request.
+- Activate và snapshot replay.
+- Nhiều request FIFO.
+- Session close/dispose.
+- Connection loss.
+- Request trước khi ACP session được tạo.
 
-- labels and help text association;
-- required state;
-- error summary and first-error focus;
-- keyboard selection;
-- Escape cancel behavior;
-- focus restoration;
-- large font and narrow sidebar;
-- no unsanitized HTML.
+### 22.5. Webview và accessibility
 
-## Risks and mitigations
+- Label và help text association.
+- Required state.
+- Error summary và first-error focus.
+- Keyboard selection.
+- Escape cancel.
+- Focus restoration.
+- Font lớn và sidebar hẹp.
+- Không có unsanitized HTML.
 
-| Risk                                     | Impact                                          | Mitigation                                                                                                                |
-| ---------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| ACP elicitation is unstable              | SDK changes can break types/contracts           | Isolate protocol-specific handling in `ACPClient` and `src/features/acp-elicitation/`; pin tests to SDK `1.2.1` behavior. |
-| Capability advertised before UI is ready | Agent sends a request that cannot be rendered   | Bind feature handler before `connect()` and advertise capability conditionally.                                           |
-| Background session deadlock              | Agent waits indefinitely without visible action | Manager badge, `awaiting_input` status and Review input action; no focus stealing.                                        |
-| Webview response tampering               | Invalid values reach agent                      | Authoritative host-side schema validation.                                                                                |
-| Sensitive values leak                    | Credentials/preferences persist in logs/state   | Do not log or persist form content; memory-only pending state.                                                            |
-| Large/malicious schema freezes UI        | Extension/webview resource exhaustion           | Explicit field/options/text/payload/pending limits.                                                                       |
-| Arbitrary regex causes ReDoS             | Extension or webview hang                       | Do not support `pattern` in Phase 1.                                                                                      |
-| Elicitation state corrupts message queue | Incorrect composer/Stop behavior                | Separate interaction state; never toggle `isGenerating` for UI display.                                                   |
-| Custom agent expects URL elicitation     | Auth flow unavailable in Phase 1                | Do not advertise URL; add it only in Phase 2.                                                                             |
+## 23. Rủi ro và giảm thiểu
 
-## Definition of done
+| Rủi ro                                              | Tác động                                            | Giảm thiểu                                                                                   |
+| --------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| ACP elicitation còn unstable                        | SDK thay đổi làm lệch contract                      | Cô lập protocol trong `ACPClient` và `src/features/acp-elicitation/`; test theo SDK `1.2.1`. |
+| Quảng bá capability trước khi UI sẵn sàng           | Agent gửi request nhưng extension không render được | Bind handler trước `connect()` và quảng bá có điều kiện.                                     |
+| Background session chờ vô hạn nhưng user không biết | Agent bị block                                      | Badge `Needs input`, status `awaiting_input`, Review input action.                           |
+| Webview response bị sửa                             | Dữ liệu sai tới agent                               | Host-side authoritative validation.                                                          |
+| Lộ dữ liệu nhạy cảm                                 | Answer xuất hiện trong log/state                    | Không log, không persist, chỉ giữ memory.                                                    |
+| Schema lớn làm treo UI                              | Extension/webview bị quá tải                        | Resource limits rõ ràng.                                                                     |
+| Regex gây ReDoS                                     | Extension hoặc webview bị treo                      | Không hỗ trợ `pattern` trong giai đoạn 1.                                                    |
+| Elicitation làm sai message queue                   | Composer/Stop hoạt động sai                         | State riêng, không dùng `isGenerating` để điều khiển form.                                   |
+| Agent cần URL mode                                  | Auth flow chưa hoạt động ở giai đoạn 1              | Không quảng bá URL cho đến giai đoạn 2.                                                      |
+| Vendor custom method bị trộn vào generic feature    | Kiến trúc phụ thuộc agent                           | Compatibility bridge phải nằm trong feature/adapter riêng của agent.                         |
 
-Phase 1 is complete when:
+## 24. Definition of done
 
-- `clientCapabilities.elicitation.form` is advertised only when the complete feature is bound;
-- Claude Code `AskUserQuestion` works in the same turn;
-- all supported form field types render and validate;
-- accept, decline, cancel and agent-abort semantics are distinct;
-- legacy and multi-session flows work;
-- background requests are visible and reviewable without focus stealing;
-- stop/close/dispose leaves no pending request;
-- form values are not logged or persisted;
-- focused automated tests pass;
-- production bundle, VSIX packaging and forced local installation succeed;
-- `docs/features/feature-catalog.md` and `docs/architecture/acp-chat-layout.md` match the implemented behavior.
+Giai đoạn 1 hoàn tất khi:
 
-## Recommended delivery order
+- capability `clientCapabilities.elicitation.form` chỉ được quảng bá khi feature đầy đủ đã bind;
+- Claude Code `AskUserQuestion` hoạt động trong cùng turn;
+- các field type được hỗ trợ render và validate đúng;
+- `accept`, `decline`, `cancel` và agent abort có semantics riêng;
+- legacy và multi-session đều hoạt động;
+- background request hiển thị và review được mà không cướp focus;
+- Stop/close/dispose không để pending request;
+- answer values không bị log hoặc persist;
+- focused và relevant tests pass;
+- production build, VSIX package và forced local installation thành công;
+- `docs/features/feature-catalog.md` và `docs/architecture/acp-chat-layout.md` phản ánh đúng implementation.
+
+## 25. Completion notes
+
+Hoàn thành ngày 2026-07-16:
+
+- thêm protocol seam `elicitation/create`, truyền `params` / JSON-RPC request ID / `AbortSignal`, và chỉ quảng bá `elicitation.form` khi handler đã bind;
+- thêm feature dùng chung `src/features/acp-elicitation/` với schema compiler, resource limits, host-side validation, owner registry, FIFO, cancellation, accessible webview form và response `accept` / `decline` / `cancel`;
+- bind legacy owner `legacy` và multi-session owner theo `localSessionId`;
+- thêm background status `awaiting_input`, pending count, aggregate `awaitingInput`, Session Manager badge/filter/`Review input`, và snapshot `pendingElicitations`;
+- thêm test protocol, schema, tamper/lifecycle, webview accessibility/focus, background routing, Stop cancellation và manager action;
+- cập nhật `docs/features/feature-catalog.md` và `docs/architecture/acp-chat-layout.md`;
+- `npm run check-types`, targeted ESLint, `npm run compile-tests`, focused/relevant VS Code tests, `npm run package`, VSIX package và forced local installation đều thành công.
+
+Chưa thực hiện trong môi trường agent tự động:
+
+- smoke test Claude Code `AskUserQuestion` và các agent thực tế khác; cần chạy sau `Developer: Reload Window` với agent đã authenticated;
+- URL elicitation, Pi compatibility bridge và Swarm worker proxy vẫn là phase/follow-up riêng.
+
+## 26. Thứ tự triển khai khuyến nghị
 
 ```text
 1. ACPClient protocol seam
 2. Pure schema compiler/validator
-3. Host coordinator
-4. Webview form UI
+3. Host coordinator dùng chung
+4. Webview form UI dùng chung
 5. Legacy integration
 6. Multi-session/background integration
-7. Claude real-agent smoke test
-8. Other compatible agent smoke tests
-9. Docs, package, install
-10. Separate URL elicitation phase
-11. Optional Pi and Swarm adapter bridges
+7. Claude Code smoke test
+8. Codex/Goose/Kimi smoke test nếu có môi trường
+9. Docs, build, VSIX package, install
+10. URL elicitation ở phase riêng
+11. Pi adapter bridge
+12. Swarm worker elicitation proxy
 ```

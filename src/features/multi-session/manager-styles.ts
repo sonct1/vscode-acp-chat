@@ -33,7 +33,7 @@ button,input,select{font:inherit;min-width:0}
 .row-main{min-width:0;display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;align-items:start}
 .status-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;color:var(--vscode-descriptionForeground);margin-top:1px}
 .status-running,.status-starting,.status-loading_history,.status-cancelling{color:var(--vscode-progressBar-background,var(--vscode-foreground))}
-.status-awaiting_permission{color:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow))}
+.status-awaiting_permission,.status-awaiting_input{color:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow))}
 .status-error{color:var(--vscode-errorForeground)}
 .row-content{min-width:0;display:flex;flex-direction:column;gap:4px}
 .row-title-line{display:flex;align-items:center;gap:8px;min-width:0}
@@ -42,7 +42,7 @@ button,input,select{font:inherit;min-width:0}
 .row-meta,.row-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--vscode-descriptionForeground);font-size:12px}
 .badges{display:flex;gap:4px;flex-wrap:wrap}
 .badge{border:1px solid var(--vscode-panel-border);border-radius:999px;padding:1px 6px;font-size:10px;line-height:16px;color:var(--vscode-descriptionForeground)}
-.badge-permission{color:var(--vscode-foreground);border-color:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow));background:var(--vscode-inputValidation-warningBackground,transparent)}
+.badge-permission,.badge-input{color:var(--vscode-foreground);border-color:var(--vscode-inputValidation-warningBorder,var(--vscode-charts-yellow));background:var(--vscode-inputValidation-warningBackground,transparent)}
 .badge-unread{color:var(--vscode-badge-foreground);background:var(--vscode-badge-background);border-color:transparent}
 @media(max-width:650px){.session-row{grid-template-columns:1fr}.row-actions{justify-content:flex-start;padding-left:26px}.manager-summary{line-height:1.35}}
 @media(max-width:360px){.manager-header{align-items:stretch}.manager-title h1{font-size:14px}.manager-filters{flex-direction:column}.manager-select,.manager-search{width:100%;box-sizing:border-box}.manager-actions{justify-content:flex-end}.row-main{grid-template-columns:16px minmax(0,1fr);gap:6px}.row-actions{padding-left:22px}.active-pill{display:none}}
