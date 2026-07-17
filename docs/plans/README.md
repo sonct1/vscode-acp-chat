@@ -23,6 +23,7 @@ Current plans:
 - [Pi-Style Message Queue](./implement-pi-style-message-queue.md) — add processing-aware Enter/Alt+Enter/Escape/Alt+Up queue behavior across all ACP agents, with universal host fallback and capability-gated native Pi delivery.
 - [Luồng ACP Elicitation dùng chung](./implement-acp-elicitation.md) — bổ sung form nhập liệu có cấu trúc qua ACP `elicitation/create`, dùng chung cho mọi agent tương thích, hỗ trợ legacy, multi-session, background review, validation và adapter follow-up.
 - [Readable Inline Diff](./implement-readable-inline-diff.md) — improve inline edit/write diff readability with theme-aware styling, line numbers, hunk headers, full diff actions, and large-diff safeguards.
+- [VS Code-style Permission Dialog](./implement-vscode-style-permission-dialog.md) — make ACP permission prompts wider, responsive, accessible, and consistent with VS Code editor-widget and action hierarchy.
 - [Structured Diff Summary Bridge](./implement-structured-diff-summary-bridge.md) — record structured tool-call diffs into `DiffManager` so the diff summary panel covers non-`writeTextFile` edits.
 - [Bundled Pi ACP Agent](./implement-bundled-pi-agent.md) — ship Pi as a built-in agent by bundling/forking the `pi-acp` adapter into the extension.
 - [Built-in Grok Build ACP Agent](./implement-built-in-grok-build-agent.md) — add the official external `grok --no-auto-update agent stdio` runtime to the built-in catalog with generic old-format ACP model compatibility.
