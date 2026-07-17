@@ -1,137 +1,168 @@
 # VSCode ACP Chat
 
-> AI coding agents in VS Code via the Agent Client Protocol (ACP)
+> Chạy các AI coding agent cục bộ trong VS Code thông qua Agent Client Protocol (ACP).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Giấy phép: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
-[VSCode ACP Chat](https://github.com/pengjiantao/vscode-acp-chat) allows you to chat with Claude, OpenCode, and other ACP-compatible AI agents directly in your editor. No context switching, no copy-pasting code. If you encounter any problems, please report them to [Issues](https://github.com/pengjiantao/vscode-acp-chat/issues).
+[VSCode ACP Chat](https://github.com/pengjiantao/vscode-acp-chat) khởi chạy các tiến trình agent tương thích ACP trên máy cục bộ, đồng thời cung cấp giao diện chat dạng streaming, công cụ, quyền truy cập, diff và quản lý phiên ngay trong VS Code.
 
-> **Note:** This is NOT an official ACP protocol or any agent's official VS Code integration. It's a community-driven project. If you find this extension helpful, please consider giving it a ⭐ on [GitHub](https://github.com/pengjiantao/vscode-acp-chat)!
+> [!NOTE]
+> Đây là dự án cộng đồng, không phải implementation ACP chính thức hoặc integration chính thức của bất kỳ nhà cung cấp agent nào. Báo lỗi tại [GitHub Issues](https://github.com/pengjiantao/vscode-acp-chat/issues).
 
-![VSCode ACP Chat Sidebar](screenshots/acp-sidebar.png)
+## Yêu cầu
 
-## 🚀 Features
+Để sử dụng extension:
 
-- **Multi-Agent Support** — Connect to OpenCode, Grok Build, Pi, Antigravity (experimental opt-in), Claude Code, Codex CLI, Gemini CLI, Goose, CodeBuddy Code, and other ACP-compatible agents.
-- **Native Chat Interface** — Integrated sidebar chat that feels like a native part of VS Code.
-- **Context-Aware** — Send code selections or terminal output directly to the chat via context menus.
-- **Tool Visibility** — See what commands the AI runs with expandable input/output and file diffs.
-- **Rich Markdown** — Full support for code blocks, syntax highlighting, and formatted responses.
-- **Streaming Responses** — Watch the AI think and work in real-time.
-- **Session Management** — Load and resume previous conversations with full history restoration.
-- **Terminal Integration** — View terminal output with full ANSI color support.
-- **MCP Server Configuration** — Connect to MCP servers via `stdio`, `http`, or `sse` transports. Configurations are loaded from:
-  - Workspace: `<workspace>/.vscode/mcp.json`
-  - User-level: `~/.config/Code/User/mcp.json` (Linux), `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%/Code/User/mcp.json` (Windows)
-  - HTTP/SSE servers are sent to agents based on the agent's advertised `mcpCapabilities`.
+- VS Code `1.101.0` trở lên.
+- Có ít nhất một ACP agent, adapter hoặc lệnh custom agent khả dụng.
+- Hoàn tất đăng nhập/xác thực theo yêu cầu của agent trước khi kết nối.
+- Cần có `npm`/`npx` nếu sử dụng adapter Claude Code hoặc Codex tích hợp sẵn, vì các adapter này được khởi chạy qua `npx`.
 
-## 📦 Getting Started
+Để phát triển:
 
-### Prerequisites
+- Node.js `22`.
+- pnpm `11.0.9` thông qua Corepack.
 
-You need at least one ACP-compatible agent installed and available in your `$PATH`:
+## Cài đặt
 
-- **[OpenCode](https://github.com/sst/opencode)**: `pnpm add -g opencode`
-- **[Pi](https://github.com/earendil-works/pi)**: `npm install -g @earendil-works/pi-coding-agent`
-- **[Claude Code](https://claude.ai/code)**: `npm install -g @anthropic-ai/claude-code`
-- **[Gemini CLI](https://github.com/google/gemini-cli)**: `npm install -g @google/gemini-cli`
-- **[Grok Build](https://github.com/xai-org/grok-build)**: install the official `grok` CLI, then run `grok login`
-- **[Google Antigravity](https://antigravity.google/)** (experimental bundled adapter, disabled by default): install the official `agy` CLI separately, then run `agy` and `agy models` in an interactive terminal before enabling `vscode-acp-chat.antigravity.enabled`.
+1. Mở **Extensions** trong VS Code (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+2. Tìm **VSCode ACP Chat**.
+3. Cài extension do `fiyqkrc` phát hành.
 
-> [!IMPORTANT]
-> Ensure you have completed the agent's login/authentication setup before connecting via VS Code.
+Bạn cũng có thể cài từ [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=fiyqkrc.vscode-acp-chat).
 
-### Installation
+## Bắt đầu chat
 
-1. Open **VS Code**
-2. Go to **Extensions** (`Cmd+Shift+X` / `Ctrl+Shift+X`)
-3. Search for **"VSCode ACP Chat"**
-4. Click **Install**
+1. Mở view **ACP CHAT** trong **Secondary Sidebar** của VS Code hoặc chạy **ACP: Start Chat** từ Command Palette.
+2. Nhấn biểu tượng robot trên thanh tiêu đề của view để chọn agent khả dụng. Mỗi lần chọn agent sẽ tạo một chat/session mới cho agent đó.
+3. Nhập prompt. Dùng `/` để chọn lệnh do agent cung cấp và `@` để thêm file hoặc thư mục trong workspace.
+4. Mở **ACP Sessions** từ Activity Bar để theo dõi và quản lý các phiên chạy đồng thời.
 
-## 💡 Usage
+Các thao tác thêm ngữ cảnh:
 
-1. **Connect**: Click the **ACP icon** in the Activity Bar and select an agent to start a session.
-2. **Chat**: Type your requests in the input box.
-3. **Quick Send**:
-   - Highlight code in the editor → Right-click → **Send to ACP**.
-   - Select text in the terminal → Right-click → **Send to ACP**.
-4. **Inspect Tools**: Click on tool icons (✓, ✗, ⋯) to view command inputs and execution results.
+- Chọn đoạn mã trong editor, nhấn chuột phải, sau đó chọn **ACP: Add Selection to Chat**.
+- Chọn nội dung trong terminal, nhấn chuột phải, sau đó chọn **ACP: Add Terminal Selection to Chat**.
+- Thêm file hoặc thư mục từ menu ngữ cảnh của Explorer.
+- Đính kèm hoặc dán ảnh trực tiếp vào composer.
 
-## 🛠️ Configuration
+## Khả năng hiện tại
 
-The extension automatically detects installed agents by checking your system's `$PATH` for the following commands:
+- **ACP agent cục bộ** — khởi chạy lệnh trên máy và giao tiếp qua ACP trên stdio.
+- **Agent tích hợp sẵn và custom agent** — hỗ trợ bundled adapter, CLI trực tiếp, adapter chạy qua `npx` và cấu hình khởi chạy do người dùng định nghĩa.
+- **Nhiều phiên đồng thời** — chế độ multi-session được bật mặc định; mỗi phiên có transcript, bản nháp, quyền truy cập, yêu cầu nhập liệu và trạng thái runtime độc lập, kèm trình quản lý phiên riêng.
+- **Chat dạng streaming** — hiển thị Markdown, code block, nội dung suy luận, hoạt động công cụ, output terminal ANSI, hình ảnh và tiến trình trực tiếp từ các bundled agent được hỗ trợ.
+- **Hàng đợi prompt** — xếp hàng prompt điều hướng và prompt tiếp nối trong khi agent đang xử lý một lượt.
+- **Điều khiển theo capability** — chỉ hiển thị mode, model, tùy chọn cấu hình, lệnh, mức sử dụng context và chi phí khi agent công bố capability tương ứng.
+- **Thu thập ngữ cảnh** — nhận nội dung được chọn trong editor/terminal, file và thư mục từ Explorer, workspace mention bằng `@`, slash command và hình ảnh.
+- **Công cụ và quyền truy cập** — hiển thị thao tác filesystem, terminal, kết quả công cụ và yêu cầu cấp quyền tương tác.
+- **ACP elicitation có cấu trúc** — agent tương thích có thể yêu cầu người dùng nhập form đã được kiểm tra dữ liệu mà không lạm dụng hộp thoại quyền truy cập.
+- **Review diff** — hiển thị inline diff và cho phép review, chấp nhận hoặc hoàn tác các thay đổi file được theo dõi an toàn.
+- **Lịch sử phiên** — liệt kê, tải, tiếp tục và xóa phiên khi agent hỗ trợ; metadata cục bộ của extension được dùng làm phương án dự phòng.
+- **Chuyển tiếp MCP** — chuyển các định nghĩa MCP tương thích của VS Code vào lúc tạo hoặc tải ACP session.
+- **Đồng bộ tài liệu** — gửi sự kiện mở/thay đổi/đóng/lưu/focus tài liệu cục bộ đến agent có hỗ trợ NES document.
+- **Hỗ trợ điều hướng** — gồm lịch sử prompt, điều hướng giữa các câu trả lời, nhảy đến nội dung mới nhất, sao chép bảng và liên kết file/web có thể nhấn.
 
-| Agent          | Command                                     | Detection      |
-| -------------- | ------------------------------------------- | -------------- |
-| OpenCode       | `opencode acp`                              | Checks `$PATH` |
-| Grok Build     | `grok --no-auto-update agent stdio`         | Checks `grok`  |
-| Pi             | bundled `pi-acp` adapter                    | Checks `pi`    |
-| Antigravity    | bundled experimental adapter                | Checks `agy`   |
-| Claude Code    | `npx @agentclientprotocol/claude-agent-acp` | Checks `$PATH` |
-| Codex CLI      | `npx @agentclientprotocol/codex-acp`        | Checks `$PATH` |
-| CodeBuddy Code | `codebuddy --acp`                           | Checks `$PATH` |
-| Gemini CLI     | `gemini --acp`                              | Checks `$PATH` |
-| Goose          | `goose acp`                                 | Checks `$PATH` |
-| Amp            | `amp acp`                                   | Checks `$PATH` |
-| Aider          | `aider --acp`                               | Checks `$PATH` |
-| Augment Code   | `augment acp`                               | Checks `$PATH` |
-| Kimi CLI       | `kimi --acp`                                | Checks `$PATH` |
-| Mistral Vibe   | `vibe acp`                                  | Checks `$PATH` |
-| OpenHands      | `openhands acp`                             | Checks `$PATH` |
-| Qwen Code      | `qwen --acp`                                | Checks `$PATH` |
-| Kiro CLI       | `kiro-cli acp`                              | Checks `$PATH` |
-| Cursor Cli     | `agent acp`                                 | Checks `$PATH` |
+Phần lớn tính năng phụ thuộc vào capability của từng agent. Nếu agent không công bố một capability, UI hoặc thao tác protocol tương ứng sẽ không xuất hiện.
+
+## Agent tích hợp sẵn
+
+Extension kiểm tra tính khả dụng bằng lệnh ở cột cuối. Extension Host cũng tìm trong các thư mục binary global phổ biến của pnpm/npm nếu lệnh không có trong `PATH` ban đầu.
+
+| Agent                       | Lệnh khởi chạy                                                       | Kiểm tra khả dụng                                   |
+| --------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| OpenCode                    | `opencode acp`                                                       | `opencode`                                          |
+| Claude Code                 | `npx -y @agentclientprotocol/claude-agent-acp@latest`                | `npx`                                               |
+| Codex CLI                   | `npx -y @agentclientprotocol/codex-acp@latest`                       | `npx`                                               |
+| Gemini CLI                  | `gemini --acp`                                                       | `gemini`                                            |
+| Goose                       | `goose acp`                                                          | `goose`                                             |
+| Amp                         | `amp acp`                                                            | `amp`                                               |
+| Aider                       | `aider --acp`                                                        | `aider`                                             |
+| Augment Code                | `augment acp`                                                        | `augment`                                           |
+| Kimi CLI                    | `kimi --acp`                                                         | `kimi`                                              |
+| Mistral Vibe                | `vibe acp`                                                           | `vibe`                                              |
+| OpenHands                   | `openhands acp`                                                      | `openhands`                                         |
+| Qwen Code                   | `qwen --acp`                                                         | `qwen`                                              |
+| Kiro CLI                    | `kiro-cli acp`                                                       | `kiro-cli`                                          |
+| Cursor                      | `cursor-agent acp`                                                   | `cursor-agent`                                      |
+| CodeBuddy Code              | `codebuddy --acp`                                                    | `codebuddy`                                         |
+| Grok Build                  | `grok --no-auto-update agent stdio`                                  | `grok`                                              |
+| Pi                          | Bundled adapter `pi-acp`                                             | `pi`                                                |
+| Antigravity (thử nghiệm)    | Bundled Node adapter                                                 | `agy`; được điều khiển bằng setting                 |
+| Swarm (thử nghiệm, cần bật) | Bundled root orchestrator khởi chạy các ACP worker agent đã cấu hình | Bundled Node runtime; kiểm tra cấu hình khi kết nối |
+
+Custom agent có cùng `id` với agent tích hợp sẵn sẽ thay thế cấu hình tích hợp đó. `id` mới sẽ được bổ sung vào danh sách agent.
 
 ### Grok Build
 
-The built-in `grok-build` agent launches the installed official Grok Build CLI directly:
-
-```bash
-grok --no-auto-update agent stdio
-```
-
-Authenticate before connecting from VS Code:
+Entry `grok-build` khởi chạy trực tiếp Grok CLI chính thức đã được cài trên máy:
 
 ```bash
 grok login
 grok --version
 ```
 
-`XAI_API_KEY` can be used when it is available to the VS Code Extension Host environment. The extension does not install Grok, manage its credentials, or start an interactive ACP authentication flow. Grok session loading is used when advertised; session listing falls back to the extension's local session metadata when Grok does not advertise `session/list`.
+Extension không cài đặt Grok và không quản lý thông tin xác thực. Có thể dùng `XAI_API_KEY` nếu biến này tồn tại trong môi trường của VS Code Extension Host. Khả năng tải/liệt kê phiên phụ thuộc vào capability do Grok công bố; metadata phiên cục bộ sẽ được dùng khi Grok không hỗ trợ liệt kê phiên qua ACP.
 
-A custom agent with `id: "grok-build"` replaces this built-in launch configuration.
+### Pi
 
-### Antigravity (Experimental, opt-in)
+Extension đóng gói sẵn ACP adapter nhưng vẫn yêu cầu `pi` CLI đã được cài đặt và xác thực. Mặc định, lịch sử Pi được tải lại đầy đủ theo active path từ file session JSONL của Pi:
 
-The extension can launch a bundled ACP adapter for Google Antigravity with built-in id `antigravity`, but it is **disabled by default**. Enable `vscode-acp-chat.antigravity.enabled` only after reviewing Google's official terms and FAQ:
+```json
+{
+  "vscode-acp-chat.pi.historyLoadMode": "full"
+}
+```
 
-- https://antigravity.google/terms
-- https://antigravity.google/docs/faq
+Đặt thành `"compacted"` để phát lại context đã compact từ `get_messages` của Pi.
 
-Google states that third-party software access using Antigravity OAuth may violate the Antigravity Terms of Service and may result in account suspension or termination. This extension and bundled adapter are unofficial and unsupported by Google.
+### Antigravity (thử nghiệm)
 
-Setup:
+Manifest hiện tại bật entry Antigravity tích hợp sẵn theo mặc định bằng `vscode-acp-chat.antigravity.enabled: true`. Tính năng này vẫn đang thử nghiệm và không chính thức. Tắt setting nếu không muốn hiển thị entry này.
+
+> [!WARNING]
+> Google nêu rõ việc phần mềm bên thứ ba truy cập bằng Antigravity OAuth có thể vi phạm Điều khoản dịch vụ Antigravity và có thể khiến tài khoản bị đình chỉ hoặc chấm dứt. Hãy đọc [Điều khoản Antigravity](https://antigravity.google/terms) và [FAQ](https://antigravity.google/docs/faq) trước khi sử dụng.
+
+Trước tiên, cài đặt và xác thực `agy` CLI chính thức:
 
 ```bash
 agy
 agy models
 ```
 
-Use the official `agy` CLI to install/sign in and verify models. The bundled adapter does not install `agy`, does not store OAuth credentials, and does not require or claim API-key authentication for this path; it reuses the existing `agy` OAuth/keyring session. It runs with VS Code's Electron Node runtime, not Bun.
+Bundled adapter:
 
-Antigravity modes are the native `agy` modes exposed by the adapter: default, `accept-edits`, and `plan`. The adapter does not add `--dangerously-skip-permissions`. Interactive permission prompts and MCP configuration remain governed by Antigravity/`agy`; VS Code ACP MCP server forwarding is not passed through to `agy`, so configure MCP servers in Antigravity itself.
+- sử dụng lại phiên OAuth/keyring hiện có của `agy`;
+- không cài đặt `agy` và không lưu thông tin xác thực OAuth;
+- sử dụng các mode gốc của Antigravity: `default`, `accept-edits` và `plan`;
+- không thêm cờ bỏ qua quyền truy cập;
+- không nhận cấu hình MCP chuyển tiếp từ VS Code ACP, vì vậy MCP server cho Antigravity phải được cấu hình trong chính Antigravity.
 
-If you previously configured an external custom agent with `id: "antigravity"`, it continues to override the bundled entry when the bundled feature is enabled, and it continues to work when the bundled feature is disabled. Remove that custom entry only when you want to migrate to the bundled adapter.
+Custom agent có `id: "antigravity"` sẽ ghi đè entry tích hợp sẵn.
 
-### Custom Agents
+### Swarm (thử nghiệm, cần bật thủ công)
 
-You can add custom agents via VS Code settings:
+Swarm mặc định bị tắt. Swarm chạy một Root ACP agent lâu dài, có thể trả lời trực tiếp hoặc định tuyến prompt vào một workflow đã cấu hình. Mỗi bước workflow chạy bằng một tiến trình ACP worker riêng, với capability policy, lock, evidence, quyền truy cập và tiến trình trực tiếp.
 
-1. Open **Settings** (`Cmd+Shift+P` / `Ctrl+Shift+P` → `Preferences: Open User Settings`)
-2. Search for `vscode-acp-chat.customAgents`
-3. Click **Edit in settings.json**
+Tạo `.vscode/acp-swarm/` trong workspace từ [các file ví dụ Swarm](https://github.com/pengjiantao/vscode-acp-chat/tree/main/examples/acp-swarm), sau đó chỉnh sửa role và workflow. Nếu đang làm việc trong source checkout của repository này, có thể sao chép trực tiếp:
 
-#### Example Configuration
+```bash
+mkdir -p .vscode/acp-swarm
+cp -R examples/acp-swarm/* .vscode/acp-swarm/
+```
+
+Bật tính năng trong settings:
+
+```json
+{
+  "vscode-acp-chat.swarmAgent.enabled": true
+}
+```
+
+`swarm.config.json` phải khai báo một `rootRole` hợp lệ. Entry Swarm được hiển thị dựa trên bundled Node runtime; cấu hình workspace và các agent được tham chiếu chỉ được kiểm tra khi kết nối. Xem [examples/acp-swarm/README.md](examples/acp-swarm/README.md) để biết cấu trúc và hành vi chi tiết. Các giới hạn hiện tại gồm: không khôi phục workflow sau khi Extension Host khởi động lại, không tự động commit và chưa có trình chỉnh sửa workflow trực quan.
+
+## Custom agent
+
+Cấu hình custom agent bằng `vscode-acp-chat.customAgents` trong `settings.json`:
 
 ```json
 {
@@ -143,63 +174,167 @@ You can add custom agents via VS Code settings:
       "args": ["--acp"],
       "env": {
         "API_KEY": "your-api-key"
-      }
+      },
+      "availabilityCommand": "my-agent-cli"
     }
   ]
 }
 ```
 
-#### Configuration Fields
+| Trường                | Kiểu                     | Bắt buộc | Mô tả                                                                    |
+| --------------------- | ------------------------ | -------- | ------------------------------------------------------------------------ |
+| `id`                  | `string`                 | Có       | ID duy nhất; nếu trùng ID tích hợp sẵn thì custom agent sẽ ghi đè entry. |
+| `name`                | `string`                 | Có       | Tên hiển thị trong trình chọn agent.                                     |
+| `command`             | `string`                 | Có       | File thực thi do Extension Host khởi chạy.                               |
+| `args`                | `string[]`               | Có       | Tham số dòng lệnh. Dùng `[]` nếu không có tham số.                       |
+| `env`                 | `Record<string, string>` | Không    | Biến môi trường bổ sung cho tiến trình agent.                            |
+| `availabilityCommand` | `string`                 | Không    | Lệnh chỉ dùng để kiểm tra khả dụng; mặc định là `command`.               |
 
-| Field     | Type       | Required | Description                            |
-| --------- | ---------- | -------- | -------------------------------------- |
-| `id`      | `string`   | Yes      | Unique identifier for the agent        |
-| `name`    | `string`   | Yes      | Display name shown in agent selector   |
-| `command` | `string`   | Yes      | Executable command                     |
-| `args`    | `string[]` | No       | Command-line arguments (default: `[]`) |
-| `env`     | `object`   | No       | Environment variables                  |
+## Tham chiếu cấu hình
 
-> [!NOTE]
-> Custom agents with the same `id` as a built-in agent will **replace** the built-in configuration.
-> To use the bundled Pi adapter, remove any old custom agent with `id: "pi"` and `command: "pi-acp"`. Keep a custom `pi` entry only when intentionally overriding the bundled adapter.
->
-> Bundled Pi history loading defaults to `vscode-acp-chat.pi.historyLoadMode: "full"`, which replays the active-path transcript from Pi JSONL session files so compacted Pi sessions still show earlier conversation turns in the UI. Set it to `"compacted"` to use Pi's compacted `get_messages` RPC context instead.
+Nhấn biểu tượng bánh răng trong chat view hoặc chạy **Preferences: Open Settings**, sau đó tìm `vscode-acp-chat`.
 
-## 👨‍💻 Development
+| Setting                                                  | Mặc định               | Tác dụng                                                                                                |
+| -------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `vscode-acp-chat.enableDiffSummary`                      | `true`                 | Hiển thị bảng tổng hợp các file đã thay đổi.                                                            |
+| `vscode-acp-chat.autoScroll.bottomThreshold`             | `100`                  | Khoảng cách đến cuối transcript mà tại đó auto-scroll vẫn hoạt động.                                    |
+| `vscode-acp-chat.autoScroll.settleFrames`                | `3`                    | Số frame tiếp tục giữ transcript ở cuối khi layout thay đổi trong lúc streaming.                        |
+| `vscode-acp-chat.fontSize`                               | `0`                    | Cỡ chữ chat; `0` dùng cỡ chữ VS Code, giá trị khác được giới hạn trong `8`-`40` px.                     |
+| `vscode-acp-chat.multiSession.enabled`                   | `true`                 | Bật nhiều phiên đồng thời; khi tắt sẽ dùng luồng single-session cũ.                                     |
+| `vscode-acp-chat.multiSession.lowResourceMode`           | `true`                 | Tắt diff tracking theo phiên, file watcher, conflict telemetry và diff badge trong trình quản lý phiên. |
+| `vscode-acp-chat.multiSession.maxConcurrentSessions`     | `20`                   | Số tiến trình/ACP session cục bộ đã khởi chạy tối đa; draft session không được tính.                    |
+| `vscode-acp-chat.passMcpServers`                         | `true`                 | Gửi định nghĩa MCP tương thích của VS Code trong request tạo/tải ACP session.                           |
+| `vscode-acp-chat.enableDocumentSync`                     | `true`                 | Gửi sự kiện tài liệu cục bộ được hỗ trợ đến agent có capability tương ứng.                              |
+| `vscode-acp-chat.debug`                                  | `false`                | Ghi log các sự kiện cập nhật ACP session thô.                                                           |
+| `vscode-acp-chat.enablePersistentSessions`               | `true`                 | Lưu metadata phiên cục bộ trong VS Code global state.                                                   |
+| `vscode-acp-chat.sessionRetentionDays`                   | `60`                   | Xóa metadata phiên cục bộ cũ hơn số ngày này.                                                           |
+| `vscode-acp-chat.maxSessionsPerAgent`                    | `300`                  | Số metadata phiên được lưu tối đa cho mỗi agent.                                                        |
+| `vscode-acp-chat.antigravity.enabled`                    | `true`                 | Hiển thị bundled Antigravity adapter thử nghiệm khi `agy` khả dụng.                                     |
+| `vscode-acp-chat.swarmAgent.enabled`                     | `false`                | Hiển thị bundled Swarm orchestrator thử nghiệm.                                                         |
+| `vscode-acp-chat.swarmAgent.configDirectory`             | `.vscode/acp-swarm`    | Thư mục cấu hình Swarm, có thể là đường dẫn tương đối với workspace hoặc đường dẫn tuyệt đối.           |
+| `vscode-acp-chat.swarmAgent.defaultWorkflow`             | `default`              | Gợi ý phân xử định tuyến để tương thích ngược; không tự chạy workflow này khi định tuyến lỗi.           |
+| `vscode-acp-chat.swarmAgent.maxWorkers`                  | `4`                    | Số Swarm worker session chạy đồng thời tối đa.                                                          |
+| `vscode-acp-chat.swarmAgent.requireApprovalBeforeWrites` | `true`                 | Yêu cầu cấp quyền trước khi Swarm chuyển tiếp thao tác có khả năng ghi dữ liệu.                         |
+| `vscode-acp-chat.swarmAgent.testLockPatterns`            | các lệnh test phổ biến | Các đoạn lệnh sẽ chiếm lock `test_runner` của Swarm.                                                    |
+| `vscode-acp-chat.pi.historyLoadMode`                     | `full`                 | Chọn phát lại đầy đủ active path từ JSONL hoặc lịch sử Pi đã compact.                                   |
+| `vscode-acp-chat.customAgents`                           | `[]`                   | Thêm hoặc ghi đè cấu hình khởi chạy ACP agent.                                                          |
+
+Khi thay đổi `vscode-acp-chat.multiSession.enabled`, cần chạy **Developer: Reload Window** để chat controller, command và session-manager view sử dụng cùng một lifecycle nhất quán.
+
+Khi chế độ low-resource mặc định đang bật, agent vẫn có thể ghi file nhưng trạng thái review diff/conflict theo từng multi-session sẽ không được lưu. Tắt `vscode-acp-chat.multiSession.lowResourceMode` nếu cần các thao tác review này.
+
+## Chuyển tiếp MCP server
+
+Khi `vscode-acp-chat.passMcpServers` được bật, extension đọc định nghĩa MCP từ:
+
+- Workspace: `<workspace>/.vscode/mcp.json`
+- Người dùng Linux: `~/.config/Code/User/mcp.json`
+- Người dùng macOS: `~/Library/Application Support/Code/User/mcp.json`
+- Người dùng Windows: `%APPDATA%/Code/User/mcp.json`
+
+Hành vi:
+
+- MCP server loại `stdio` được chuyển thành payload MCP của ACP.
+- MCP server loại `http` và `sse` chỉ được chuyển tiếp khi agent công bố capability MCP tương ứng.
+- Tên server được chuẩn hóa và đảm bảo không trùng trong mỗi request.
+- Extension không thể hỏi người dùng giá trị `${input:id}`. Một biến môi trường chỉ chứa duy nhất tham chiếu `${input:id}` chưa được giải quyết sẽ bị bỏ qua; phép nội suy nằm trong chuỗi như `Bearer ${input:token}` không được xử lý.
+- Khi tắt `vscode-acp-chat.passMcpServers`, extension không gửi định nghĩa MCP nào.
+- Antigravity quản lý MCP thông qua `agy` và không dùng luồng chuyển tiếp này.
+
+## Giới hạn phiên và capability
+
+- Extension lưu metadata phiên và tùy chọn người dùng, không triển khai cơ sở dữ liệu transcript đầy đủ do extension tự quản lý.
+- Việc phát lại toàn bộ lịch sử phụ thuộc vào hành vi `session/load` của agent. Bundled Pi adapter hỗ trợ thêm việc phát lại transcript đầy đủ từ JSONL để hiển thị.
+- Khả năng liệt kê/tải/xóa lịch sử, mode, model, command, tùy chọn cấu hình chung, MCP transport, document sync và elicitation chỉ xuất hiện khi agent hỗ trợ.
+- Document sync chỉ áp dụng cho tài liệu cục bộ có scheme `file:`; tài liệu virtual, untitled và các tài liệu không phải file bị loại trừ.
+- Untrusted workspace được hỗ trợ có giới hạn; virtual workspace được hỗ trợ.
+
+## Command
+
+| Command                                        | Tác dụng                                             |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| `ACP: Start Chat`                              | Focus chat view và kết nối.                          |
+| `ACP: New Chat`                                | Tạo chat/session mới.                                |
+| `ACP: Manage Chat Sessions`                    | Mở hoặc đóng trình quản lý ACP Sessions.             |
+| `ACP: Switch Chat Session`                     | Chuyển active session qua Quick Pick.                |
+| `ACP: Load History`                            | Tải một phiên trước đó.                              |
+| `ACP: Delete History Session`                  | Xóa phiên trước đó khi agent hỗ trợ.                 |
+| `ACP: Clear Chat`                              | Xóa nội dung chat/session hiện tại.                  |
+| `ACP: Select Agent`                            | Chọn agent khả dụng và tạo một phiên mới.            |
+| `ACP: Open ACP Settings`                       | Mở Settings đã lọc theo extension này.               |
+| `ACP: Add Selection to Chat`                   | Thêm nội dung được chọn trong editor vào composer.   |
+| `ACP: Add Terminal Selection to Chat`          | Thêm nội dung được chọn trong terminal vào composer. |
+| `ACP: Add File to Chat` / `Add Folder to Chat` | Thêm tài nguyên từ Explorer/editor vào composer.     |
+
+## Kiến trúc
+
+Bản build production gồm các bundle runtime độc lập:
+
+- `dist/extension.js` — entry point của VS Code Extension Host.
+- `dist/webview.js` — webview chat chính.
+- `dist/session-manager-webview.js` — webview quản lý ACP Sessions.
+- Các ACP adapter Pi, Antigravity và Swarm được đóng gói sẵn.
+
+Khi chạy, contribution của VS Code kích hoạt Extension Host; host khởi chạy và sở hữu các tiến trình ACP agent cục bộ; webview giao tiếp với host qua message có kiểu dữ liệu rõ ràng. Chức năng riêng của sản phẩm được đăng ký dưới `src/features/`, còn ACP client quản lý protocol, filesystem, terminal, quyền truy cập, phiên, MCP và document sync.
+
+Xem [kiến trúc bố cục ACP Chat](docs/architecture/acp-chat-layout.md) để biết sơ đồ component UI/runtime hiện tại.
+
+## Phát triển
+
+Cài dependency bằng package manager được cố định trong repository:
 
 ```bash
-# Install dependencies
-npm install
-
-# Build the extension
-npm run compile
-
-# Package as VSIX
-npx vsce package
-
-# Run tests & linting
-npm test
-npm run lint
-npm run format
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-## 🤝 Acknowledgments
+Các workflow thường dùng:
 
-This project is an enhanced fork of the original [vscode-acp](https://github.com/omercnet/vscode-acp) repository, adding significant improvements to agent compatibility, session management, and the overall user interface.
+```bash
+# Kiểm tra kiểu dữ liệu của extension và bundled Antigravity adapter
+pnpm run check-types
 
-## 📄 License
+# Build phát triển
+pnpm run compile
 
-MIT License - see [LICENSE](LICENSE) file for details.
+# Theo dõi TypeScript và esbuild
+pnpm run watch
 
-# Service Documentation Skeleton
+# Chạy test extension trong VS Code;
+# pretest cũng build và kiểm tra Antigravity adapter
+pnpm test
 
-This skeleton keeps durable service knowledge in `docs/`, lightweight agent routing in `AGENTS.md`, and active multi-step execution in Beads.
+# Báo cáo coverage
+pnpm run coverage
 
-Core split:
+# Build production
+pnpm run package
 
-- `AGENTS.md` — short agent behavior and docs-routing policy.
-- `README.md` — service entry point: purpose, owner, runtime, local setup, verification, and important links.
-- `docs/` — product, feature, architecture, design, contracts, engineering, operations, and implementation-plan source-of-truth.
-- `.beads/` — local Beads boundary notes; actual task graph/status should live in the Beads CLI/store when available.
+# Đóng gói VSIX; tắt npm dependency scan vì repository sử dụng pnpm
+pnpm exec vsce package --no-dependencies --out vscode-acp-chat.vsix
+```
 
-Do not turn documentation into a task tracker. Use `docs/features/README.md` to know what durable feature context exists, and use Beads to manage active implementation work.
+Dùng launch configuration **Run Extension** của repository trong VS Code để khởi chạy Extension Development Host.
+
+Các lệnh sau sẽ sửa file thay vì chỉ kiểm tra:
+
+```bash
+pnpm run lint
+pnpm run format
+```
+
+## Tài liệu
+
+- [Bản đồ tài liệu](docs/README.md)
+- [Chỉ mục tài liệu tính năng](docs/features/README.md)
+- [Bố cục ACP Chat và sơ đồ component](docs/architecture/acp-chat-layout.md)
+- [Ví dụ cấu hình Swarm](examples/acp-swarm/README.md)
+- [Lịch sử thay đổi](CHANGELOG.md)
+
+## Ghi nhận
+
+Dự án này là bản fork mở rộng từ [vscode-acp](https://github.com/omercnet/vscode-acp), bổ sung khả năng tương thích agent, bundled adapter, quản lý multi-session và các tính năng chat/workflow.
+
+## Giấy phép
+
+Giấy phép MIT. Xem [LICENSE](LICENSE).
