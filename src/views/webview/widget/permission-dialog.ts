@@ -6,6 +6,7 @@ type RenderedPermission = {
   ownerId: string;
   requestId: string;
   element: HTMLElement;
+  responsePending: boolean;
 };
 
 /**
@@ -35,7 +36,10 @@ export class PermissionDialog {
     }
     for (const item of pending) {
       const renderKey = key(ownerId, item.requestId);
-      if (this.rendered.has(renderKey)) continue;
+      if (this.rendered.has(renderKey)) {
+        this.restoreActionability(renderKey);
+        continue;
+      }
       this.show(ownerId, item);
     }
   }
@@ -68,6 +72,7 @@ export class PermissionDialog {
       ownerId,
       requestId: permission.requestId,
       element,
+      responsePending: false,
     });
   }
 
@@ -83,13 +88,13 @@ export class PermissionDialog {
   }
 
   private cancel(ownerId: string, requestId: string): void {
+    if (!this.markResponsePending(ownerId, requestId)) return;
     this.ctx.vscode.postMessage({
       type: "permissionResponse",
       requestId,
       ownerId,
       outcome: { outcome: "cancelled" },
     });
-    this.dismiss(key(ownerId, requestId));
   }
 
   private handleOptionClick(
@@ -97,6 +102,7 @@ export class PermissionDialog {
     requestId: string,
     option: { optionId: string; kind: string }
   ): void {
+    if (!this.markResponsePending(ownerId, requestId)) return;
     this.ctx.vscode.postMessage({
       type: "permissionResponse",
       requestId,
@@ -106,7 +112,25 @@ export class PermissionDialog {
         optionId: option.optionId,
       },
     });
-    this.dismiss(key(ownerId, requestId));
+  }
+
+  private markResponsePending(ownerId: string, requestId: string): boolean {
+    const rendered = this.rendered.get(key(ownerId, requestId));
+    if (!rendered || rendered.responsePending) return false;
+    rendered.responsePending = true;
+    for (const button of rendered.element.querySelectorAll("button")) {
+      button.disabled = true;
+    }
+    return true;
+  }
+
+  private restoreActionability(renderKey: string): void {
+    const rendered = this.rendered.get(renderKey);
+    if (!rendered || !rendered.responsePending) return;
+    rendered.responsePending = false;
+    for (const button of rendered.element.querySelectorAll("button")) {
+      button.disabled = false;
+    }
   }
 
   private renderEmbedded(

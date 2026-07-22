@@ -436,11 +436,18 @@ export class MultiSessionHostController implements vscode.Disposable {
         });
         return true;
       case "feature.multi-session.permission.respond":
-        this.respondPermission(
-          message.localSessionId,
-          message.requestId,
-          message.outcome
-        );
+        if (
+          typeof message.localSessionId === "string" &&
+          message.localSessionId.length > 0 &&
+          typeof message.requestId === "string" &&
+          message.requestId.length > 0
+        ) {
+          this.respondPermissionForOwner(
+            message.localSessionId,
+            message.requestId,
+            this.parsePermissionOutcome(message.outcome)
+          );
+        }
         return true;
     }
 

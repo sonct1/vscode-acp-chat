@@ -688,10 +688,11 @@ export class ChatViewProvider
           }
           break;
         case "permissionResponse":
-          if (message.requestId && message.outcome) {
+          if (typeof message.requestId === "string" && message.requestId.length > 0) {
             const outcome =
-              message.outcome.outcome === "selected" &&
-              typeof message.outcome.optionId === "string"
+              message.outcome?.outcome === "selected" &&
+              typeof message.outcome.optionId === "string" &&
+              message.outcome.optionId.length > 0
                 ? {
                     outcome: "selected" as const,
                     optionId: message.outcome.optionId,

@@ -2422,6 +2422,31 @@ suite("ChatViewProvider", () => {
       provider.dispose();
     });
 
+    test("legacy missing permission outcome cancels the request", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-missing-outcome"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const state = latestLegacyPermissionState(messages);
+
+      await messageHandler({
+        type: "permissionResponse",
+        requestId: state.pending[0].requestId,
+      });
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
     test("legacy valid reject option remains selected", async () => {
       const provider = new ChatViewProvider(
         vscode.Uri.file("/test"),

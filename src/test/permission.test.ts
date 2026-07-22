@@ -203,7 +203,7 @@ suite("Permission Request Tests", () => {
     assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 0);
   });
 
-  test("PermissionDialog restores original generating baseline after all dismissals", () => {
+  test("PermissionDialog waits for authoritative state before dismissing responses", () => {
     const dom = new JSDOM("<!DOCTYPE html><body></body>");
     const posted: unknown[] = [];
     let generating = false;
@@ -234,10 +234,29 @@ suite("Permission Request Tests", () => {
     const buttons = Array.from(dom.window.document.querySelectorAll("button"));
     (buttons[1] as HTMLButtonElement).click();
     assert.strictEqual(generating, true);
-    (buttons[0] as HTMLButtonElement).click();
+    assert.strictEqual(buttons[1].disabled, true);
+    assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 2);
+
+    dialog.reconcile("legacy", [permission("perm-1", "One"), permission("perm-2", "Two")]);
+    assert.strictEqual(buttons[1].disabled, false);
+    (buttons[1] as HTMLButtonElement).click();
+    assert.strictEqual(buttons[1].disabled, true);
+    assert.strictEqual(posted.length, 2);
+
+    dialog.reconcile("legacy", [permission("perm-1", "One")]);
+    assert.strictEqual(generating, true);
+    assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 1);
+
+    const remainingButton = dom.window.document.querySelector("button") as HTMLButtonElement;
+    remainingButton.click();
+    assert.strictEqual(remainingButton.disabled, true);
+    assert.strictEqual(generating, true);
+
+    dialog.reconcile("legacy", []);
     assert.strictEqual(generating, false);
     assert.deepStrictEqual(generatingChanges.at(-1), false);
-    assert.strictEqual(posted.length, 2);
+    assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 0);
+    assert.strictEqual(posted.length, 3);
   });
 
   test("PermissionDialog posts selected outcome with reject optionId", () => {
@@ -291,5 +310,13 @@ suite("Permission Request Tests", () => {
         outcome: { outcome: "selected", optionId: "deny-always" },
       },
     ]);
+    assert.strictEqual((denyButton as HTMLButtonElement).disabled, true);
+    assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 1);
+
+    (denyButton as HTMLButtonElement).click();
+    assert.strictEqual(posted.length, 1);
+
+    dialog.reconcile("legacy", []);
+    assert.strictEqual(dom.window.document.querySelectorAll(".permission-dialog-overlay").length, 0);
   });
 });

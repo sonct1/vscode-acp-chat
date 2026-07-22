@@ -1308,6 +1308,48 @@ suite("multi-session feature", () => {
     controller.dispose();
   });
 
+  test("compatibility permission response is strictly parsed and owner-qualified", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ownerId = controller.getStateForTest().activeLocalSessionId!;
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-compat-response", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleMessage({
+      type: "feature.multi-session.permission.respond",
+      localSessionId: "wrong-owner",
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((session) => session.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      1
+    );
+
+    await controller.handleMessage({
+      type: "feature.multi-session.permission.respond",
+      localSessionId: ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: undefined,
+    } as any);
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "cancelled" },
+    });
+
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
   test("invalid permission discriminator cancels the request", async () => {
     const { controller, messages, clients } = createController();
     const prompt = controller.sendActiveMessage("A");

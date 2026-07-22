@@ -2,7 +2,7 @@
 
 ## Implementation status
 
-Status: implemented through final security/cancellation-gate blocker fixes; no commit created.
+Status: implementation and automated verification complete; manual cross-agent smoke tests remain outstanding.
 
 Completion notes:
 
@@ -14,20 +14,21 @@ Completion notes:
 - Removed the dead `permissionDismissed` publication path; authoritative empty `feature.permission-ui.state` is the dismissal signal.
 - Added regression coverage for owner switching, stale state revisions, baseline restore, owner-qualified routing, ownerless multi-session no-op responses, runtime replacement with a second runtime/new permission, old prompt generation responses, sendMessage-settled/finalization race cleanup in multi-session and legacy, legacy connect/new-session closed gate, stop second-pass race cleanup in multi-session and legacy Stop, post-Stop fail-closed callbacks, forged/missing/invalid-discriminator outcomes, valid reject option preservation, and legacy ready/stop/disconnect/new-chat/dispose lifecycle cleanup.
 - Final security cleanup adds explicit prompt-lifecycle permission gates. Multi-session stores `acceptingPermissionRequests`, runtime generation, and prompt generation on each session, increments prompt generation for each actual `session.client.sendMessage` invocation, opens the permission gate only immediately before `sendMessage`, closes/cancels immediately when `sendMessage` settles before queue idle/tool finalization, and accepts callbacks/responses only for the current runtime + prompt generation. Legacy single-session mirrors this with `legacyPromptGeneration`, keeps the gate closed through connect/new session setup, opens only around `acpClient.sendMessage`, and closes/cancels before tool finalization/stream end.
-- Host-boundary permission responses now use strict outcome parsing. Only `{ outcome: "cancelled" }` or `{ outcome: "selected", optionId: <nonempty string> }` are accepted; any other shape/discriminator for an existing owner/request is normalized to `cancelled`, and selected options still must match the live offered option id before ACP receives them.
+- Host-boundary permission responses now use strict outcome parsing. Only `{ outcome: "cancelled" }` or `{ outcome: "selected", optionId: <nonempty string> }` are accepted; any other shape/discriminator for an existing owner/request is normalized to `cancelled`, and selected options still must match the live offered option id before ACP receives them. This validation applies to the owner-qualified core route, the compatibility multi-session route, and legacy responses with missing outcomes.
+- Permission buttons are disabled after the first response, but the prompt remains visible until a newer authoritative host state removes it. If authoritative state still contains the request, reconciliation re-enables the prompt so failed/rejected delivery can be retried instead of hiding or permanently disabling a live resolver.
 
 Verification notes from latest pass:
 
 - `npm run check-types`: passed.
 - `npm run lint`: passed with 3 existing warnings in `src/test/diff_manager.test.ts` for `no-explicit-any`; the repository script uses `--fix`.
 - `npm run compile-tests`: passed.
-- `xvfb-run -a npm test -- --grep "permission|gate stays closed|runtime replacement|Stop second pass|legacy ready republishes|old prompt response|ownerless permission response|invalid permission discriminator"`: passed, 28 tests.
-- Full `xvfb-run -a npm test`: 925 passing, 1 failing; the remaining failure is the unrelated `WebviewController handleMessage renders sub-agent recent nested tools in a separate scrollable box` scroll assertion (`assert.notStrictEqual(scrollTop, 500)`), reproduced independently.
+- `xvfb-run -a npm test -- --grep "permission"`: passed, 29 tests.
+- Full `xvfb-run -a npm test`: 927 passing, 1 failing; the remaining failure is the unrelated `WebviewController handleMessage renders sub-agent recent nested tools in a separate scrollable box` scroll assertion (`assert.notStrictEqual(scrollTop, 500)`), reproduced independently.
 - `npm run package`: passed.
-- Final permission-focused review: approved with no High/Medium permission correctness or security findings.
+- Final permission-focused review: approved with no blocking findings after boundary/UI-authority hardening.
 - `pnpm exec vsce package --no-dependencies --out .tmp/vsix-stage/vscode-acp-chat-permission-lifecycle.vsix`: passed.
 - `code --install-extension .tmp/vsix-stage/vscode-acp-chat-permission-lifecycle.vsix --force`: passed; temporary VSIX removed afterward.
-- Manual Codex/Claude smoke tests: not run.
+- Manual Codex/Claude/Pi smoke tests: not run; this is the remaining Definition-of-Done item.
 
 ## Mục tiêu
 
