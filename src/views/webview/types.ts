@@ -280,6 +280,7 @@ export interface ExtensionMessage {
   payloads?: unknown[];
   aborted?: boolean;
   revision?: number;
+  stateRevision?: number;
   presentation?: LiveToolPresentation;
   processing?: boolean;
   steering?: unknown[];

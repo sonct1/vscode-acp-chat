@@ -103,6 +103,7 @@ class FakeClient {
   setConfigOptionCalls: Array<{ configId: string; value: string }> = [];
   connectError?: Error;
   connectPromise?: Promise<void>;
+  sendMessageHook?: () => Promise<{ stopReason: string }>;
   connectCalls = 0;
   cancelCalls = 0;
   disposeCalls = 0;
@@ -115,6 +116,7 @@ class FakeClient {
     requestId: string | number;
     signal: AbortSignal;
   }) => Promise<unknown>;
+  onCancel?: () => Promise<void> | void;
 
   async connect(): Promise<void> {
     this.connectCalls += 1;
@@ -204,6 +206,7 @@ class FakeClient {
   }
 
   async sendMessage(): Promise<{ stopReason: string }> {
+    if (this.sendMessageHook) return this.sendMessageHook();
     return new Promise((resolve) => this.promptResolvers.push(resolve));
   }
 
@@ -213,6 +216,7 @@ class FakeClient {
 
   async cancel(): Promise<void> {
     this.cancelCalls += 1;
+    await this.onCancel?.();
   }
 
   setModeCalls = 0;
@@ -1039,6 +1043,184 @@ suite("multi-session feature", () => {
     }
   });
 
+  test("answered permission does not replay after turn snapshot and resync", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-a", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pendingSnapshot = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending.length === 1
+      ) as any;
+    assert.ok(pendingSnapshot);
+    const transcriptSnapshot = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.snapshot") as any;
+    assert.strictEqual(transcriptSnapshot.transcript.length, 2);
+    assert.ok(
+      !transcriptSnapshot.transcript.some(
+        (event: any) => event.message.type === "permissionRequest"
+      )
+    );
+    assert.strictEqual(transcriptSnapshot.lastSeq, 2);
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: pendingSnapshot.ownerId,
+      requestId: pendingSnapshot.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+
+    clients[0].resolvePrompt();
+    await prompt;
+
+    const turnEndSnapshot = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.snapshot") as any;
+    assert.deepStrictEqual(turnEndSnapshot.pendingPermissions, []);
+    assert.ok(turnEndSnapshot.lastSeq >= transcriptSnapshot.lastSeq);
+    assert.ok(
+      !turnEndSnapshot.transcript.some(
+        (event: any) => event.message.type === "permissionRequest"
+      )
+    );
+
+    await controller.handleMessage({ type: "feature.multi-session.resync" });
+    const resyncSnapshot = messages[messages.length - 1] as any;
+    assert.strictEqual(resyncSnapshot.type, "feature.multi-session.snapshot");
+    assert.deepStrictEqual(resyncSnapshot.pendingPermissions, []);
+    assert.strictEqual(resyncSnapshot.lastSeq, turnEndSnapshot.lastSeq);
+    assert.ok(
+      !resyncSnapshot.transcript.some(
+        (event: any) => event.message.type === "permissionRequest"
+      )
+    );
+
+    controller.dispose();
+  });
+
+  test("invalid permission optionId cancels the request", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-invalid", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: state.ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "forged" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "cancelled" },
+    });
+
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("missing permission optionId cancels the request", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-missing", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: state.ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "cancelled" },
+    });
+
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("deny permission preserves selected deny optionId and does not enter transcript", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-deny", title: "Write", kind: "write" },
+      options: [
+        { optionId: "allow", kind: "allow_once", name: "Allow" },
+        { optionId: "deny-always", kind: "reject_always", name: "Deny always" },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const snapshot = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending.length === 1
+      ) as any;
+    assert.ok(snapshot);
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: snapshot.ownerId,
+      requestId: snapshot.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "deny-always" },
+    });
+
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "selected", optionId: "deny-always" },
+    });
+
+    clients[0].resolvePrompt();
+    await prompt;
+
+    const finalSnapshot = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.multi-session.snapshot") as any;
+    assert.deepStrictEqual(finalSnapshot.pendingPermissions, []);
+    assert.ok(
+      !finalSnapshot.transcript.some(
+        (event: any) => event.message.type === "permissionRequest"
+      )
+    );
+
+    controller.dispose();
+  });
+
   test("background permission is replayed on activation and response resolves owner", async () => {
     const { controller, messages, clients } = createController();
     const promptA = controller.sendActiveMessage("A");
@@ -1073,6 +1255,7 @@ suite("multi-session feature", () => {
     const requestId = snapshot.pendingPermissions[0].requestId;
     await controller.handleCoreMessage({
       type: "permissionResponse",
+      ownerId: sessionA,
       requestId,
       outcome: { outcome: "selected", optionId: "allow" },
     });
@@ -1082,6 +1265,393 @@ suite("multi-session feature", () => {
 
     clients[0].resolvePrompt();
     await promptA;
+    controller.dispose();
+  });
+
+  test("ownerless permission response is ignored and correct owner settles", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ownerId = controller.getStateForTest().activeLocalSessionId!;
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-ownerless", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((session) => session.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      1
+    );
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("invalid permission discriminator cancels the request", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-invalid-discriminator", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: state.ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "approved", optionId: "allow" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "cancelled" },
+    });
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("permission after sendMessage settles is cancelled before queue finalization", async () => {
+    let latePermission: Promise<unknown> | undefined;
+    let resolveSendMessage: ((value: { stopReason: string }) => void) | undefined;
+    const { controller, messages, clients } = createController((client) => {
+      client.sendMessageHook = async () =>
+        new Promise((resolve) => {
+          resolveSendMessage = resolve;
+        });
+    });
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const session = (controller as any).sessions.get(
+      controller.getStateForTest().activeLocalSessionId!
+    );
+    const originalWaitForIdle = session.queue.waitForIdle.bind(session.queue);
+    session.queue.waitForIdle = async () => {
+      latePermission = clients[0].permissionRequest!({
+        toolCall: { toolCallId: "tool-after-send", title: "Write", kind: "write" },
+        options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return originalWaitForIdle();
+    };
+    resolveSendMessage?.({ stopReason: "end_turn" });
+    await prompt;
+
+    assert.deepStrictEqual(await latePermission, {
+      outcome: { outcome: "cancelled" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((item) => item.localSessionId === session.localSessionId)
+        ?.pendingPermissionCount,
+      0
+    );
+    assert.ok(
+      !messages.some(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending.some(
+            (pending: any) => pending.toolCallId === "tool-after-send"
+          )
+      )
+    );
+    controller.dispose();
+  });
+
+  test("old prompt response cannot settle a later prompt permission", async () => {
+    const { controller, messages, clients } = createController();
+    const promptA = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ownerId = controller.getStateForTest().activeLocalSessionId!;
+
+    const oldPermission = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-old-prompt", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const oldState = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+    clients[0].resolvePrompt();
+    assert.deepStrictEqual(await oldPermission, {
+      outcome: { outcome: "cancelled" },
+    });
+    await promptA;
+
+    const promptB = controller.sendActiveMessage("B");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const newPermission = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-new-prompt", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const newState = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending[0]?.toolCallId === "tool-new-prompt"
+      ) as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: oldState.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((item) => item.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      1
+    );
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: newState.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.deepStrictEqual(await newPermission, {
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    clients[0].resolvePrompt(1);
+    await promptB;
+    controller.dispose();
+  });
+
+  test("wrong-owner permission response is ignored and correct owner settles", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ownerId = controller.getStateForTest().activeLocalSessionId!;
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-a", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId: "wrong-owner",
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((session) => session.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      1
+    );
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: state.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("stale permission response after runtime replacement is ignored", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const ownerId = controller.getStateForTest().activeLocalSessionId!;
+
+    const oldPermission = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-a", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const oldState = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+
+    clients[0].stateChange?.("disconnected");
+    assert.deepStrictEqual(await oldPermission, {
+      outcome: { outcome: "cancelled" },
+    });
+    clients[0].resolvePrompt(0, "error");
+    await prompt;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = (controller as any).sessions.get(ownerId);
+    session.client = undefined;
+    session.sessionManager = undefined;
+    session.acpSessionId = undefined;
+    session.status = "idle";
+    session.isGenerating = true;
+    await (controller as any).ensureRuntime(session, true);
+    session.acceptingPermissionRequests = true;
+    assert.strictEqual(clients.length, 2);
+
+    const newPermission = clients[1].permissionRequest!({
+      toolCall: { toolCallId: "tool-b", title: "Read", kind: "read" },
+      options: [{ optionId: "deny", kind: "reject_once", name: "Deny" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const newState = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending[0]?.toolCallId === "tool-b"
+      ) as any;
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: oldState.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "allow" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((item) => item.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      1
+    );
+
+    await controller.handleCoreMessage({
+      type: "permissionResponse",
+      ownerId,
+      requestId: newState.pending[0].requestId,
+      outcome: { outcome: "selected", optionId: "deny" },
+    });
+    assert.deepStrictEqual(await newPermission, {
+      outcome: { outcome: "selected", optionId: "deny" },
+    });
+    assert.strictEqual(
+      controller.getStateForTest().sessions.find((item) => item.localSessionId === ownerId)
+        ?.pendingPermissionCount,
+      0
+    );
+    controller.dispose();
+  });
+
+  test("stop cancels pending permission once and publishes empty state", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const permissionPromise = clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-a", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await controller.stop();
+
+    assert.deepStrictEqual(await permissionPromise, {
+      outcome: { outcome: "cancelled" },
+    });
+    assert.strictEqual(clients[0].cancelCalls, 1);
+    const emptyState = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === "feature.permission-ui.state" &&
+          Array.isArray((message as any).pending) &&
+          (message as any).pending.length === 0
+      ) as any;
+    assert.ok(emptyState);
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("post-stop permission request fails closed without queueing", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await controller.stop();
+
+    const messageCount = messages.length;
+    const response = await clients[0].permissionRequest!({
+      toolCall: { toolCallId: "tool-post-stop", title: "Write", kind: "write" },
+      options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+    });
+
+    assert.deepStrictEqual(response, { outcome: { outcome: "cancelled" } });
+    const session = controller.getStateForTest().sessions.find(
+      (item) => item.localSessionId === controller.getStateForTest().activeLocalSessionId
+    );
+    assert.strictEqual(session?.pendingPermissionCount, 0);
+    assert.strictEqual(
+      messages
+        .slice(messageCount)
+        .some((message) => message.type === "feature.permission-ui.state"),
+      false
+    );
+    clients[0].resolvePrompt();
+    await prompt;
+    controller.dispose();
+  });
+
+  test("stop second pass cancels permission emitted while client cancel is in flight", async () => {
+    const { controller, messages, clients } = createController();
+    const prompt = controller.sendActiveMessage("A");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let inFlightPermission: Promise<unknown> | undefined;
+    clients[0].onCancel = async () => {
+      inFlightPermission = clients[0].permissionRequest!({
+        toolCall: { toolCallId: "tool-race", title: "Write", kind: "write" },
+        options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    await controller.stop();
+
+    assert.strictEqual(clients[0].cancelCalls, 1);
+    assert.deepStrictEqual(await inFlightPermission, {
+      outcome: { outcome: "cancelled" },
+    });
+    const session = controller.getStateForTest().sessions.find(
+      (item) => item.localSessionId === controller.getStateForTest().activeLocalSessionId
+    );
+    assert.strictEqual(session?.pendingPermissionCount, 0);
+    const latestPermissionState = [...messages]
+      .reverse()
+      .find((message) => message.type === "feature.permission-ui.state") as any;
+    if (latestPermissionState) {
+      assert.deepStrictEqual(latestPermissionState.pending, []);
+    }
+    clients[0].resolvePrompt();
+    await prompt;
     controller.dispose();
   });
 

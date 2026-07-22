@@ -39,6 +39,8 @@ interface MockACPClient {
   setModel: (modelId: string) => Promise<void>;
   setConfigOption: (configId: string, value: string) => Promise<void>;
   getSessionMetadata: () => unknown;
+  sendMessage?: (text: string, images?: string[], mentions?: unknown[]) => Promise<{ stopReason: string }>;
+  cancel: () => Promise<void>;
   dispose: () => void;
 }
 
@@ -70,7 +72,10 @@ class TestACPClient implements MockACPClient {
   public clearLastUsageUpdateCallCount = 0;
   public isConnectedValue = false;
   public connectError?: Error;
+  public connectHook?: () => Promise<void> | void;
   public newSessionError?: Error;
+  public newSessionHook?: () => Promise<void> | void;
+  public sendMessageHook?: () => Promise<{ stopReason: string }> | { stopReason: string };
   private setModeCallCount = 0;
   private setModelCallCount = 0;
   private setConfigOptionCallCount = 0;
@@ -79,6 +84,9 @@ class TestACPClient implements MockACPClient {
   public lastSetConfigOptionId: string | null = null;
   public lastSetConfigOptionValue: string | null = null;
   public elicitationRequest?: (context: unknown) => Promise<unknown>;
+  public permissionRequest?: (params: unknown) => Promise<unknown>;
+  public stateChange?: (state: string) => void;
+  public cancelHook?: () => Promise<void> | void;
 
   setAgent(config: any): void {
     if (config && config.id) {
@@ -112,7 +120,8 @@ class TestACPClient implements MockACPClient {
   clearLastUsageUpdate(): void {
     this.clearLastUsageUpdateCallCount += 1;
   }
-  setOnStateChange(): () => void {
+  setOnStateChange(callback: (state: string) => void): () => void {
+    this.stateChange = callback;
     return () => {};
   }
   setOnSessionUpdate(): () => void {
@@ -128,7 +137,9 @@ class TestACPClient implements MockACPClient {
   setOnWaitForTerminalExit(): void {}
   setOnKillTerminalCommand(): void {}
   setOnReleaseTerminal(): void {}
-  setOnPermissionRequest(): void {}
+  setOnPermissionRequest(callback: unknown): void {
+    this.permissionRequest = callback as (params: unknown) => Promise<unknown>;
+  }
   setOnElicitationRequest(callback: unknown): void {
     this.elicitationRequest = callback as (
       context: unknown
@@ -139,11 +150,13 @@ class TestACPClient implements MockACPClient {
   }
   async connect(): Promise<void> {
     this.connectCallCount += 1;
+    await this.connectHook?.();
     if (this.connectError) throw this.connectError;
     this.isConnectedValue = true;
   }
   async newSession(): Promise<{ sessionId: string }> {
     this.newSessionCallCount += 1;
+    await this.newSessionHook?.();
     if (this.newSessionError) throw this.newSessionError;
     return { sessionId: `test-session-${this.newSessionCallCount}` };
   }
@@ -173,8 +186,14 @@ class TestACPClient implements MockACPClient {
     };
   }
 
+  async sendMessage(): Promise<{ stopReason: string }> {
+    if (this.sendMessageHook) return this.sendMessageHook();
+    return { stopReason: "end_turn" };
+  }
+
   async cancel(): Promise<void> {
     this.cancelCallCount += 1;
+    await this.cancelHook?.();
   }
 
   getCurrentSessionId(): string | null {
@@ -204,7 +223,10 @@ class TestACPClient implements MockACPClient {
     this.clearLastUsageUpdateCallCount = 0;
     this.isConnectedValue = false;
     this.connectError = undefined;
+    this.connectHook = undefined;
     this.newSessionError = undefined;
+    this.newSessionHook = undefined;
+    this.sendMessageHook = undefined;
     this.setConfigOptionCallCount = 0;
     this.lastSetModeId = null;
     this.lastSetModelId = null;
@@ -2086,6 +2108,19 @@ suite("ChatViewProvider", () => {
       provider.dispose();
     });
 
+    function legacyPermissionParams(toolCallId: string): any {
+      return {
+        toolCall: { toolCallId, title: "Write", kind: "write" },
+        options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+      };
+    }
+
+    function latestLegacyPermissionState(messages: any[]): any {
+      return [...messages]
+        .reverse()
+        .find((message) => message.type === "feature.permission-ui.state");
+    }
+
     test("legacy ready replays a pending elicitation", async () => {
       const provider = new ChatViewProvider(
         vscode.Uri.file("/test"),
@@ -2120,6 +2155,402 @@ suite("ChatViewProvider", () => {
       (provider as any).legacyElicitationOwner.cancelAll();
       assert.deepStrictEqual(await pending, { action: "cancel" });
       provider.dispose();
+    });
+
+    test("legacy ready republishes one pending permission without duplicates", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-ready"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const { messageHandler } = resolveView(provider);
+      messages.length = 0;
+
+      await messageHandler({ type: "ready" });
+
+      const states = messages.filter(
+        (message) => message.type === "feature.permission-ui.state"
+      );
+      assert.strictEqual(states.length, 1);
+      assert.strictEqual(states[0].ownerId, "legacy");
+      assert.strictEqual(states[0].pending.length, 1);
+      assert.strictEqual(states[0].pending[0].toolCallId, "tool-ready");
+      assert.strictEqual((provider as any).permissionQueue.length, 1);
+      (provider as any).cancelLegacyPermissions();
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      provider.dispose();
+    });
+
+    test("legacy Stop cancels pending permission and publishes empty state", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-stop"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      messages.length = 0;
+
+      await messageHandler({ type: "stop" });
+
+      assert.strictEqual((provider as any).acceptingPermissionRequests, false);
+      assert.strictEqual(acpClient.cancelCallCount, 1);
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.deepStrictEqual(latestLegacyPermissionState(messages).pending, []);
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy post-stop permission request fails closed without queueing", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+
+      await messageHandler({ type: "stop" });
+      const messageCount = messages.length;
+      const response = await acpClient.permissionRequest!(
+        legacyPermissionParams("tool-post-stop")
+      );
+
+      assert.deepStrictEqual(response, { outcome: { outcome: "cancelled" } });
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      assert.strictEqual(
+        messages
+          .slice(messageCount)
+          .some((message) => message.type === "feature.permission-ui.state"),
+        false
+      );
+      provider.dispose();
+    });
+
+    test("legacy gate stays closed during connect and new session initialization", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      const responses: unknown[] = [];
+      acpClient.connectHook = async () => {
+        responses.push(
+          await acpClient.permissionRequest!(legacyPermissionParams("tool-connect"))
+        );
+      };
+      acpClient.newSessionHook = async () => {
+        responses.push(
+          await acpClient.permissionRequest!(legacyPermissionParams("tool-new-session"))
+        );
+      };
+
+      await messageHandler({ type: "sendMessage", text: "hello" });
+      await (provider as any).legacyMessageQueue.waitForIdle();
+
+      assert.deepStrictEqual(responses, [
+        { outcome: { outcome: "cancelled" } },
+        { outcome: { outcome: "cancelled" } },
+      ]);
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      assert.ok(
+        !messages.some(
+          (message) =>
+            message.type === "feature.permission-ui.state" &&
+            Array.isArray(message.pending) &&
+            message.pending.length > 0
+        )
+      );
+      provider.dispose();
+    });
+
+    test("legacy permission after sendMessage settles cancels before finalization", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      acpClient.isConnectedValue = true;
+      (provider as any).hasSession = true;
+      let latePermission: Promise<unknown> | undefined;
+      acpClient.sendMessageHook = async () => ({ stopReason: "end_turn" });
+      const originalFinalize = (provider as any).outputPipeline.finalizePendingToolCalls.bind(
+        (provider as any).outputPipeline
+      );
+      (provider as any).outputPipeline.finalizePendingToolCalls = async (
+        ...args: any[]
+      ) => {
+        latePermission = acpClient.permissionRequest!(
+          legacyPermissionParams("tool-after-send")
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return originalFinalize(...args);
+      };
+
+      await messageHandler({ type: "sendMessage", text: "hello" });
+      await (provider as any).legacyMessageQueue.waitForIdle();
+
+      assert.deepStrictEqual(await latePermission, {
+        outcome: { outcome: "cancelled" },
+      });
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      assert.ok(
+        !messages.some(
+          (message) =>
+            message.type === "feature.permission-ui.state" &&
+            Array.isArray(message.pending) &&
+            message.pending.some(
+              (pending: any) => pending.toolCallId === "tool-after-send"
+            )
+        )
+      );
+      provider.dispose();
+    });
+
+    test("legacy old prompt response cannot settle a later prompt permission", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).legacyPromptGeneration = 1;
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const oldPending = acpClient.permissionRequest!(
+        legacyPermissionParams("tool-old-prompt")
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const oldState = latestLegacyPermissionState(messages);
+      (provider as any).acceptingPermissionRequests = false;
+      (provider as any).cancelLegacyPermissions();
+      assert.deepStrictEqual(await oldPending, { outcome: { outcome: "cancelled" } });
+
+      (provider as any).legacyPromptGeneration = 2;
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const newPending = acpClient.permissionRequest!(
+        legacyPermissionParams("tool-new-prompt")
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const newState = latestLegacyPermissionState(messages);
+
+      (provider as any).settleLegacyPermission(oldState.pending[0].requestId, {
+        outcome: "selected",
+        optionId: "allow",
+      });
+      assert.strictEqual((provider as any).permissionQueue.length, 1);
+
+      (provider as any).settleLegacyPermission(newState.pending[0].requestId, {
+        outcome: "selected",
+        optionId: "allow",
+      });
+      assert.deepStrictEqual(await newPending, {
+        outcome: { outcome: "selected", optionId: "allow" },
+      });
+      provider.dispose();
+    });
+
+    test("legacy invalid permission optionId cancels the request", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-forged"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const state = latestLegacyPermissionState(messages);
+
+      (provider as any).settleLegacyPermission(state.pending[0].requestId, {
+        outcome: "selected",
+        optionId: "forged",
+      });
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy missing permission optionId cancels the request", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-missing"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const state = latestLegacyPermissionState(messages);
+
+      await messageHandler({
+        type: "permissionResponse",
+        requestId: state.pending[0].requestId,
+        outcome: { outcome: "selected" },
+      });
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy valid reject option remains selected", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!({
+        toolCall: { toolCallId: "tool-reject", title: "Write", kind: "write" },
+        options: [
+          { optionId: "allow", kind: "allow_once", name: "Allow" },
+          { optionId: "deny", kind: "reject_once", name: "Deny" },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const state = latestLegacyPermissionState(messages);
+
+      await messageHandler({
+        type: "permissionResponse",
+        requestId: state.pending[0].requestId,
+        outcome: { outcome: "selected", optionId: "deny" },
+      });
+
+      assert.deepStrictEqual(await pending, {
+        outcome: { outcome: "selected", optionId: "deny" },
+      });
+      provider.dispose();
+    });
+
+    test("legacy Stop second pass cancels permission emitted during client cancel", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      const { messageHandler } = resolveView(provider);
+      let inFlightPermission: Promise<unknown> | undefined;
+      acpClient.cancelHook = async () => {
+        inFlightPermission = acpClient.permissionRequest!(
+          legacyPermissionParams("tool-race")
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      };
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+
+      await messageHandler({ type: "stop" });
+
+      assert.strictEqual(acpClient.cancelCallCount, 1);
+      assert.deepStrictEqual(await inFlightPermission, {
+        outcome: { outcome: "cancelled" },
+      });
+      const latestState = latestLegacyPermissionState(messages);
+      if (latestState) {
+        assert.deepStrictEqual(latestState.pending, []);
+      }
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy disconnect/error cancels pending permission", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-disconnect"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      messages.length = 0;
+
+      acpClient.stateChange?.("disconnected");
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.deepStrictEqual(latestLegacyPermissionState(messages).pending, []);
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy new chat cancels pending permission", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-new"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      messages.length = 0;
+
+      await (provider as any).handleNewChat(false);
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.deepStrictEqual(latestLegacyPermissionState(messages).pending, []);
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
+      provider.dispose();
+    });
+
+    test("legacy dispose cancels pending permission", async () => {
+      const provider = new ChatViewProvider(
+        vscode.Uri.file("/test"),
+        acpClient as any,
+        memento as any
+      );
+      const messages: any[] = [];
+      (provider as any).postMessage = (message: any) => messages.push(message);
+      (provider as any).acceptingPermissionRequests = true;
+      (provider as any).isGenerating = true;
+      const pending = acpClient.permissionRequest!(legacyPermissionParams("tool-dispose"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      messages.length = 0;
+
+      provider.dispose();
+
+      assert.deepStrictEqual(await pending, { outcome: { outcome: "cancelled" } });
+      assert.deepStrictEqual(latestLegacyPermissionState(messages).pending, []);
+      assert.strictEqual((provider as any).permissionQueue.length, 0);
     });
 
     test("legacy agent selection resets chat and creates exactly one session", async () => {

@@ -1,6 +1,5 @@
 import { TooltipManager } from "./widget/tooltip";
 import { showConfirmDialog } from "./widget/confirm-dialog";
-import { PermissionDialog } from "./widget/permission-dialog";
 import { AuxiliaryPanelsComponent } from "./component/auxiliary-panels";
 import { InputPanelComponent } from "./component/input-panel";
 import { MessageListComponent } from "./component/message-list";
@@ -56,7 +55,6 @@ export class WebviewController implements MessageHandler {
     return this.ctx;
   }
 
-  private permissionDialog: PermissionDialog;
   private isConnected = false;
   private sessionTransitionLocked = false;
   private previousInputContentEditable: string | null = null;
@@ -85,14 +83,6 @@ export class WebviewController implements MessageHandler {
     this.inputPanel = root.inputPanel;
     this.sessionToolbar = root.sessionToolbar;
     this.auxiliaryPanels = root.auxiliaryPanels;
-
-    this.permissionDialog = new PermissionDialog(
-      this.ctx,
-      () => this.messageList.getBlockManager(),
-      () => this.messageList.getIsGenerating(),
-      (v) => this.inputPanel.setGenerating(v),
-      () => this.messageList.scrollToBottom()
-    );
 
     // Wire cross-component dependencies
     this.messageList.onGeneratingChange = (isGenerating) => {
@@ -158,6 +148,9 @@ export class WebviewController implements MessageHandler {
 
     const elicitationResult = this.features?.acpElicitation.handleMessage(msg);
     if (elicitationResult === true) return true;
+
+    const permissionUiResult = this.features?.permissionUi.handleMessage(msg);
+    if (permissionUiResult === true) return true;
 
     const multiSessionResult = this.features?.multiSession.handleMessage(msg);
     if (multiSessionResult === true) return true;
@@ -260,17 +253,6 @@ export class WebviewController implements MessageHandler {
         );
       }
 
-      case "permissionRequest":
-        if (msg.requestId && msg.toolCall && msg.options) {
-          this.permissionDialog.show(
-            msg.requestId,
-            msg.toolCall,
-            msg.options,
-            msg.toolCallId
-          );
-        }
-        return;
-
       case "sessionMetadata": {
         this.sessionToolbar.updateMetadata(msg);
         if (msg.commands && Array.isArray(msg.commands)) {
@@ -324,6 +306,7 @@ export class WebviewController implements MessageHandler {
       ownerId: "",
       pendingElicitations: [],
     });
+    this.features?.permissionUi.clear();
     this.messageList.clear();
     this.inputPanel.autocomplete.hide();
     this.auxiliaryPanels.hidePlan();

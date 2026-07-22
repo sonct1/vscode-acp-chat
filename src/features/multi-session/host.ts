@@ -71,6 +71,7 @@ import type {
   MultiSessionManagerStateMessage,
   MultiSessionStatus,
 } from "./contracts";
+import type { PermissionView } from "../permission-ui/types";
 import {
   registerAcpElicitationHostFeature,
   type AcpElicitationHostFeature,
@@ -175,11 +176,19 @@ interface AgentPreference {
 
 type AgentPreferences = Record<string, AgentPreference>;
 
+type PermissionOutcome =
+  | { outcome: "selected"; optionId: string }
+  | { outcome: "cancelled" };
+
 type PermissionPending = {
   id: string;
+  runtimeId?: string;
+  runtimeGeneration: number;
+  promptGeneration: number;
   params: RequestPermissionRequest;
   resolver: (response: RequestPermissionResponse) => void;
   timeout: ReturnType<typeof setTimeout>;
+  settled: boolean;
 };
 
 interface SessionResources {
@@ -209,6 +218,10 @@ interface ManagedSession {
   metadata: Partial<SessionMetadata> | null;
   contextUsage: ContextUsageUpdate | null;
   permissionQueue: PermissionPending[];
+  permissionStateRevision: number;
+  acceptingPermissionRequests: boolean;
+  runtimeGeneration: number;
+  promptGeneration: number;
   elicitationOwner?: AcpElicitationOwner;
   conflictedDiffPaths?: Set<string>;
   stderrBuffer: string;
@@ -497,12 +510,11 @@ export class MultiSessionHostController implements vscode.Disposable {
         }
         return true;
       case "permissionResponse":
-        if (typeof message.requestId === "string" && message.outcome) {
-          this.respondPermissionByRequestId(
+        if (typeof message.requestId === "string" && typeof message.ownerId === "string") {
+          this.respondPermissionForOwner(
+            message.ownerId,
             message.requestId,
-            message.outcome as
-              | { outcome: "selected"; optionId: string }
-              | { outcome: "cancelled" }
+            this.parsePermissionOutcome(message.outcome)
           );
         }
         return true;
@@ -658,6 +670,7 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
 
     session.isGenerating = true;
+    session.acceptingPermissionRequests = false;
     session.status = "running";
     session.lastError = undefined;
     session.output?.reset();
@@ -671,11 +684,22 @@ export class MultiSessionHostController implements vscode.Disposable {
     this.sendState();
 
     try {
-      const response = await session.client!.sendMessage(
-        payload.text,
-        payload.images,
-        payload.mentions
-      );
+      const promptGeneration = session.promptGeneration + 1;
+      session.promptGeneration = promptGeneration;
+      session.acceptingPermissionRequests = true;
+      let response: Awaited<ReturnType<ACPClient["sendMessage"]>>;
+      try {
+        response = await session.client!.sendMessage(
+          payload.text,
+          payload.images,
+          payload.mentions
+        );
+      } finally {
+        if (session.promptGeneration === promptGeneration) {
+          session.acceptingPermissionRequests = false;
+        }
+        this.cancelPermissions(session);
+      }
       await session.queue!.waitForIdle();
       await session.output!.finalizePendingToolCalls(response.stopReason);
       this.append(session, {
@@ -692,6 +716,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       this.append(session, { type: "streamEnd", stopReason: "error" });
       throw error;
     } finally {
+      session.acceptingPermissionRequests = false;
+      this.cancelPermissions(session);
       session.isGenerating = false;
       session.sendInFlight = false;
       this.touch(session);
@@ -760,7 +786,9 @@ export class MultiSessionHostController implements vscode.Disposable {
         ...session.messageQueue!.restoreQueuedWithoutAbort()
       );
     }
+    session.acceptingPermissionRequests = false;
     session.elicitationOwner?.cancelAll();
+    this.cancelPermissions(session);
     if (!session.client || !session.isGenerating) {
       this.sendState();
       if (session.localSessionId === this.activeLocalSessionId)
@@ -769,7 +797,11 @@ export class MultiSessionHostController implements vscode.Disposable {
     }
     session.status = "cancelling";
     this.sendState();
-    await session.client.cancel();
+    try {
+      await session.client.cancel();
+    } finally {
+      this.cancelPermissions(session);
+    }
   }
 
   async close(localSessionId: string): Promise<void> {
@@ -789,8 +821,11 @@ export class MultiSessionHostController implements vscode.Disposable {
       ) {
         return;
       }
+      session.acceptingPermissionRequests = false;
+      this.cancelPermissions(session);
       await session.client?.cancel();
       if (!this.isCurrentIdentity(session, identityEpoch)) return;
+      this.cancelPermissions(session);
       await this.waitForIdle(session);
       if (!this.isCurrentIdentity(session, identityEpoch)) return;
     }
@@ -1165,6 +1200,10 @@ export class MultiSessionHostController implements vscode.Disposable {
       metadata: null,
       contextUsage: null,
       permissionQueue: [],
+      permissionStateRevision: 0,
+      acceptingPermissionRequests: false,
+      runtimeGeneration: 0,
+      promptGeneration: 0,
       conflictedDiffPaths: isLowResourceMode() ? undefined : new Set<string>(),
       stderrBuffer: "",
       isGenerating: false,
@@ -1534,8 +1573,13 @@ export class MultiSessionHostController implements vscode.Disposable {
     session.sessionManager = sessionManager;
     session.output = output;
     session.queue = queue;
-    session.runtimeId = `runtime-${session.localSessionId}`;
-    this.bindClient(session, client, resources);
+    session.acceptingPermissionRequests = false;
+    this.cancelPermissions(session);
+    session.runtimeGeneration += 1;
+    session.runtimeId = `runtime-${session.localSessionId}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    this.bindClient(session, client, resources, session.runtimeGeneration);
     session.status = "starting";
     this.sendState();
 
@@ -1556,7 +1600,8 @@ export class MultiSessionHostController implements vscode.Disposable {
   private bindClient(
     session: ManagedSession,
     client: ACPClient,
-    resources: SessionResources
+    resources: SessionResources,
+    runtimeGeneration: number
   ): void {
     const queue = session.queue;
     client.setOnSessionUpdate((update) => {
@@ -1588,11 +1633,16 @@ export class MultiSessionHostController implements vscode.Disposable {
     client.setOnReleaseTerminal((params) =>
       resources.terminalHandler.handleReleaseTerminal(params)
     );
-    client.setOnPermissionRequest((params) =>
-      this.isCurrentRuntime(session, client)
-        ? this.handlePermissionRequest(session, params)
-        : Promise.resolve({ outcome: { outcome: "cancelled" } })
-    );
+    client.setOnPermissionRequest((params) => {
+      return this.isCurrentRuntime(session, client)
+        ? this.handlePermissionRequest(
+            session,
+            params,
+            runtimeGeneration,
+            session.promptGeneration
+          )
+        : Promise.resolve({ outcome: { outcome: "cancelled" } });
+    });
     client.setOnElicitationRequest((context) =>
       session.elicitationOwner && this.isCurrentRuntime(session, client)
         ? session.elicitationOwner.handleRequest(context)
@@ -1602,6 +1652,8 @@ export class MultiSessionHostController implements vscode.Disposable {
       if (!this.isCurrentRuntime(session, client)) return;
       this.append(session, { type: "connectionState", state });
       if (state === "error" || state === "disconnected") {
+        session.acceptingPermissionRequests = false;
+        this.cancelPermissions(session);
         session.elicitationOwner?.cancelAll();
         if (session.isGenerating) session.status = "error";
         if (session.stderrBuffer.trim()) {
@@ -1618,15 +1670,29 @@ export class MultiSessionHostController implements vscode.Disposable {
 
   private handlePermissionRequest(
     session: ManagedSession,
-    params: RequestPermissionRequest
+    params: RequestPermissionRequest,
+    runtimeGeneration: number,
+    promptGeneration: number
   ): Promise<RequestPermissionResponse> {
+    if (
+      !session.acceptingPermissionRequests ||
+      !session.isGenerating ||
+      session.status === "cancelling" ||
+      session.status === "error" ||
+      runtimeGeneration !== session.runtimeGeneration ||
+      promptGeneration !== session.promptGeneration ||
+      !session.runtimeId
+    ) {
+      return Promise.resolve({ outcome: { outcome: "cancelled" } });
+    }
     return new Promise((resolve) => {
       const requestId = `perm-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2)}`;
+      const runtimeId = session.runtimeId;
       const timeout = setTimeout(
         () =>
-          this.respondPermission(session.localSessionId, requestId, {
+          this.settlePermission(session.localSessionId, requestId, {
             outcome: "cancelled",
           }),
         60_000
@@ -1634,22 +1700,27 @@ export class MultiSessionHostController implements vscode.Disposable {
       timeout.unref?.();
       session.permissionQueue.push({
         id: requestId,
+        runtimeId,
+        runtimeGeneration,
+        promptGeneration,
         params,
         resolver: resolve,
         timeout,
+        settled: false,
       });
+      this.bumpPermissionStateRevision(session);
       session.status = "awaiting_permission";
-      this.append(session, this.permissionMessage(requestId, params));
+      this.touch(session);
       this.sendState();
+      this.publishPermissionState(session);
     });
   }
 
-  private permissionMessage(
+  private permissionView(
     requestId: string,
     params: RequestPermissionRequest
-  ): SessionRenderMessage {
+  ): PermissionView {
     return {
-      type: "permissionRequest",
       requestId,
       toolCallId: params.toolCall?.toolCallId,
       toolCall: {
@@ -1667,35 +1738,114 @@ export class MultiSessionHostController implements vscode.Disposable {
   private respondPermission(
     localSessionId: string,
     requestId: string,
-    outcome:
-      { outcome: "selected"; optionId: string } | { outcome: "cancelled" }
+    outcome: PermissionOutcome
   ): void {
-    const session = this.sessions.get(localSessionId);
-    const pending = session?.permissionQueue.find(
-      (item) => item.id === requestId
-    );
-    if (!session || !pending) return;
-
-    clearTimeout(pending.timeout);
-    pending.resolver({ outcome });
-    session.permissionQueue = session.permissionQueue.filter(
-      (item) => item.id !== requestId
-    );
-    session.status = session.isGenerating ? "running" : "idle";
-    this.sendState();
+    this.settlePermission(localSessionId, requestId, outcome);
   }
 
-  private respondPermissionByRequestId(
+  private settlePermission(
+    localSessionId: string,
     requestId: string,
-    outcome:
-      { outcome: "selected"; optionId: string } | { outcome: "cancelled" }
+    outcome: PermissionOutcome
   ): void {
-    for (const session of this.sessions.values()) {
-      if (session.permissionQueue.some((item) => item.id === requestId)) {
-        this.respondPermission(session.localSessionId, requestId, outcome);
-        return;
+    const session = this.sessions.get(localSessionId);
+    if (!session) return;
+    const index = session.permissionQueue.findIndex(
+      (item) => item.id === requestId
+    );
+    if (index !== -1) {
+      const pending = session.permissionQueue[index];
+      if (!pending || !this.isValidPermissionOutcome(pending, outcome)) {
+        outcome = { outcome: "cancelled" };
       }
     }
+    if (index === -1) return;
+    const [pending] = session.permissionQueue.splice(index, 1);
+    if (!pending || pending.settled) return;
+    pending.settled = true;
+    this.bumpPermissionStateRevision(session);
+    clearTimeout(pending.timeout);
+    this.touch(session);
+    session.status = this.effectiveStatus(session);
+    this.sendState();
+    this.publishPermissionState(session);
+    pending.resolver({ outcome });
+  }
+
+  private cancelPermissions(session: ManagedSession): void {
+    const pending = session.permissionQueue.splice(0);
+    if (pending.length === 0) return;
+    this.bumpPermissionStateRevision(session);
+    for (const item of pending) {
+      if (item.settled) continue;
+      item.settled = true;
+      clearTimeout(item.timeout);
+      item.resolver({ outcome: { outcome: "cancelled" } });
+    }
+    session.status = this.effectiveStatus(session);
+    this.sendState();
+    this.publishPermissionState(session);
+  }
+
+  private publishPermissionState(session: ManagedSession): void {
+    if (session.localSessionId !== this.activeLocalSessionId) return;
+    this.post({
+      type: "feature.permission-ui.state",
+      ownerId: session.localSessionId,
+      activationRevision: this.activationRevision,
+      stateRevision: session.permissionStateRevision,
+      pending: session.permissionQueue.map((pending) =>
+        this.permissionView(pending.id, pending.params)
+      ),
+    });
+  }
+
+  private bumpPermissionStateRevision(session: ManagedSession): void {
+    session.permissionStateRevision += 1;
+  }
+
+  private respondPermissionForOwner(
+    ownerId: string,
+    requestId: string,
+    outcome: PermissionOutcome
+  ): void {
+    const session = this.sessions.get(ownerId);
+    if (!session) return;
+    const pending = session.permissionQueue.find((item) => item.id === requestId);
+    if (
+      !pending ||
+      pending.runtimeId !== session.runtimeId ||
+      pending.runtimeGeneration !== session.runtimeGeneration ||
+      pending.promptGeneration !== session.promptGeneration
+    ) {
+      return;
+    }
+    this.respondPermission(session.localSessionId, requestId, outcome);
+  }
+
+  private isValidPermissionOutcome(
+    pending: PermissionPending,
+    outcome: PermissionOutcome
+  ): boolean {
+    if (outcome.outcome === "cancelled") return true;
+    return (pending.params.options || []).some(
+      (option) => option.optionId === outcome.optionId
+    );
+  }
+
+  private parsePermissionOutcome(outcome: unknown): PermissionOutcome {
+    if (
+      outcome &&
+      typeof outcome === "object" &&
+      "outcome" in outcome &&
+      outcome.outcome === "selected" &&
+      "optionId" in outcome &&
+      typeof outcome.optionId === "string" &&
+      outcome.optionId.length > 0
+    ) {
+      return { outcome: "selected", optionId: outcome.optionId };
+    }
+    return { outcome: "cancelled" };
   }
 
   private append(session: ManagedSession, message: SessionRenderMessage): void {
@@ -1910,14 +2060,29 @@ export class MultiSessionHostController implements vscode.Disposable {
       activeLocalSessionId: session.localSessionId,
       activationRevision: this.activationRevision,
       session: this.toListItem(session),
-      transcript: session.transcript.snapshot(),
+      transcript: session.transcript
+        .snapshot()
+        .filter((event) => event.message.type !== "permissionRequest"),
       lastSeq: session.transcript.lastSeq,
       metadata: session.metadata,
       contextUsage: session.contextUsage,
       diffChanges: this.getDiffChanges(session),
-      pendingPermissions: session.permissionQueue.map((pending) =>
-        this.permissionMessage(pending.id, pending.params)
+      pendingPermissions: session.permissionQueue.map(
+        (pending) =>
+          this.permissionView(
+            pending.id,
+            pending.params
+          ) as unknown as SessionRenderMessage
       ),
+      permissionState: {
+        type: "feature.permission-ui.state",
+        ownerId: session.localSessionId,
+        activationRevision: this.activationRevision,
+        stateRevision: session.permissionStateRevision,
+        pending: session.permissionQueue.map((pending) =>
+          this.permissionView(pending.id, pending.params)
+        ),
+      },
       pendingElicitations: session.elicitationOwner?.getPendingViews(),
       isGenerating: session.messageQueue!.getSnapshot().processing,
       scrollToBottom: options.scrollToBottom,
@@ -2679,6 +2844,9 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private disposeRuntime(session: ManagedSession): void {
+    session.acceptingPermissionRequests = false;
+    session.runtimeGeneration += 1;
+    this.cancelPermissions(session);
     if (this.activeDocumentSyncSessionId === session.localSessionId) {
       this.documentSync?.dispose();
       this.documentSync = undefined;
@@ -2698,11 +2866,7 @@ export class MultiSessionHostController implements vscode.Disposable {
   }
 
   private disposeSession(session: ManagedSession): void {
-    for (const pending of session.permissionQueue) {
-      clearTimeout(pending.timeout);
-      pending.resolver({ outcome: { outcome: "cancelled" } });
-    }
-    session.permissionQueue = [];
+    this.cancelPermissions(session);
     session.elicitationOwner?.dispose();
     session.elicitationOwner = undefined;
     this.disposeRuntime(session);

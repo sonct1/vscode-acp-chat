@@ -324,9 +324,15 @@ export class MultiSessionWebviewController {
         ownerId: msg.activeLocalSessionId,
         pendingElicitations: msg.pendingElicitations ?? [],
       });
-      for (const permission of msg.pendingPermissions ?? []) {
-        await this.bridge.dispatch(permission as ExtensionMessage);
-      }
+      await this.bridge.dispatch(
+        (msg.permissionState ?? {
+          type: "feature.permission-ui.state",
+          ownerId: msg.activeLocalSessionId,
+          activationRevision: msg.activationRevision,
+          stateRevision: 0,
+          pending: msg.pendingPermissions ?? [],
+        }) as ExtensionMessage
+      );
       this.bridge.setGenerating(msg.isGenerating);
       this.bridge.setInputHtml(this.drafts[msg.activeLocalSessionId] ?? "");
       if (msg.scrollToBottom) {

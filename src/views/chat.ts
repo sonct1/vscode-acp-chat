@@ -171,9 +171,15 @@ export class ChatViewProvider
   private multiSessionManagerView?: MultiSessionManagerViewProvider;
   private permissionQueue: Array<{
     id: string;
+    promptGeneration: number;
     params: RequestPermissionRequest;
     resolver: (response: RequestPermissionResponse) => void;
+    timeout: ReturnType<typeof setTimeout>;
+    settled: boolean;
   }> = [];
+  private legacyPermissionStateRevision = 0;
+  private acceptingPermissionRequests = false;
+  private legacyPromptGeneration = 0;
   // Serializes ACP session updates so they render in arrival order.
   // Without this, rapid updates can interleave and cause out-of-order
   // messages (e.g. streamEnd arriving before the last tool_call_complete).
@@ -292,7 +298,9 @@ export class ChatViewProvider
     this.acpClient.setOnStateChange((state) => {
       this.postMessage({ type: "connectionState", state });
       if (state === "disconnected" || state === "error") {
+        this.acceptingPermissionRequests = false;
         this.legacyElicitationOwner?.cancelAll();
+        this.cancelLegacyPermissions();
         this.postMessage({ type: "streamEnd", stopReason: "error" });
         if (this.stderrBuffer.trim().length > 0) {
           const lastLines = this.stderrBuffer
@@ -505,7 +513,7 @@ export class ChatViewProvider
           if (this.features.multiSession) {
             await this.features.multiSession.newChat();
           } else {
-            await this.handleNewChat();
+            await this.handleNewChat(true);
           }
           break;
         case "clearChat":
@@ -669,28 +677,27 @@ export class ChatViewProvider
           if (this.features.multiSession) {
             await this.features.multiSession.stop();
           } else {
+            this.acceptingPermissionRequests = false;
             this.legacyElicitationOwner?.cancelAll();
-            await this.acpClient.cancel();
+            this.cancelLegacyPermissions();
+            try {
+              await this.acpClient.cancel();
+            } finally {
+              this.cancelLegacyPermissions();
+            }
           }
           break;
         case "permissionResponse":
           if (message.requestId && message.outcome) {
-            const pending = this.permissionQueue.find(
-              (p) => p.id === message.requestId
-            );
-            if (pending) {
-              const outcome =
-                message.outcome.outcome === "selected"
-                  ? {
-                      outcome: "selected" as const,
-                      optionId: message.outcome.optionId!,
-                    }
-                  : { outcome: "cancelled" as const };
-              pending.resolver({ outcome });
-              this.permissionQueue = this.permissionQueue.filter(
-                (p) => p.id !== message.requestId
-              );
-            }
+            const outcome =
+              message.outcome.outcome === "selected" &&
+              typeof message.outcome.optionId === "string"
+                ? {
+                    outcome: "selected" as const,
+                    optionId: message.outcome.optionId,
+                  }
+                : { outcome: "cancelled" as const };
+            this.settleLegacyPermission(message.requestId, outcome);
           }
           break;
         case "reviewDiff":
@@ -760,6 +767,7 @@ export class ChatViewProvider
             pendingElicitations:
               this.legacyElicitationOwner?.getPendingViews() ?? [],
           });
+          this.publishLegacyPermissionState();
           this.flushLegacyInputFocus();
           break;
       }
@@ -800,7 +808,7 @@ export class ChatViewProvider
   public newChat(): void {
     const newChat = this.features.multiSession
       ? this.features.multiSession.newChat()
-      : this.handleNewChat();
+      : this.handleNewChat(true);
     newChat.catch((err) => {
       console.error("[Chat] handleNewChat failed:", err);
     });
@@ -1005,6 +1013,8 @@ export class ChatViewProvider
     const cwd = getWorkspaceRoot();
 
     // Clear the current UI
+    this.acceptingPermissionRequests = false;
+    this.cancelLegacyPermissions();
     this.hasSession = false;
     this.hasRestoredModeModel = false;
     this.outputPipeline.reset();
@@ -1096,15 +1106,27 @@ export class ChatViewProvider
   private async handlePermissionRequest(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
+    if (!this.acceptingPermissionRequests || !this.isGenerating) {
+      return { outcome: { outcome: "cancelled" } };
+    }
     return new Promise((resolve) => {
       const requestId = `perm-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      const timeout = setTimeout(() => {
+        this.settleLegacyPermission(requestId, { outcome: "cancelled" });
+      }, 60_000);
+      timeout.unref?.();
 
       // Add to queue
       this.permissionQueue.push({
         id: requestId,
+        promptGeneration: this.legacyPromptGeneration,
         params,
         resolver: resolve,
+        timeout,
+        settled: false,
       });
+      this.legacyPermissionStateRevision += 1;
 
       if (params.toolCall?.toolCallId) {
         this.outputPipeline.markToolCallPendingForPermission(
@@ -1118,40 +1140,90 @@ export class ChatViewProvider
         });
       }
 
-      // Send to webview
-      this.postMessage({
-        type: "permissionRequest",
-        requestId,
-        toolCallId: params.toolCall?.toolCallId,
-        toolCall: {
-          kind: params.toolCall?.kind || "Unknown",
-          title: params.toolCall?.title || "Tool Call",
-        },
-        options: (params.options || []).map((opt) => ({
-          optionId: opt.optionId,
-          kind: opt.kind,
-          name: opt.name,
-        })),
-      });
-
-      // Timeout logic
-      setTimeout(() => {
-        const pending = this.permissionQueue.find((p) => p.id === requestId);
-        if (pending) {
-          pending.resolver({ outcome: { outcome: "cancelled" } });
-          this.permissionQueue = this.permissionQueue.filter(
-            (p) => p.id !== requestId
-          );
-        }
-      }, 60000); // 60s timeout
+      this.publishLegacyPermissionState();
     });
   }
 
+  private publishLegacyPermissionState(): void {
+    this.postMessage({
+      type: "feature.permission-ui.state",
+      ownerId: ACP_ELICITATION_OWNER_LEGACY,
+      stateRevision: this.legacyPermissionStateRevision,
+      pending: this.permissionQueue.map((pending) => ({
+        requestId: pending.id,
+        toolCallId: pending.params.toolCall?.toolCallId,
+        toolCall: {
+          kind: pending.params.toolCall?.kind || "Unknown",
+          title: pending.params.toolCall?.title || "Tool Call",
+        },
+        options: (pending.params.options || []).map((option) => ({
+          optionId: option.optionId,
+          kind: option.kind,
+          name: option.name,
+        })),
+      })),
+    });
+  }
+
+  private settleLegacyPermission(
+    requestId: string,
+    outcome:
+      | { outcome: "selected"; optionId: string }
+      | { outcome: "cancelled" }
+  ): void {
+    const index = this.permissionQueue.findIndex((item) => item.id === requestId);
+    if (index === -1) return;
+    const pendingAtIndex = this.permissionQueue[index];
+    if (
+      !pendingAtIndex ||
+      pendingAtIndex.promptGeneration !== this.legacyPromptGeneration ||
+      !this.isValidLegacyPermissionOutcome(pendingAtIndex, outcome)
+    ) {
+      outcome = { outcome: "cancelled" };
+    }
+    const [pending] = this.permissionQueue.splice(index, 1);
+    if (!pending || pending.settled) return;
+    pending.settled = true;
+    this.legacyPermissionStateRevision += 1;
+    clearTimeout(pending.timeout);
+    this.publishLegacyPermissionState();
+    pending.resolver({ outcome });
+  }
+
+  private isValidLegacyPermissionOutcome(
+    pending: {
+      params: RequestPermissionRequest;
+    },
+    outcome:
+      | { outcome: "selected"; optionId: string }
+      | { outcome: "cancelled" }
+  ): boolean {
+    if (outcome.outcome === "cancelled") return true;
+    return (pending.params.options || []).some(
+      (option) => option.optionId === outcome.optionId
+    );
+  }
+
+  private cancelLegacyPermissions(): void {
+    const pending = this.permissionQueue.splice(0);
+    if (pending.length === 0) return;
+    this.legacyPermissionStateRevision += 1;
+    for (const item of pending) {
+      if (item.settled) continue;
+      item.settled = true;
+      clearTimeout(item.timeout);
+      item.resolver({ outcome: { outcome: "cancelled" } });
+    }
+    this.publishLegacyPermissionState();
+  }
+
   public dispose(): void {
+    this.acceptingPermissionRequests = false;
     this.features.chatAutoScroll?.dispose();
     this.features.chatFontSize?.dispose();
     this.multiSessionManagerView?.dispose();
     this.features.multiSession?.dispose();
+    this.cancelLegacyPermissions();
     this.legacyElicitationOwner?.dispose();
     this.features.acpElicitation?.dispose();
     this.legacyInputFocusPending = false;
@@ -1282,6 +1354,7 @@ export class ChatViewProvider
   ): Promise<void> {
     if (this.isGenerating) return;
     this.isGenerating = true;
+    this.acceptingPermissionRequests = false;
 
     // Clear history restoration buffer on new user interaction
     this.postMessage({ type: "userMessage", text, images, mentions });
@@ -1301,7 +1374,18 @@ export class ChatViewProvider
 
       this.stderrBuffer = "";
       this.postMessage({ type: "streamStart" });
-      const response = await this.acpClient.sendMessage(text, images, mentions);
+      const promptGeneration = this.legacyPromptGeneration + 1;
+      this.legacyPromptGeneration = promptGeneration;
+      this.acceptingPermissionRequests = true;
+      let response: Awaited<ReturnType<typeof this.acpClient.sendMessage>>;
+      try {
+        response = await this.acpClient.sendMessage(text, images, mentions);
+      } finally {
+        if (this.legacyPromptGeneration === promptGeneration) {
+          this.acceptingPermissionRequests = false;
+        }
+        this.cancelLegacyPermissions();
+      }
 
       await this.outputPipeline.finalizePendingToolCalls(response.stopReason);
       this.postMessage({
@@ -1321,6 +1405,8 @@ export class ChatViewProvider
       this.stderrBuffer = "";
       throw error;
     } finally {
+      this.acceptingPermissionRequests = false;
+      this.cancelLegacyPermissions();
       this.isGenerating = false;
       this.legacyMessageQueue?.notifyStateChanged();
     }
@@ -1465,17 +1551,31 @@ export class ChatViewProvider
     }
   }
 
-  private async handleNewChat(): Promise<void> {
+  private async handleNewChat(confirmIfGenerating = false): Promise<void> {
     if (this.isGenerating) {
-      const ok = await this.ensureIdleIfGenerating(
-        `confirm-newChat-${Date.now()}`,
-        "newChat",
-        "New Chat"
-      );
-      if (!ok) return;
+      if (!confirmIfGenerating) {
+        this.acceptingPermissionRequests = false;
+        this.legacyElicitationOwner?.cancelAll();
+        this.cancelLegacyPermissions();
+        try {
+          await this.acpClient.cancel();
+        } finally {
+          this.cancelLegacyPermissions();
+        }
+        this.isGenerating = false;
+      } else {
+        const ok = await this.ensureIdleIfGenerating(
+          `confirm-newChat-${Date.now()}`,
+          "newChat",
+          "New Chat"
+        );
+        if (!ok) return;
+      }
     }
 
+    this.acceptingPermissionRequests = false;
     this.legacyElicitationOwner?.cancelAll();
+    this.cancelLegacyPermissions();
     this.resetLegacyChatSurface();
     await this.requestLegacyInputFocus();
 
@@ -1505,7 +1605,9 @@ export class ChatViewProvider
       if (!ok) return;
     }
 
+    this.acceptingPermissionRequests = false;
     this.legacyElicitationOwner?.cancelAll();
+    this.cancelLegacyPermissions();
     this.resetLegacyChatSurface();
     this.acpClient.setAgent(agent);
     this.outputPipeline.setLiveToolOutputProfile(agent.liveToolOutputProfile);
@@ -1564,6 +1666,7 @@ export class ChatViewProvider
     this.outputPipeline.reset();
     this.diffManager.clear();
     this.postMessage({ type: "chatCleared" });
+    this.publishLegacyPermissionState();
     this.postMessage({
       type: "sessionMetadata",
       modes: null,
@@ -1575,7 +1678,10 @@ export class ChatViewProvider
   }
 
   private handleClearChat(): void {
+    this.acceptingPermissionRequests = false;
+    this.cancelLegacyPermissions();
     this.postMessage({ type: "chatCleared" });
+    this.publishLegacyPermissionState();
   }
 
   private requestConfirmation(
@@ -1629,7 +1735,10 @@ export class ChatViewProvider
       actionLabel
     );
     if (!confirmed) return false;
+    this.acceptingPermissionRequests = false;
+    this.cancelLegacyPermissions();
     await this.acpClient.cancel();
+    this.cancelLegacyPermissions();
     const idle = await this.waitForIdle();
     if (!idle) {
       vscode.window.showErrorMessage(

@@ -943,19 +943,7 @@ export class ACPClient {
       }
     }
 
-    // Default: Auto-approve with the first "allow" option
-    const options = params.options || [];
-    const allowOption = options.find((opt) => opt.kind.startsWith("allow"));
-    if (allowOption) {
-      return {
-        outcome: {
-          outcome: "selected",
-          optionId: allowOption.optionId,
-        },
-      };
-    }
-
-    // Fallback: Cancel
+    // Fallback: cancel when no listener can produce an explicit response.
     return {
       outcome: {
         outcome: "cancelled",

@@ -7,6 +7,7 @@ import { registerClickableResourceLinksWebviewFeature } from "./clickable-resour
 import { registerLatestUserPromptTipWebviewFeature } from "./latest-user-prompt-tip/webview";
 import { registerMessageQueueWebviewFeature } from "./message-queue/webview";
 import { registerMultiSessionWebviewFeature } from "./multi-session/webview";
+import { registerPermissionUiWebviewFeature } from "./permission-ui/webview";
 import { registerPromptHistoryNavigationWebviewFeature } from "./prompt-history-navigation/webview";
 import { registerTableCopyWebviewFeature } from "./table-copy/webview";
 
@@ -22,6 +23,7 @@ export interface RegisteredWebviewFeatures {
   >;
   messageQueue: ReturnType<typeof registerMessageQueueWebviewFeature>;
   multiSession: ReturnType<typeof registerMultiSessionWebviewFeature>;
+  permissionUi: ReturnType<typeof registerPermissionUiWebviewFeature>;
   promptHistoryNavigation: ReturnType<
     typeof registerPromptHistoryNavigationWebviewFeature
   >;
@@ -43,6 +45,7 @@ export function registerWebviewFeatures(
     latestUserPromptTip: registerLatestUserPromptTipWebviewFeature(controller),
     messageQueue: registerMessageQueueWebviewFeature(controller),
     multiSession: registerMultiSessionWebviewFeature(controller),
+    permissionUi: registerPermissionUiWebviewFeature(controller),
     promptHistoryNavigation:
       registerPromptHistoryNavigationWebviewFeature(controller),
     tableCopy: registerTableCopyWebviewFeature(controller),

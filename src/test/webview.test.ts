@@ -4231,7 +4231,7 @@ suite("Webview", () => {
           reset: () => {},
           dispatch: async () => {
             dispatchCount += 1;
-            if (dispatchCount > 5) throw new Error("delta failed");
+            if (dispatchCount > 6) throw new Error("delta failed");
           },
           setSurfaceInteractionLocked: (value) => locks.push(value),
           setGenerating: () => {},
@@ -4370,6 +4370,7 @@ suite("Webview", () => {
         "contextUsage",
         "diffSummary",
         "feature.acp-elicitation.show",
+        "feature.permission-ui.state",
         "streamChunk:B",
       ]);
       assert.strictEqual(

@@ -1,3 +1,5 @@
+import type { PermissionUiStateMessage } from "../permission-ui/types";
+
 export interface MultiSessionRenderMessage {
   type: string;
   text?: string;
@@ -68,6 +70,7 @@ export interface MultiSessionSnapshot {
     status: string;
   }>;
   pendingPermissions?: MultiSessionRenderMessage[];
+  permissionState?: PermissionUiStateMessage;
   pendingElicitations?: import("../acp-elicitation/types").ElicitationFormView[];
   isGenerating: boolean;
   scrollToBottom?: boolean;
